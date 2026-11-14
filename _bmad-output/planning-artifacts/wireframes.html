@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Second Income Coach — Low-Fi Wireframes</title>
+<style>
+  :root {
+    --bg: #f6f8f7;
+    --surface: #ffffff;
+    --glass-bg: rgba(255,255,255,0.55);
+    --glass-border: rgba(16,94,62,0.18);
+    --accent: #059669;       /* emerald-600 */
+    --accent-dark: #047857;  /* emerald-700 */
+    --accent-soft: #d1fae5;  /* emerald-100 */
+    --text: #1f2937;
+    --text-muted: #6b7280;
+    --border: #d9e2dd;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 24px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 13px;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--text-muted); margin: 0 0 28px; font-size: 13px; }
+  h2 {
+    font-size: 15px;
+    margin: 40px 0 4px;
+    padding-bottom: 6px;
+    border-bottom: 2px solid var(--accent-soft);
+  }
+  .decision-note { color: var(--text-muted); margin: 0 0 14px; font-size: 12px; }
+  .row { display: flex; gap: 20px; align-items: flex-start; flex-wrap: wrap; }
+  .option {
+    flex: 1;
+    min-width: 280px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px;
+  }
+  .option.chosen { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .option-label {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-weight: 600;
+    font-size: 12px;
+    margin-bottom: 10px;
+    color: var(--text-muted);
+  }
+  .tag {
+    background: var(--accent);
+    color: white;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 7px;
+    border-radius: 999px;
+    letter-spacing: 0.03em;
+  }
+  /* generic wireframe box */
+  .box {
+    border: 1px dashed var(--border);
+    border-radius: 6px;
+    padding: 7px 9px;
+    margin-bottom: 7px;
+    font-size: 11.5px;
+    color: var(--text-muted);
+    background: #fafcfb;
+  }
+  .box.glass {
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    backdrop-filter: blur(4px);
+  }
+  .box.accent {
+    border: 1px solid var(--accent);
+    background: var(--accent-soft);
+    color: var(--accent-dark);
+    font-weight: 600;
+  }
+  .box.btn {
+    display: inline-block;
+    border-style: solid;
+    border-color: var(--accent);
+    background: var(--accent);
+    color: white;
+    font-weight: 600;
+    text-align: center;
+    width: auto;
+  }
+  .badge {
+    display: inline-block;
+    font-size: 9.5px;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: var(--accent-soft);
+    color: var(--accent-dark);
+    margin-left: 5px;
+  }
+  .badge.muted { background: #eef0ef; color: var(--text-muted); }
+  .mini-row { display: flex; gap: 6px; margin-bottom: 7px; }
+  .mini-row .box { flex: 1; margin-bottom: 0; text-align: center; }
+  .card-grid { display: flex; gap: 6px; flex-wrap: wrap; }
+  .idea-card { flex: 1; min-width: 95px; }
+  .idea-card .box { margin-bottom: 4px; }
+  table.wire { width: 100%; border-collapse: collapse; font-size: 11px; }
+  table.wire th, table.wire td {
+    border: 1px dashed var(--border);
+    padding: 5px 6px;
+    text-align: left;
+    color: var(--text-muted);
+  }
+  table.wire th { background: var(--accent-soft); color: var(--accent-dark); font-weight: 700; }
+  .chat-bubble {
+    max-width: 85%;
+    padding: 6px 9px;
+    border-radius: 8px;
+    margin-bottom: 6px;
+    font-size: 11.5px;
+    color: var(--text-muted);
+  }
+  .chat-bubble.agent { background: var(--accent-soft); color: var(--accent-dark); margin-right: auto; }
+  .chat-bubble.user { background: #eef0ef; margin-left: auto; text-align: right; }
+  .meta-line { font-size: 9.5px; color: var(--text-muted); margin: -3px 0 6px 2px; }
+  .workspace { display: flex; gap: 10px; }
+  .sidebar { width: 34%; }
+  .main { flex: 1; display: flex; flex-direction: column; }
+  .mobile-frame {
+    width: 220px;
+    border: 2px solid var(--border);
+    border-radius: 16px;
+    padding: 8px;
+    margin: 0 auto;
+    background: var(--surface);
+  }
+  .tabbar { display: flex; gap: 4px; margin-bottom: 8px; }
+  .tabbar .box { flex: 1; margin-bottom: 0; text-align: center; padding: 5px; }
+  .tabbar .box.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-dark); font-weight: 700; }
+  footer { margin-top: 40px; color: var(--text-muted); font-size: 11px; }
+</style>
+</head>
+<body>
+
+<h1>Second Income Coach — Wireframes</h1>
+<p class="sub">Low-fidelity, labelled boxes only. Light theme / emerald accent tokens shown; dark mode and glass-blur are visual treatments, not re-laid-out here. Chosen options marked ✓.</p>
+
+<!-- ===================== INTAKE ===================== -->
+<h2>1. Intake</h2>
+<p class="decision-note">Decision: <strong>A — structured form</strong> (chosen)</p>
+<div class="row">
+
+  <div class="option chosen">
+    <div class="option-label">A — Structured form <span class="tag">CHOSEN</span></div>
+    <div class="box accent">Intake — Step 1 of 1</div>
+    <div class="box">Skills <em>(free text)</em></div>
+    <div class="box">Interests <em>(free text)</em></div>
+    <div class="mini-row">
+      <div class="box">Time/wk<br>(range)</div>
+      <div class="box">Budget<br>(range)</div>
+      <div class="box">Risk<br>(range)</div>
+    </div>
+    <div class="box">What's stopped you before <em>(free text)</em></div>
+    <div class="box btn">Submit</div>
+  </div>
+
+  <div class="option">
+    <div class="option-label">B — Conversational</div>
+    <div class="chat-bubble agent">"What skills or interests could we work with?"</div>
+    <div class="chat-bubble user">"I'm good with spreadsheets, like plants…"</div>
+    <div class="chat-bubble agent">"How much time per week, and budget to start?"</div>
+    <div class="chat-bubble user">"~5h/week, maybe €50"</div>
+    <div class="box">⋯ (free-form back and forth continues) ⋯</div>
+    <div class="box accent">"What I Understood" — summary card</div>
+    <div class="box">Skills: spreadsheets, plants</div>
+    <div class="box">Time: ~5h/wk · Budget: €50 · Risk: low</div>
+    <div class="mini-row">
+      <div class="box btn">Edit</div>
+      <div class="box btn">Confirm &amp; Save</div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ===================== IDEAS LIST ===================== -->
+<h2>2. Ideas List</h2>
+<p class="decision-note">Decision: <strong>A — 5 cards</strong> (chosen)</p>
+<div class="row">
+
+  <div class="option chosen" style="flex-basis:100%;">
+    <div class="option-label">A — 5 cards <span class="tag">CHOSEN</span></div>
+    <div class="card-grid">
+      <div class="idea-card">
+        <div class="box accent">Idea 1 <span class="badge">selected</span></div>
+        <div class="box">Rationale: skills+time+budget…</div>
+        <div class="box">5h/wk · €50 · low risk</div>
+        <div class="box btn">Select</div>
+      </div>
+      <div class="idea-card">
+        <div class="box">Idea 2 <span class="badge muted">bookmarked</span></div>
+        <div class="box">Rationale…</div>
+        <div class="box">3h/wk · €0 · low risk</div>
+      </div>
+      <div class="idea-card">
+        <div class="box">Idea 3 <span class="badge muted">bookmarked</span></div>
+        <div class="box">Rationale…</div>
+        <div class="box">8h/wk · €200 · med risk</div>
+      </div>
+      <div class="idea-card">
+        <div class="box" style="text-decoration:line-through;">Idea 4 <span class="badge muted">rejected</span></div>
+      </div>
+      <div class="idea-card">
+        <div class="box">Idea 5 <span class="badge muted">bookmarked</span></div>
+        <div class="box">Rationale…</div>
+        <div class="box">2h/wk · €20 · low risk</div>
+      </div>
+    </div>
+    <div class="box btn" style="margin-top:6px;">More Ideas</div>
+  </div>
+
+  <div class="option" style="flex-basis:100%;">
+    <div class="option-label">B — Compact table</div>
+    <table class="wire">
+      <tr><th>Idea</th><th>Time/wk</th><th>Cost</th><th>Risk</th><th>Status</th><th>Actions</th></tr>
+      <tr><td>Idea 1</td><td>5h</td><td>€50</td><td>low</td><td>selected</td><td>—</td></tr>
+      <tr><td>Idea 2</td><td>3h</td><td>€0</td><td>low</td><td>bookmarked</td><td>Reject</td></tr>
+      <tr><td>Idea 3</td><td>8h</td><td>€200</td><td>med</td><td>bookmarked</td><td>Reject</td></tr>
+      <tr><td>Idea 4</td><td>—</td><td>—</td><td>—</td><td>rejected</td><td>—</td></tr>
+      <tr><td>Idea 5</td><td>2h</td><td>€20</td><td>low</td><td>bookmarked</td><td>Reject</td></tr>
+    </table>
+    <div class="box btn" style="margin-top:6px;">More Ideas</div>
+  </div>
+
+</div>
+
+<!-- ===================== PLAN WORKSPACE ===================== -->
+<h2>3. Plan Workspace</h2>
+<p class="decision-note">Decision: <strong>A — unified</strong> (chosen)</p>
+<div class="row">
+
+  <div class="option chosen" style="flex-basis:100%;">
+    <div class="option-label">A — Unified (desktop) <span class="tag">CHOSEN</span></div>
+    <div class="workspace">
+      <div class="sidebar">
+        <div class="box accent">Current Step</div>
+        <div class="box">List one product</div>
+        <div class="box muted">Next: Take 3 photos <span class="badge muted">preview</span></div>
+        <div class="box accent" style="margin-top:8px;">Projection</div>
+        <div class="box">~€40/mo at this pace · unlocks: first sale</div>
+      </div>
+      <div class="main">
+        <div class="box" style="background:none;border:none;padding:0 0 4px;">Chat — plan thread</div>
+        <div class="chat-bubble agent">"Nice, you started the listing 🙂"</div>
+        <div class="meta-line">tokens: 212 · est. $0.002 &nbsp; 👍 👎</div>
+        <div class="chat-bubble user">"done, photo's up"</div>
+        <div class="chat-bubble agent">"Great — that's step 1 complete. Next: write the description."</div>
+        <div class="meta-line">tokens: 340 · est. $0.004 &nbsp; 👍 👎</div>
+        <div class="box" style="margin-top:4px;background:var(--accent-soft);border-color:var(--accent);color:var(--accent-dark);">
+          Missed check-in banner: "Welcome back — no worries, let's pick up where you left off."
+        </div>
+        <div class="mini-row" style="margin-top:4px;">
+          <div class="box" style="flex:3;">Type a message…</div>
+          <div class="box" style="flex:1;text-align:center;">🎙</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" style="flex-basis:100%;">
+    <div class="option-label">A — Unified (mobile/narrow)</div>
+    <div class="mobile-frame">
+      <div class="box accent">Step: List one product <span class="badge muted">next ↓</span></div>
+      <div class="box" style="font-size:10px;">~€40/mo · unlocks: first sale</div>
+      <div class="chat-bubble agent" style="font-size:10.5px;">"Nice, you started the listing 🙂"</div>
+      <div class="meta-line">tokens 212 · $0.002 👍👎</div>
+      <div class="chat-bubble user" style="font-size:10.5px;">"done, photo's up"</div>
+      <div class="mini-row">
+        <div class="box" style="flex:3;font-size:10px;">Type…</div>
+        <div class="box" style="flex:1;text-align:center;">🎙</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" style="flex-basis:100%;">
+    <div class="option-label">B — Overview tab + Chat tab</div>
+    <div class="tabbar">
+      <div class="box active">Overview</div>
+      <div class="box">Chat</div>
+    </div>
+    <div class="box accent">Current Step: List one product</div>
+    <div class="box">Next (preview): Take 3 photos</div>
+    <div class="box accent" style="margin-top:6px;">Projection</div>
+    <div class="box">~€40/mo at this pace · unlocks: first sale</div>
+    <div class="box" style="margin-top:10px;font-size:10.5px;color:var(--text-muted);">
+      (switching to the "Chat" tab replaces this with the same thread shown in option A's main panel, full width)
+    </div>
+  </div>
+
+</div>
+
+<footer>Static wireframe reference — _bmad-output/planning-artifacts/wireframes.html — no JS, no external assets.</footer>
+
+</body>
+</html>

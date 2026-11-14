@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Second Income Coach — Accent Palette Options</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 24px;
+    background: #e9eaeb;
+    color: #1f2937;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 13px;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: #52525b; margin: 0 0 10px; font-size: 13px; max-width: 760px; }
+  .legend { font-size: 12px; color: #52525b; margin-bottom: 28px; }
+  .legend code { background: #fff; padding: 1px 5px; border-radius: 4px; }
+  h2 { font-size: 16px; margin: 36px 0 12px; }
+  .grid { display: flex; gap: 18px; flex-wrap: wrap; }
+  .panel {
+    flex: 1;
+    min-width: 300px;
+    border-radius: 12px;
+    padding: 16px;
+    border: 1px solid var(--border);
+    background: var(--background);
+    color: var(--foreground);
+  }
+  .panel-title {
+    font-weight: 700;
+    font-size: 13px;
+    margin-bottom: 2px;
+  }
+  .panel-sub { font-size: 11px; color: var(--muted-foreground); margin-bottom: 12px; }
+  .snippet { margin-bottom: 10px; }
+  .snippet-label { font-size: 9.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted-foreground); margin-bottom: 3px; }
+
+  .btn {
+    display: inline-block;
+    padding: 7px 14px;
+    border-radius: 8px;
+    background: var(--primary);
+    color: var(--primary-foreground);
+    font-weight: 600;
+    font-size: 12px;
+    border: none;
+  }
+  .badge {
+    display: inline-block;
+    padding: 2px 9px;
+    border-radius: 999px;
+    background: var(--accent);
+    color: var(--accent-foreground);
+    font-weight: 700;
+    font-size: 10.5px;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+  }
+  .meta { font-size: 9.5px; color: var(--muted-foreground); margin-top: 3px; }
+  .progress-track {
+    height: 8px;
+    border-radius: 999px;
+    background: var(--muted);
+    overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%;
+    width: 62%;
+    background: var(--primary);
+    border-radius: 999px;
+  }
+  .input {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 7px 10px;
+    color: var(--muted-foreground);
+    font-size: 12px;
+  }
+  .contrast-table {
+    margin-top: 12px;
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 10.5px;
+  }
+  .contrast-table th, .contrast-table td {
+    border-top: 1px solid var(--border);
+    padding: 4px 5px;
+    text-align: left;
+  }
+  .contrast-table th { color: var(--muted-foreground); font-weight: 600; }
+  .pass { color: #15803d; font-weight: 700; }
+  .fail { color: #b91c1c; font-weight: 700; }
+  footer { margin-top: 40px; color: #52525b; font-size: 11px; }
+</style>
+</head>
+<body>
+
+<h1>Second Income Coach — Accent Palette Options</h1>
+<p class="sub">3 accent options (emerald / teal / indigo) × 2 themes = 6 static panels. Neutral tokens (background, card, foreground, muted, border) are IDENTICAL across all 6 panels — only <code>--primary</code> / <code>--primary-foreground</code> / <code>--accent</code> / <code>--accent-foreground</code> change. Contrast ratios below each panel are computed (Python, WCAG relative-luminance formula), not eyeballed. Target: 4.5:1.</p>
+<p class="legend">Token structure follows shadcn/ui convention: <code>--background</code>, <code>--foreground</code>, <code>--card</code>, <code>--muted</code>, <code>--muted-foreground</code>, <code>--border</code>, <code>--primary</code>, <code>--primary-foreground</code>, <code>--accent</code> (soft/badge bg), <code>--accent-foreground</code>.</p>
+
+<h2>Light theme</h2>
+<div class="grid">
+
+  <!-- EMERALD LIGHT -->
+  <div class="panel" style="--background:#f7f7f8; --foreground:#1f2937; --card:#ffffff; --muted:#eef0f1; --muted-foreground:#6b7280; --border:#e2e2e4; --primary:#047857; --primary-foreground:#ffffff; --accent:#d1fae5; --accent-foreground:#047857;">
+    <div class="panel-title">Emerald — Light</div>
+    <div class="panel-sub">primary = emerald-700 (not 600 — see contrast note) · accent = emerald-100/700</div>
+
+    <div class="snippet"><div class="snippet-label">Button</div><span class="btn">Confirm Plan</span></div>
+    <div class="snippet"><div class="snippet-label">Badge</div><span class="badge">selected</span></div>
+    <div class="snippet">
+      <div class="snippet-label">Chat bubble</div>
+      <div class="card">Nice, you started the listing 🙂</div>
+      <div class="meta">tokens: 212 · est. $0.002</div>
+    </div>
+    <div class="snippet">
+      <div class="snippet-label">Progress bar</div>
+      <div class="progress-track"><div class="progress-fill"></div></div>
+    </div>
+    <div class="snippet"><div class="snippet-label">Input</div><div class="input">Type a message…</div></div>
+
+    <table class="contrast-table">
+      <tr><th>Pair</th><th>Colors</th><th>Ratio</th><th>Target 4.5:1</th></tr>
+      <tr><td>primary-fg / primary (btn text)</td><td>#ffffff / #047857</td><td>5.48:1</td><td class="pass">PASS</td></tr>
+      <tr><td>accent-fg / accent (badge text)</td><td>#047857 / #d1fae5</td><td>4.84:1</td><td class="pass">PASS</td></tr>
+      <tr><td>foreground / background</td><td>#1f2937 / #f7f7f8</td><td>13.71:1</td><td class="pass">PASS</td></tr>
+      <tr><td>foreground / card</td><td>#1f2937 / #ffffff</td><td>14.68:1</td><td class="pass">PASS</td></tr>
+      <tr><td>muted-fg / background</td><td>#6b7280 / #f7f7f8</td><td>4.52:1</td><td class="pass">PASS</td></tr>
+      <tr><td>muted-fg / card</td><td>#6b7280 / #ffffff</td><td>4.83:1</td><td class="pass">PASS</td></tr>
+    </table>
+    <p class="meta" style="margin-top:8px;">Note: emerald-600 (#059669) as primary FAILS with white text (3.77:1) — had to step to emerald-700.</p>
+  </div>
+
+  <!-- TEAL LIGHT -->
+  <div class="panel" style="--background:#f7f7f8; --foreground:#1f2937; --card:#ffffff; --muted:#eef0f1; --muted-foreground:#6b7280; --border:#e2e2e4; --primary:#0f766e; --primary-foreground:#ffffff; --accent:#ccfbf1; --accent-foreground:#0f766e;">
+    <div class="panel-title">Teal — Light</div>
+    <div class="panel-sub">primary = teal-700 (not 600 — same issue as emerald) · accent = teal-100/700</div>
+
+    <div class="snippet"><div class="snippet-label">Button</div><span class="btn">Confirm Plan</span></div>
+    <div class="snippet"><div class="snippet-label">Badge</div><span class="badge">selected</span></div>
+    <div class="snippet">
+      <div class="snippet-label">Chat bubble</div>
+      <div class="card">Nice, you started the listing 🙂</div>
+      <div class="meta">tokens: 212 · est. $0.002</div>
+    </div>
+    <div class="snippet">
+      <div class="snippet-label">Progress bar</div>
+      <div class="progress-track"><div class="progress-fill"></div></div>
+    </div>
+    <div class="snippet"><div class="snippet-label">Input</div><div class="input">Type a message…</div></div>
+
+    <table class="contrast-table">
+      <tr><th>Pair</th><th>Colors</th><th>Ratio</th><th>Target 4.5:1</th></tr>
+      <tr><td>primary-fg / primary (btn text)</td><td>#ffffff / #0f766e</td><td>5.47:1</td><td class="pass">PASS</td></tr>
+      <tr><td>accent-fg / accent (badge text)</td><td>#0f766e / #ccfbf1</td><td>4.86:1</td><td class="pass">PASS</td></tr>
+      <tr><td>foreground / background</td><td>#1f2937 / #f7f7f8</td><td>13.71:1</td><td class="pass">PASS</td></tr>
+      <tr><td>foreground / card</td><td>#1f2937 / #ffffff</td><td>14.68:1</td><td class="pass">PASS</td></tr>
+      <tr><td>muted-fg / background</td><td>#6b7280 / #f7f7f8</td><td>4.52:1</td><td class="pass">PASS</td></tr>
+      <tr><td>muted-fg / card</td><td>#6b7280 / #ffffff</td><td>4.83:1</td><td class="pass">PASS</td></tr>
+    </table>
+    <p class="meta" style="margin-top:8px;">Note: teal-600 (#0d9488) as primary FAILS with white text (3.74:1) — same fix, step to teal-700.</p>
+  </div>
+
+  <!-- INDIGO LIGHT -->
+  <div class="panel" style="--background:#f7f7f8; --foreground:#1f2937; --card:#ffffff; --muted:#eef0f1; --muted-foreground:#6b7280; --border:#e2e2e4; --primary:#4f46e5; --primary-foreground:#ffffff; --accent:#e0e7ff; --accent-foreground:#4338ca;">
+    <div class="panel-title">Indigo — Light</div>
+    <div class="panel-sub">primary = indigo-600 (passes as-is) · accent = indigo-100/700</div>
+
+    <div class="snippet"><div class="snippet-label">Button</div><span class="btn">Confirm Plan</span></div>
+    <div class="snippet"><div class="snippet-label">Badge</div><span class="badge">selected</span></div>
+    <div class="snippet">
+      <div class="snippet-label">Chat bubble</div>
+      <div class="card">Nice, you started the listing 🙂</div>
+      <div class="meta">tokens: 212 · est. $0.002</div>
+    </div>
+    <div class="snippet">
+      <div class="snippet-label">Progress bar</div>
+      <div class="progress-track"><div class="progress-fill"></div></div>
+    </div>
+    <div class="snippet"><div class="snippet-label">Input</div><div class="input">Type a message…</div></div>
+
+    <table class="contrast-table">
+      <tr><th>Pair</th><th>Colors</th><th>Ratio</th><th>Target 4.5:1</th></tr>
+      <tr><td>primary-fg / primary (btn text)</td><td>#ffffff / #4f46e5</td><td>6.29:1</td><td class="pass">PASS</td></tr>
+      <tr><td>accent-fg / accent (badge text)</td><td>#4338ca / #e0e7ff</td><td>6.41:1</td><td class="pass">PASS</td></tr>
+      <tr><td>foreground / background</td><td>#1f2937 / #f7f7f8</td><td>13.71:1</td><td class="pass">PASS</td></tr>
+      <tr><td>foreground / card</td><td>#1f2937 / #ffffff</td><td>14.68:1</td><td class="pass">PASS</td></tr>
+      <tr><td>muted-fg / background</td><td>#6b7280 / #f7f7f8</td><td>4.52:1</td><td class="pass">PASS</td></tr>
+      <tr><td>muted-fg / card</td><td>#6b7280 / #ffffff</td><td>4.83:1</td><td class="pass">PASS</td></tr>
+    </table>
+    <p class="meta" style="margin-top:8px;">Indigo-600 is the only one of the 3 that passes at its "natural" 600 weight — no step-up needed.</p>
+  </div>
+
+</div>
+
+<h2>Dark theme</h2>
+<div class="grid">
+
+  <!-- EMERALD DARK -->
+  <div class="panel" style="--background:#121316; --foreground:#e9eaec; --card:#1c1d20; --muted:#232528; --muted-foreground:#9aa0a6; --border:#2c2e31; --primary:#34d399; --primary-foreground:#121316; --accent:#064e3b; --accent-foreground:#6ee7b7;">
+    <div class="panel-title">Emerald — Dark</div>
+    <div class="panel-sub">primary = emerald-400, button text = near-black (NOT white) · accent = emerald-900/300</div>
+
+    <div class="snippet"><div class="snippet-label">Button</div><span class="btn">Confirm Plan</span></div>
+    <div class="snippet"><div class="snippet-label">Badge</div><span class="badge">selected</span></div>
+    <div class="snippet">
+      <div class="snippet-label">Chat bubble</div>
+      <div class="card">Nice, you started the listing 🙂</div>
+      <div class="meta">tokens: 212 · est. $0.002</div>
+    </div>
+    <div class="snippet">
+      <div class="snippet-label">Progress bar</div>
+      <div class="progress-track"><div class="progress-fill"></div></div>
+    </div>
+    <div class="snippet"><div class="snippet-label">Input</div><div class="input">Type a message…</div></div>
+
+    <table class="contrast-table">
+      <tr><th>Pair</th><th>Colors</th><th>Ratio</th><th>Target 4.5:1</th></tr>
+      <tr><td>primary-fg / primary (btn text)</td><td>#121316 / #34d399</td><td>9.66:1</td><td class="pass">PASS</td></tr>
+      <tr><td>accent-fg / accent (badge text)</td><td>#6ee7b7 / #064e3b</td><td>6.38:1</td><td class="pass">PASS</td></tr>
+      <tr><td>foreground / background</td><td>#e9eaec / #121316</td><td>15.43:1</td><td class="pass">PASS</td></tr>
+      <tr><td>foreground / card</td><td>#e9eaec / #1c1d20</td><td>14.00:1</td><td class="pass">PASS</td></tr>
+      <tr><td>muted-fg / background</td><td>#9aa0a6 / #121316</td><td>7.04:1</td><td class="pass">PASS</td></tr>
+      <tr><td>muted-fg / card</td><td>#9aa0a6 / #1c1d20</td><td>6.38:1</td><td class="pass">PASS</td></tr>
+    </table>
+    <p class="meta" style="margin-top:8px;">Note: white button text on emerald-400 FAILS (1.92:1) — this is a general dark-mode rule, not emerald-specific: bright saturated accents on dark backgrounds need dark text, not white.</p>
+  </div>
+
+  <!-- TEAL DARK -->
+  <div class="panel" style="--background:#121316; --foreground:#e9eaec; --card:#1c1d20; --muted:#232528; --muted-foreground:#9aa0a6; --border:#2c2e31; --primary:#2dd4bf; --primary-foreground:#121316; --accent:#134e4a; --accent-foreground:#5eead4;">
+    <div class="panel-title">Teal — Dark</div>
+    <div class="panel-sub">primary = teal-400, button text = near-black · accent = teal-900/300</div>
+
+    <div class="snippet"><div class="snippet-label">Button</div><span class="btn">Confirm Plan</span></div>
+    <div class="snippet"><div class="snippet-label">Badge</div><span class="badge">selected</span></div>
+    <div class="snippet">
+      <div class="snippet-label">Chat bubble</div>
+      <div class="card">Nice, you started the listing 🙂</div>
+      <div class="meta">tokens: 212 · est. $0.002</div>
+    </div>
+    <div class="snippet">
+      <div class="snippet-label">Progress bar</div>
+      <div class="progress-track"><div class="progress-fill"></div></div>
+    </div>
+    <div class="snippet"><div class="snippet-label">Input</div><div class="input">Type a message…</div></div>
+
+    <table class="contrast-table">
+      <tr><th>Pair</th><th>Colors</th><th>Ratio</th><th>Target 4.5:1</th></tr>
+      <tr><td>primary-fg / primary (btn text)</td><td>#121316 / #2dd4bf</td><td>9.98:1</td><td class="pass">PASS</td></tr>
+      <tr><td>accent-fg / accent (badge text)</td><td>#5eead4 / #134e4a</td><td>6.41:1</td><td class="pass">PASS</td></tr>
+      <tr><td>foreground / background</td><td>#e9eaec / #121316</td><td>15.43:1</td><td class="pass">PASS</td></tr>
+      <tr><td>foreground / card</td><td>#e9eaec / #1c1d20</td><td>14.00:1</td><td class="pass">PASS</td></tr>
+      <tr><td>muted-fg / background</td><td>#9aa0a6 / #121316</td><td>7.04:1</td><td class="pass">PASS</td></tr>
+      <tr><td>muted-fg / card</td><td>#9aa0a6 / #1c1d20</td><td>6.38:1</td><td class="pass">PASS</td></tr>
+    </table>
+    <p class="meta" style="margin-top:8px;">Note: white button text on teal-400 FAILS (1.86:1) — same dark-mode rule as emerald.</p>
+  </div>
+
+  <!-- INDIGO DARK -->
+  <div class="panel" style="--background:#121316; --foreground:#e9eaec; --card:#1c1d20; --muted:#232528; --muted-foreground:#9aa0a6; --border:#2c2e31; --primary:#818cf8; --primary-foreground:#121316; --accent:#312e81; --accent-foreground:#a5b4fc;">
+    <div class="panel-title">Indigo — Dark</div>
+    <div class="panel-sub">primary = indigo-400, button text = near-black · accent = indigo-900/300</div>
+
+    <div class="snippet"><div class="snippet-label">Button</div><span class="btn">Confirm Plan</span></div>
+    <div class="snippet"><div class="snippet-label">Badge</div><span class="badge">selected</span></div>
+    <div class="snippet">
+      <div class="snippet-label">Chat bubble</div>
+      <div class="card">Nice, you started the listing 🙂</div>
+      <div class="meta">tokens: 212 · est. $0.002</div>
+    </div>
+    <div class="snippet">
+      <div class="snippet-label">Progress bar</div>
+      <div class="progress-track"><div class="progress-fill"></div></div>
+    </div>
+    <div class="snippet"><div class="snippet-label">Input</div><div class="input">Type a message…</div></div>
+
+    <table class="contrast-table">
+      <tr><th>Pair</th><th>Colors</th><th>Ratio</th><th>Target 4.5:1</th></tr>
+      <tr><td>primary-fg / primary (btn text)</td><td>#121316 / #818cf8</td><td>6.23:1</td><td class="pass">PASS</td></tr>
+      <tr><td>accent-fg / accent (badge text)</td><td>#a5b4fc / #312e81</td><td>5.73:1</td><td class="pass">PASS</td></tr>
+      <tr><td>foreground / background</td><td>#e9eaec / #121316</td><td>15.43:1</td><td class="pass">PASS</td></tr>
+      <tr><td>foreground / card</td><td>#e9eaec / #1c1d20</td><td>14.00:1</td><td class="pass">PASS</td></tr>
+      <tr><td>muted-fg / background</td><td>#9aa0a6 / #121316</td><td>7.04:1</td><td class="pass">PASS</td></tr>
+      <tr><td>muted-fg / card</td><td>#9aa0a6 / #1c1d20</td><td>6.38:1</td><td class="pass">PASS</td></tr>
+    </table>
+    <p class="meta" style="margin-top:8px;">Note: white button text on indigo-400 FAILS (2.98:1) — same dark-mode rule again.</p>
+  </div>
+
+</div>
+
+<footer>Static comparison — _bmad-output/planning-artifacts/palette-options.html — no JS, no external assets. Ratios computed via WCAG 2.x relative-luminance formula, not estimated.</footer>
+
+</body>
+</html>

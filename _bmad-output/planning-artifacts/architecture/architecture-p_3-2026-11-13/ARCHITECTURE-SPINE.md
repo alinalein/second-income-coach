@@ -1,0 +1,363 @@
+---
+name: "Second Income Coach"
+type: architecture-spine
+purpose: build-substrate
+altitude: initiative
+paradigm: "single LLM agent with tool-calling via LangChain's createAgent, running on the LangGraph.js runtime"
+scope: "Governs the agent paradigm, tool/state boundaries, resilience fabric, moderation, voice-interface abstraction, and idea/plan/check-in lifecycle rules for the Second Income Coach agent, backend, and frontend."
+status: final
+created: "2026-11-13"
+updated: "2026-11-13"
+binds: [CAP-1, CAP-2, CAP-3, CAP-4, CAP-5, CAP-6, CAP-7, CAP-8, CAP-9, CAP-10, CAP-11]
+sources: ["../../specs/spec-second-income-coach/SPEC.md"]
+companions: []
+---
+
+# Architecture Spine — Second Income Coach
+
+## Design Paradigm
+
+Single LLM agent with tool-calling (an agentic loop), not a multi-agent/orchestrator setup — the model calls domain-specific tools, observes results, and iterates before producing a final response. Implemented via LangChain's `createAgent` (TypeScript) running on the LangGraph.js runtime.
+
+Namespace mapping:
+
+- **Agent loop / middleware** — `createAgent` wiring, composable hooks (`beforeAgent` / `beforeModel` / `wrapModelCall` / `afterModel` / `afterAgent`), node-level resilience config (`setNodeDefaults`).
+- **LLM-backed tools** — generation-only tools whose output is non-deterministic: `generate_ideas`, `create_plan`.
+- **Plain-code tools** — deterministic tools that read/write Postgres directly: `submit_intake`, `set_idea_status`, `get_current_step`, `start_step`, `complete_step`, `record_check_in`, `get_projection`, `activate_plan`.
+- **MCP tool** — `web_search`, wired via `@langchain/mcp-adapters`, used only by `generate_ideas` (CAP-2), which is where the baseline income rate is sourced at idea-generation time per AD-6; `get_projection` never calls it.
+- **Voice interface** — one contract (`transcribeCheckIn` / `speakResponse`) behind which the v1 and v2 implementations sit.
+- **Persistence** — Postgres (Neon) for hard state; LangGraph checkpointer (thread state) and Store/pgvector (semantic memory) for conversational context only.
+
+## Invariants & Rules
+
+### AD-1 — Agent paradigm and runtime [ADOPTED] [VERIFIED]
+
+- **Binds:** all
+- **Prevents:** a mega-agent / multi-agent orchestrator creeping in, or the implementation drifting onto a different agent framework than what was verified.
+- **Rule:** The system is one LLM agent with tool-calling, built with LangChain's `createAgent` (TypeScript, `langchain@1.6.5`, `@langchain/core@1.3.6`), running on the LangGraph.js runtime (`@langchain/langgraph@1.7.3`). Its built-in middleware hooks (`beforeAgent`/`beforeModel`/`wrapModelCall`/`wrapToolCall`/`afterModel`/`afterAgent`) are the only cross-cutting hook mechanism. No separate orchestrator or second agent is introduced.
+
+### AD-2 — Persistence package mapping [VERIFIED]
+
+- **Binds:** CAP-1, CAP-3, CAP-4, CAP-5
+- **Prevents:** "threads + checkpointers + semantic memory + Postgres" being reinterpreted as different packages/mechanisms by different builders.
+- **Rule:** Thread/short-term checkpointing uses `@langchain/langgraph-checkpoint-postgres` (`PostgresSaver`). Long-term/semantic memory uses `PostgresStore` with pgvector. Both are backed by the same Postgres instance as the hard-state tables (AD-3), but are distinct mechanisms from them.
+
+### AD-3 — Hard-state ownership (three-tier split) [ADOPTED]
+
+- **Binds:** CAP-1, CAP-3, CAP-4, CAP-5, CAP-6
+- **Prevents:** plan/progress facts (active step, timeline dates, classified failure pattern, check-in history, idea/plan status) ever being reconstructed differently from fuzzy retrieved memory, and service handles leaking into graph state.
+- **Rule:** Three tiers, never mixed: (1) hard/structured state that CAP-3/CAP-4/CAP-5 depend on being exact lives in dedicated Postgres tables that tools read/write directly; (2) the LangGraph checkpointer and Store/pgvector are reserved for conversational context only, never for these facts; (3) service/dependency handles that aren't data (Postgres pool, LangSmith client, the voice-model client) are injected via LangGraph `runtime.context`, never stored as graph state fields — graph state holds only conversational-context scratch data (e.g. in-progress intake answers being assembled during the current turn), never the selected idea/plan id or current step. Any fact that is one of these hard-state facts must never be cached in graph state across turns or trusted as restored from the checkpointer; it must always be re-read fresh from Postgres at the start of any tool call that depends on it — Postgres is always the sole source of truth for these facts, with no graph-state copy treated as authoritative even transiently within a turn.
+
+### AD-4 — Tool boundary and tool set [ADOPTED]
+
+- **Binds:** CAP-1, CAP-2, CAP-3, CAP-4, CAP-5, CAP-6
+- **Prevents:** a critical state mutation (intake submission, idea status, step completion, timeline math, projection math, plan activation) ever depending on a nondeterministic LLM call.
+- **Rule:** Tools split into exactly two kinds, plus the shared MCP tool:
+  - LLM-backed (generation only): `generate_ideas`, `create_plan`.
+  - Plain-code (deterministic, read/write Postgres directly): `submit_intake`, `set_idea_status`, `get_current_step`, `start_step`, `complete_step`, `record_check_in`, `get_projection`, `activate_plan`.
+  - MCP: `web_search`.
+  `start_step` is kept separate from `complete_step` so the start-of-action acknowledgment (CAP-4) stays distinct from the completion acknowledgment. No tool that mutates intake/idea/step/check-in/plan/activation state is ever LLM-backed. `submit_intake` takes `failurePattern` as a Zod-enum argument — the top-level agent classifies the raw free-text answer into that enum as part of its own ordinary reasoning when constructing the call; this is not a third LLM-backed tool, and `create_plan` only ever reads the stored value, never reclassifies it. `generate_ideas` and `create_plan` are each a single tool invocation with two internal sub-steps: the LLM call (nondeterministic, produces content) followed by a deterministic Postgres write of that already-generated content, performed by the same tool function rather than by a separate LLM call — the write itself is still deterministic code, satisfying this rule's intent even though it lives inside an "LLM-backed" tool; no separate plain-code persistence tool is needed or invented. The LLM's output must be validated against the shared Zod schema (AD-16) before that write executes; a validation failure must never be saved as a draft — it is retried or surfaced as an error, not silently persisted malformed. `get_current_step` is the sole read path enforcing CAP-3's current-and-next-step visibility limit; no other tool or query path may expose steps beyond current+next.
+
+### AD-5 — MCP scope [VERIFIED]
+
+- **Binds:** CAP-2
+- **Prevents:** inventing or depending on a nonexistent MCP server for core domain logic.
+- **Rule:** `@langchain/mcp-adapters` (2.0+) is the only MCP integration path (`MCPAdapter` → `listTools()` → passed to `createAgent`; `MultiServerMCPClient` is the deprecated 1.x compat shim and is not used). `web_search` (e.g. Brave Search/Tavily/Exa) is the one MCP tool used, solely for grounding CAP-2 idea suggestions — including sourcing the baseline income rate at idea-generation time, which is then persisted per AD-6. It is not called by, or behind, `get_projection` (CAP-5). Idea matching, plan generation, check-in/accountability logic, and income projection math stay custom — no MCP server exists for them and none is to be assumed.
+
+### AD-6 — Baseline income-rate persistence [ADOPTED]
+
+- **Binds:** CAP-2, CAP-5
+- **Prevents:** the income projection silently changing because the baseline rate was re-fetched or recomputed later.
+- **Rule:** The baseline income rate sourced via `web_search` at idea-generation time is persisted (value + source/citation) on the idea/plan's Postgres record. `get_projection` reads the stored rate; it is never re-fetched or silently recomputed later in the life of a plan.
+
+### AD-7 — Resilience fabric split [ADOPTED] [VERIFIED]
+
+- **Binds:** all tools
+- **Prevents:** two divergent retry/timeout/caching systems (one at the node level, one inside middleware).
+- **Rule:** Retries, timeouts, and caching live at the LangGraph node level via `setNodeDefaults` (`RetryPolicy`, `runTimeout`/`idleTimeout`, `CachePolicy`, per-node `errorHandler`) as the uniform baseline — never duplicated inside `createAgent` middleware. Middleware (`wrapModelCall`/`wrapToolCall`) is reserved for request/response-shaping concerns (e.g. voice-failure-to-text fallback), not generic retry-on-failure. Per-node overrides: `generate_ideas`/`create_plan` get longer timeouts and no caching (personalized per user); `web_search` gets a short-TTL `CachePolicy` (market-rate lookups repeat across users/sessions); Postgres plain-code tools get short timeouts and a fast retry policy. Moderation screening (AD-11) must complete before any `web_search` result is written to this cache — the cached value is always the already-moderated/cleaned content, never raw tool output, so a cache hit never bypasses AD-11.
+
+### AD-8 — Voice interface abstraction [ADOPTED]
+
+- **Binds:** CAP-4
+- **Prevents:** the voice vendor/model leaking into check-in business logic, and the v1→v2 swap requiring changes to `record_check_in` or related CAP-4 logic.
+- **Rule:** Voice sits behind one interface contract (`transcribeCheckIn` / `speakResponse`) that `record_check_in` and the rest of CAP-4 call through. Swapping the underlying implementation must never require changing check-in logic itself.
+
+### AD-9 — Voice v1 pipeline [VERIFIED] (supersedes earlier gpt-audio-mini-as-v1 decision)
+
+- **Binds:** CAP-4
+- **Prevents:** depending on a deprecated transcription model, and retaining raw audio beyond its purpose.
+- **Rule:** v1 voice flow is: browser `MediaRecorder` (client) → backend file transcription via `gpt-transcribe` → editable transcript shown to the user → user confirms/edits before submission as the check-in. Typed text remains an always-available fallback. No raw audio is retained beyond what's needed to produce the transcript. `gpt-audio-mini` speech-to-speech is v2 only (see Deferred), reached through the same AD-8 interface once v1 has proven itself.
+
+### AD-10 — Voice capture/compute location [ADOPTED]
+
+- **Binds:** CAP-4
+- **Prevents:** the transcription API key or model call ending up in the browser.
+- **Rule:** Voice audio is captured client-side in React (`MediaRecorder`) and sent to the Node backend, which is the only place that calls the voice model (`gpt-transcribe` in v1, `gpt-audio-mini` in v2) server-side.
+
+### AD-11 — Moderation hook placement and per-category policy [ADOPTED]
+
+- **Binds:** all (user input and agent output)
+- **Prevents:** moderation being treated as optional, or jailbreak/PII/unsafe-search-result handling being decided ad hoc per call site.
+- **Rule:** Mistral Moderation 2 (`mistral-moderation-2603`) runs at three hook points: `beforeModel` screens user input — jailbreak → reject the turn, return a safe generic response, log the incident; PII → clean up/redact before storage or further processing, log, do not reject. `wrapToolCall` around `web_search` screens untrusted external search results before they re-enter model context — on trigger, clean up/strip the flagged portion rather than rejecting the whole search, log. `afterModel` screens the agent's final response for general harm/safety categories before it is shown to the user — distinct from AD-12's narrower guilt-language-only check — on trigger: reject the response, regenerate a safe fallback, log the incident. Together these three hook points satisfy SPEC's "all user input and agent output pass through moderation" constraint.
+
+### AD-12 — Guilt-language verifiability check [ADOPTED]
+
+- **Binds:** CAP-4
+- **Prevents:** the "no streak-shaming/guilt language" constraint being left to the model's own judgment or folded into general moderation, where it has no matching category.
+- **Rule:** A separate, lightweight check runs on `afterModel`, scoped to CAP-4 responses only — not Mistral Moderation. On trigger: clean up (regenerate the response without the flagged phrasing), always logged. Regeneration is capped at a bounded number of attempts (e.g. 2); if still flagged after that, fall back to a generic neutral check-in message rather than looping further. This is what makes the constraint mechanically verifiable rather than an asserted rule.
+
+### AD-13 — Idea and plan lifecycle statuses [ADOPTED]
+
+- **Binds:** CAP-2, CAP-3, CAP-6
+- **Prevents:** divergent interpretations of what "bookmarked," "rejected," "draft," "active," or "paused" mean across tools.
+- **Rule:** Idea status: `suggested` (one of the 5) → `selected` | `bookmarked` | `rejected`. A rejected idea is removed from the visible list; bookmarked ideas remain available to activate later. Plan status: `draft` (produced by `create_plan`) → `active` | `paused` → `completed`. Only one plan may be `active` at a time per user (enforced per AD-14's database constraint); confirming a new plan pauses (never deletes) any previously active plan; switching to a paused plan resumes it rather than regenerating it. `create_plan` runs lazily — only when an idea is first selected, or re-selected after being bookmarked with no existing plan yet — never eagerly for all 5 ideas at generation time. Rejecting a draft (per AD-14) always updates that same plan row in place (regenerating its content) rather than inserting a new row — a given idea has at most one plan row at any time. `complete_step` on the final step transitions the plan to `completed`, with its own completion acknowledgment distinct from a per-step one. `start_step`/`complete_step` must reject (tool-enforced, not just UI-enforced) if called against a step that is not the plan's current step — this is the state-machine rule that owns the previously-deferred start/complete gap-window semantics.
+
+### AD-14 — `activate_plan` human-in-the-loop pattern [VERIFIED]
+
+- **Binds:** CAP-6
+- **Prevents:** a plan ever becoming `active` without an explicit pause for human confirmation, and inventing a bespoke pause mechanism where the runtime already provides one.
+- **Rule:** `activate_plan`'s HITL pause uses LangGraph.js's `interrupt()` / `new Command({ resume: value })` pattern (or `createAgent`'s built-in human-in-the-loop middleware with an `interruptOn` property) — no additional dependency. Confirm → plan becomes `active` (and any previously active plan becomes `paused`); this pause-then-activate transition is enforced via a database-level partial unique constraint (one `active` plan per user) applied inside a single transaction that atomically deactivates the previous plan and activates the new one — never two separate non-transactional `UPDATE` statements. Reject → feedback routes back into `create_plan` for a revised draft.
+
+### AD-15 — Missed check-in detection [ADOPTED] (resolved)
+
+- **Binds:** CAP-4
+- **Prevents:** building a scheduler/notification channel that v1 doesn't need, and leaving missed-check-in detection unowned by any tool.
+- **Rule:** Missed-check-in detection is lazy, performed inside `get_current_step` the next time the app is opened: it compares the expected vs. actual last check-in date and triggers CAP-4's timeline auto-adjustment and neutral reset messaging right there. No scheduler or notification channel is used in v1 (see Deferred).
+
+### AD-16 — Shared Zod schemas [ADOPTED]
+
+- **Binds:** all (tool inputs/outputs, API requests/responses)
+- **Prevents:** backend and frontend types drifting apart, and representable-illegal-states at tool/API boundaries.
+- **Rule:** Zod schemas live in one shared location imported by both backend and frontend. TypeScript types are derived via `z.infer`, never hand-written separately. This shared location also defines domain enums such as `failurePattern`, `ideaStatus`, and `planStatus`; the database's enum/check-constraint representation of these is generated from, or kept in lockstep with, the same Zod definitions — never hand-copied separately.
+
+### AD-17 — Authentication [ADOPTED]
+
+- **Binds:** all (the entire session, from first use)
+- **Prevents:** per-user state (intake, selected idea, plan, check-in history) being accessible without an identified user.
+- **Rule:** Auth is via Google OAuth (Google sign-in) and gates the entire session from first use, including `submit_intake` — intake data itself is per-user persisted state under AD-3, so there is no unauthenticated capability. CAP-4 additionally depends on this for cross-session persistence of check-in history.
+
+### AD-18 — Thread/session mapping [ADOPTED] (amended: chat topology)
+
+- **Binds:** CAP-2, CAP-3, CAP-4 (and any capability touching the checkpointer/Store)
+- **Prevents:** multiple LangGraph threads being created for the same discovery session or the same plan, a thread being shared/reused across different authenticated users, or plan-specific and pre-plan discovery context bleeding into each other.
+- **Rule:** Two thread kinds, never conflated: (1) exactly one **discovery thread** per user, used before any plan is chosen, covering intake and idea discussion (CAP-1/CAP-2); (2) exactly one **plan thread** per plan, created when that plan's draft is first generated, used for all CAP-3/CAP-4 activity on that plan including follow-up questions. A thread id is always derived from the Google-authenticated user's session (AD-17); a user never shares a thread with another user, and a given discovery session or plan never spans more than its own single thread.
+
+### AD-19 — Request/response delivery (no streaming) [ADOPTED]
+
+- **Binds:** CAP-1 through CAP-6 (all user-facing interactions)
+- **Prevents:** building unneeded streaming/SSE infrastructure for turn-based interactions that don't benefit from it.
+- **Rule:** All capabilities use standard request/response — no streaming delivery of partial agent output. Check-ins and every other interaction in this app are turn-based, not a continuous live stream, so streaming adds complexity without a matching benefit here.
+
+### AD-20 — Personality & model registry [ADOPTED]
+
+- **Binds:** CAP-7
+- **Prevents:** prices drifting out of sync across the codebase, a provider appearing selectable with no working key behind it, the moderation/transcription models being swapped by a user choice, and personality silently weakening AD-12's guilt-language check.
+- **Rule:** Personality (formal/friendly/terse) is a prompt layer only - it never changes the tool boundary (AD-4) or bypasses any constraint; AD-12's check runs identically regardless of personality. The model registry (id, provider, display name, price per 1M input/output tokens, `price_as_of`) is the single source for pricing - no price is ever hardcoded elsewhere. Only providers with a configured server-side key are listed as selectable. The moderation model (AD-11) and the transcription model (AD-9) are never exposed as user-selectable options, regardless of registry contents. `set_personality`/`set_model`/`set_ui_language`/`set_currency` are plain-code tools (AD-4) - selecting any of the four is never itself an LLM decision, and all are only ever invoked via the settings UI's API calls - the agent never autonomously changes its own personality, model, the user's UI language, or currency. Settings persist per user in a dedicated `user_settings` table. If the selected provider's key is missing or a call fails, the system falls back to the default model with a neutral notice - never a hard error. `set_ui_language` defaults to English (not browser-detected). `set_currency` defaults to EUR (AD-27).
+
+### AD-21 — Token & cost tracking [ADOPTED]
+
+- **Binds:** CAP-8
+- **Prevents:** a cost estimate that only reflects the final response while silently omitting other model calls made during the same turn, and an estimate being presented as an exact, guaranteed cost.
+- **Rule:** After each turn, the token usage of every model call made during that turn's full agent-loop execution (not just the final response) is summed. Cost is computed in application code from the model registry's price-per-1M figures (AD-20) for whichever model was active, always labeled "estimate," and persisted per message in Postgres **together with the model id used and a snapshot of its price at that time** - never just a bare dollar figure, so later registry price changes never retroactively alter a past message's recorded cost. A model with no registered price shows token count only, never a guessed or zero cost. This is backend/API-layer post-processing, not an agent tool the model itself decides to call.
+
+### AD-22 — Feedback pipeline [ADOPTED]
+
+- **Binds:** CAP-9
+- **Prevents:** a missing rating blocking the chat, a positive rating being used to excuse a hard-constraint violation, unmoderated comment text reaching storage, and the rated-trace dataset being repurposed for model training.
+- **Rule:** Rating is always optional; the chat input is never disabled or gated on a missing rating. A user can change or remove a prior rating. `record_feedback` is a plain-code tool (AD-4) - a pure Postgres write, never an LLM decision. Comment text is untrusted input and passes through the same moderation as any other user text (AD-11) before being stored. A rated trace feeds exactly two destinations: per-user semantic memory (the LangGraph `Store`/pgvector, AD-2) and a LangSmith dataset of rated traces, used only for offline prompt improvement - never model training. **User content entering the LangSmith dataset is anonymized (PII stripped) before storage** - a documented security/privacy consideration, not an opt-in consent flow, for v1. A positive rating never overrides AD-12 or any other hard constraint; the constraint check still runs and still applies regardless of how the response was rated.
+
+### AD-23 — Eval tooling [ADOPTED]
+
+- **Binds:** all (quality assurance, cross-cutting)
+- **Prevents:** introducing Python-based eval tooling into an otherwise TypeScript-only project, and validating tool-calling behavior against only one model when four are selectable (AD-20).
+- **Rule:** Evals are TypeScript-only: `agentevals` (`createTrajectoryMatchEvaluator` with `toolArgsMatchMode` enabled - tool arguments checked, not just tool names - and `createTrajectoryLLMAsJudge`) running inside Vitest, results linked to LangSmith. No Python eval package (e.g. Ragas) is introduced. The suite includes: deterministic unit tests for the plain-code tools; an integration test against a **real Postgres instance** (not a mock) for the exactly-one-active-plan partial unique constraint (AD-14); a negative test proving `activate_plan` can never reach `active` status without passing through the HITL pause; guardrail tests (guilt/streak language - run once per personality, AD-20 - moderation, prompt-injection via `web_search`); and a 15-25 case trajectory suite (including a "no tool call on smalltalk" case), versioned as committed fixture files. Trajectory-match checks (`createTrajectoryMatchEvaluator`) are fully deterministic - no judge model involved; only the LLM-as-judge quality cases (`createTrajectoryLLMAsJudge`) use the fixed judge model, `gpt-6-sol` (OpenAI, $2/$10 per 1M, pinned by exact id in config), distinct from all 4 registry entries and never exposed in the user-facing model list - the report must disclose that this judge shares a provider (OpenAI) with one evaluated registry model (`gpt-6-luna`) as a known limitation. Two distinct, never-conflated pass bars: trajectory/tool-call accuracy targets 80% **per model** (the report always shows the actual measured number, even below threshold, never suppressed); the safety/guardrail tests (guilt/streak language across all 3 personalities, moderation, the HITL-bypass negative test, the `web_search` prompt-injection test) require a hard 100% pass bar with zero tolerance. The full suite runs at least once against each of the 4 model-registry entries (AD-20), triggered on demand (`npm run eval`) - never wired into CI to run on every commit. See `evals.md` for the full requirement, including the report script (one command, includes known limitations and the eval run's own estimated cost per AD-21).
+
+### AD-24 — i18n layer [ADOPTED] [VERIFIED]
+
+- **Binds:** CAP-7, CAP-10, and every user-facing string in the application
+- **Prevents:** hardcoded user-facing strings anywhere, and divergent/missing translations for fixed system texts.
+- **Rule:** `react-i18next` (verified current, the standard default for React+Vite, named-translation-key approach - not Lingui's source-extraction or Paraglide's typed-function approach). Translation files live at `src/locales/<language-code>/<namespace>.json` (e.g. `src/locales/de/common.json`, `src/locales/en/common.json`), one namespace per feature area. Established from Story 1.1 onward - no user-facing string ships without a translation key, in either language. Fixed system texts (neutral re-entry message, error messages, acknowledgments, the key-missing fallback notice) exist in both languages from the moment they're introduced, never shipped English-only with German to follow later.
+
+### AD-25 — Chat reply-language matching [ADOPTED]
+
+- **Binds:** CAP-10 (and CAP-7's personality, which must render in both languages)
+- **Prevents:** the agent's reply language being tied to the UI language setting, or personality collapsing to English-only phrasing regardless of the target language.
+- **Rule:** The agent determines which language to reply in per message from what the user actually wrote (or, for voice, the language `gpt-transcribe` detects per AD-26) - never from the UI language setting (AD-20), which is a separate, independent mechanism. This is a prompt-construction concern, not a routing concern: the system prompt carries both the active personality (AD-20) and the target reply language, so personality × language is handled as one prompt-construction step, not as separate per-language personality definitions requiring their own tooling.
+
+### AD-26 — Voice language handling [ADOPTED] [VERIFIED]
+
+- **Binds:** CAP-4 (voice), CAP-10
+- **Prevents:** forcing a single transcription language when the user may speak either, and losing the detected language before it reaches the reply-language-matching rule (AD-25).
+- **Rule:** `gpt-transcribe` is called with `languages: ["de", "en"]` as a hint (narrows detection to the app's two supported languages without forcing either over genuine auto-detection) rather than a single forced language or unconstrained auto-detect. The language `gpt-transcribe` reports detecting is captured and passed downstream with the transcript, so the agent's reply (AD-25) uses that same detected language.
+
+### AD-27 — Currency as a user setting [ADOPTED]
+
+- **Binds:** CAP-2, CAP-5, CAP-8
+- **Prevents:** money stored or computed as floats (rounding bugs), a live FX API dependency, currency being inferred from UI language instead of its own explicit setting, and a converted amount being shown without being labeled an estimate.
+- **Rule:** Currency is a single user setting (EUR or USD, default EUR) in `user_settings` alongside language/personality/model (AD-20) - covering CAP-8's cost display and CAP-2/CAP-5's income projections/idea budgets as one setting, never per-feature. Money is stored as integer minor units plus an ISO currency code, never a float. Conversion uses one configured EUR/USD rate with an as-of date (same pattern as the model registry's `price_as_of`) - no live FX API call - and every converted amount is visibly labeled as an estimate. LLM billing (CAP-8) is natively USD; `generate_ideas`' sourced baseline rates (CAP-2/AD-6) are persisted once in their sourced currency with their citation, never altered - only the displayed/converted value changes when the user's currency setting changes. Changing the setting re-renders every displayed amount. Formatting uses `Intl.NumberFormat` with the currency code and a locale driven by the active UI language (AD-24) - locale and currency are independent axes.
+
+### AD-28 — Quality & Decisions page: scoped public exception to auth [ADOPTED]
+
+- **Binds:** CAP-11
+- **Prevents:** this one page being gated behind Google OAuth like every other capability (AD-17), while every other route/capability remains fully authenticated; prevents the page from ever leaking user data, secrets, or private LangSmith trace links since it's the one unauthenticated surface in the system.
+- **Rule:** CAP-11's page is a deliberate, narrowly-scoped exception to AD-17 - publicly reachable, no sign-in required. The exception applies **only** to this one page; AD-17 is otherwise unchanged and every other capability remains gated from first use. The page's content pipeline (AD-29) must exclude user-specific data, secrets, and LangSmith trace links by construction - verified by a dedicated test, not left to manual review.
+
+### AD-29 — Quality & Decisions content is generated, never hand-copied [ADOPTED]
+
+- **Binds:** CAP-11
+- **Prevents:** the page's content silently drifting from its sources because someone hand-typed a parallel summary instead of deriving it from what already exists.
+- **Rule:** Each of the three sections reads from a structured source, not freehand prose: (1) **Evaluation Results** reads a machine-readable JSON summary that the eval report script (Story 6.3) also emits alongside its human-readable markdown/HTML report; (2) **Key Decisions** reads a curated decisions-summary data file maintained alongside this architecture spine, each entry citing its `AD-n` id - a derived index of the spine, not a disconnected rewrite; (3) **Reflection** reads the same structured content Story 7.4 produces for the known-weaknesses/traceability documentation, reused rather than retyped. No section independently duplicates facts that could drift from these sources.
+
+### Dependency direction
+
+```mermaid
+flowchart TB
+    FE["React Frontend"] --> API["Node Backend API"]
+    API --> VOICE["Voice Interface (transcribeCheckIn / speakResponse)"]
+    VOICE --> V1["v1: gpt-transcribe"]
+    VOICE -. deferred .-> V2["v2: gpt-audio-mini"]
+    API --> LOOP["Agent Loop (createAgent / LangGraph.js runtime)"]
+    LOOP --> MOD["Moderation + guilt-language hooks\n(beforeModel / wrapToolCall / afterModel)"]
+    LOOP --> LLMT["LLM-backed tools\n(generate_ideas, create_plan)"]
+    LOOP --> PCT["Plain-code tools\n(submit_intake, set_idea_status, get_current_step,\nstart_step, complete_step, record_check_in,\nget_projection, activate_plan)"]
+    LOOP --> MCPT["MCP tool: web_search"]
+    LLMT --> PG[("Postgres (Neon)\nhard state")]
+    PCT --> PG
+    MCPT --> EXT["External search provider"]
+    LOOP -.-> CKPT[("Checkpointer + Store/pgvector\nconversational context only")]
+```
+
+No arrow runs in reverse: tools never call the frontend, Postgres never calls back into the agent loop, and the voice implementation never calls check-in logic directly (only through the interface in AD-8).
+
+## Consistency Conventions
+
+| Concern | Convention |
+| --- | --- |
+| Data & formats (tool/API boundary types) | Zod schemas in one shared location, imported by backend and frontend; TypeScript types derived via `z.infer`, never hand-written separately (AD-16). |
+| State & cross-cutting (mutation, errors, logging, auth) | Deterministic state mutation (step, check-in, activation) only via plain-code tools (AD-4); LLM-backed tools never mutate this state. Error handling and message/context trimming via composable middleware hooks (`beforeAgent`/`beforeModel`/`wrapModelCall`/`afterModel`/`afterAgent`). Moderation (AD-11) and the guilt-language check (AD-12) are mandatory hooks, not optional. Auth via Google OAuth (AD-17). `record_check_in` captures the energy/status input for CAP-4; the orchestrating agent must call it before offering any step-related ask within that check-in turn. |
+
+## Stack
+
+| Name | Version |
+| --- | --- |
+| TypeScript | 7.0.2 |
+| Node.js | 26 (Active LTS) |
+| React | 19.3.1 |
+| google-auth-library | 11.3.3 |
+| Express | current |
+| agentevals | current |
+| Vitest | current |
+| react-i18next | current |
+| langchain (TypeScript) | 1.6.5 |
+| @langchain/core | 1.3.6 |
+| @langchain/langgraph | 1.7.3 |
+| @langchain/langgraph-checkpoint-postgres | current (unpinned) |
+| @langchain/mcp-adapters | 2.0+ |
+| gpt-transcribe (voice v1) | 2026-07-28 release |
+| gpt-audio-mini (voice v2, deferred) | gpt-audio-mini-2025-12-15 |
+| Mistral Moderation 2 | mistral-moderation-2603 |
+| React Compiler (via @vitejs/plugin-react `reactCompilerPreset`; peers @rolldown/plugin-babel, babel-plugin-react-compiler, @babel/core) | current (Vite 8 + @vitejs/plugin-react v6) |
+| TanStack Query | current |
+| Zod | current |
+| LangSmith | current |
+| Neon (Postgres hosting) | — |
+| Cloud Run (app hosting) | — |
+
+## Structural Seed
+
+```mermaid
+flowchart TB
+    subgraph Client
+        FE["React App\n(TanStack Query, React Compiler)"]
+    end
+    subgraph Server["Node Backend"]
+        API["API layer (Express)"]
+        LOOP["Agent loop (createAgent)"]
+        MOD["Moderation + resilience hooks"]
+        TOOLS["Tools (LLM-backed / plain-code)"]
+    end
+    subgraph Data
+        PG[("Postgres\nhard state")]
+        CKPT[("Checkpointer +\nStore/pgvector")]
+    end
+    MCP["MCP: web_search"]
+    FE -->|HTTP| API --> LOOP
+    LOOP --> MOD --> TOOLS
+    TOOLS --> PG
+    LOOP -.-> CKPT
+    TOOLS --> MCP
+```
+
+### Deployment & environments
+
+```mermaid
+flowchart LR
+    subgraph Local["Local — build + live class demo"]
+        FE1["React app"]
+        BE1["Node backend + agent"]
+        PG1[("Postgres")]
+    end
+    subgraph Cloud["Cloud — after the demo"]
+        CR["Cloud Run\n(Node backend + agent, always-free tier,\n2M req/month, scales to zero)"]
+        NEON[("Neon Postgres\n(auto-wakes on query after scale-to-zero)")]
+    end
+    FE1 --> BE1 --> PG1
+    CR --> NEON
+    Local -. deploy after demo .-> Cloud
+```
+
+Local-only first, on the user's laptop, for build and the live class demo. Deploys afterward to Cloud Run (app hosting) + Neon (Postgres). Neon was chosen over Supabase and a self-hosted GCP VM specifically because it auto-wakes on query after scaling to zero, whereas Supabase's free tier pauses idle projects and requires a manual dashboard resume — unacceptable risk for a live demo. Google Cloud SQL has no perpetual free tier (only a 30-day trial) and was ruled out.
+
+**Secrets/config:** local environment variables (`.env`) during local-only build and demo; Google Cloud's Secret Manager once deployed to Cloud Run. Applies to every credential this system holds: the voice model API key, Mistral Moderation's API key, the web-search MCP provider's key, the Google OAuth client secret, and the LangSmith API key.
+
+### Minimal source tree
+
+```text
+src/
+  agent/           # createAgent wiring, middleware hooks, setNodeDefaults resilience config
+  tools/
+    llm/           # generate_ideas, create_plan (LLM-backed)
+    plain/         # submit_intake, set_idea_status, get_current_step, start_step, complete_step, record_check_in, get_projection, activate_plan, set_personality, set_model, record_feedback
+    mcp/           # web_search MCP client wiring
+  voice/           # transcribeCheckIn / speakResponse interface + v1 (gpt-transcribe) implementation
+  db/              # Postgres access (hard-state tables; Neon in prod)
+  shared/
+    schemas/       # Zod schemas (imported by backend + frontend)
+  api/             # Express app - HTTP API consumed by frontend, request/response only (AD-19)
+web/
+  src/             # React frontend, TanStack Query hooks
+```
+
+## Capability → Architecture Map
+
+| Capability / Area | Lives in | Governed by |
+| --- | --- | --- |
+| CAP-1 — Intake | `tools/plain/submit_intake`, `db/` (hard-state tables) | AD-3, AD-4, AD-16 |
+| CAP-2 — Idea generation | `tools/llm/generate_ideas`, `tools/plain/set_idea_status`, `tools/mcp/web_search` | AD-4, AD-5, AD-6, AD-13, AD-27 |
+| CAP-3 — Plan generation | `tools/llm/create_plan`, `tools/plain/get_current_step` | AD-3, AD-4, AD-13 |
+| CAP-4 — Check-ins (text + voice) | `tools/plain/{start_step,complete_step,record_check_in}`, `voice/` | AD-3, AD-4, AD-8, AD-9, AD-10, AD-11, AD-12, AD-15, AD-17 |
+| CAP-5 — Income/opportunity projection | `tools/plain/get_projection` | AD-4, AD-6, AD-27 |
+| CAP-6 — Plan activation (HITL) | `tools/plain/activate_plan` | AD-13, AD-14 |
+| CAP-7 — Settings (personality + model registry + UI language + currency) | `tools/plain/{set_personality,set_model,set_ui_language,set_currency}` | AD-20, AD-24, AD-27 |
+| CAP-8 — Token & cost tracking | `api/` (post-turn computation) | AD-21, AD-27 |
+| CAP-9 — Feedback | `tools/plain/record_feedback` | AD-11, AD-22 |
+| CAP-10 — Bilingual chat (DE/EN) | `agent/` (prompt construction), `voice/` | AD-24, AD-25, AD-26 |
+| CAP-11 — Quality & Decisions page (public) | `web/src/` (public route) | AD-17 (scoped exception), AD-28, AD-29 |
+| Cross-cutting: moderation & safety | `agent/` middleware hooks | AD-11, AD-12 |
+| Cross-cutting: resilience | `agent/` node config | AD-7 |
+| Cross-cutting: shared types | `shared/schemas/` | AD-16 |
+| Cross-cutting: thread/session mapping | `api/` (Express), `agent/` | AD-17, AD-18 |
+| Cross-cutting: request/response delivery | `api/` (Express) | AD-19 |
+
+## Deferred
+
+- **v2 voice (`gpt-audio-mini` speech-to-speech)** — waits until the v1 record→transcribe→review flow has proven itself in real use (per AD-9); the unified speech-to-speech path removes the transcript-review step and isn't needed to clear the course deadline. Note: `gpt-audio-mini-2025-12-15` (the Stack-table pin) currently has a live OpenAI deprecation notice (replacement `gpt-audio-1.5`); re-check its status directly against OpenAI's deprecations page before v2 work starts rather than trusting this pin.
+- **Voice interface contract's exact method signature/statefulness** — `transcribeCheckIn`/`speakResponse`'s precise parameter/return shapes and purity guarantees are an implementation-level detail within the AD-8 contract.
+- **Audio-retention deletion endpoint** — the exact point at which raw audio is deleted relative to transcript confirmation (within AD-9/AD-10's "no longer than needed" constraint) is left for implementation.
+- **Plant/gamification companion** — explicit non-goal for this version (SPEC constraints/non-goals); deferred to keep build time on core agent logic.
+- **Background-job missed-check-in detection + proactive notifications** — needs a scheduler (e.g. Cloud Scheduler) and a not-yet-designed notification channel (push/email); lazy detection (AD-15) is sufficient for v1's best-effort CAP-4 scope and the live demo.
+- **Exact Postgres schema (column-level detail)** — left for implementation; AD-2/AD-3 fix which tables own which class of fact, not their columns.
+- **Exact preselected range boundaries for the available-time, budget, and risk-tolerance intake fields** — left for Architecture/UX per SPEC's own assumption; not fixed in this spine.
+- **Final adoption of Mistral Moderation 2** — mandatory as the moderation mechanism and hook placement (AD-11), but the model itself is pending evaluation against the project's labelled/held-out test sets before being treated as a closed decision.
+- **UI visual design** — a separate UX step (DESIGN.md/EXPERIENCE.md), not this spine's concern.
+- **Exact retry counts, backoff values, and timeout durations** — AD-7 fixes where resilience config lives (node-level `setNodeDefaults`) and which tool classes get longer vs. shorter policies, not the specific numbers; left for implementation/tuning.

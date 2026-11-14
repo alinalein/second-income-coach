@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light" data-accent="teal">
+<head>
+<meta charset="UTF-8">
+<title>Second Income Coach — Layout Preview</title>
+<style>
+  /* ---------- neutrals (identical across all 3 accents; switch with data-theme) ---------- */
+  html[data-theme="light"] {
+    --page-a: #eef1f0;
+    --page-b: #e7ebe9;
+    --glass-bg: rgba(255,255,255,0.55);
+    --glass-bg-strong: rgba(255,255,255,0.72);
+    --glass-border: rgba(20,30,26,0.10);
+    --foreground: #1f2937;
+    --muted-foreground: #6b7280;
+    --muted-bg: rgba(20,30,26,0.06);
+    --shadow: 0 8px 30px rgba(20,40,30,0.10);
+    --blob-opacity: 0.22;
+  }
+  html[data-theme="dark"] {
+    --page-a: #111214;
+    --page-b: #17181b;
+    --glass-bg: rgba(255,255,255,0.06);
+    --glass-bg-strong: rgba(255,255,255,0.10);
+    --glass-border: rgba(255,255,255,0.10);
+    --foreground: #e9eaec;
+    --muted-foreground: #9aa0a6;
+    --muted-bg: rgba(255,255,255,0.08);
+    --shadow: 0 8px 30px rgba(0,0,0,0.45);
+    --blob-opacity: 0.30;
+  }
+
+  /* ---------- accent token sets: ONE set of 4 vars per (theme x accent) ---------- */
+  html[data-theme="light"][data-accent="emerald"] { --primary:#047857; --primary-foreground:#ffffff; --accent:#d1fae5; --accent-foreground:#047857; --blob:#10b981; }
+  html[data-theme="light"][data-accent="teal"]    { --primary:#0f766e; --primary-foreground:#ffffff; --accent:#ccfbf1; --accent-foreground:#0f766e; --blob:#14b8a6; }
+  html[data-theme="light"][data-accent="amber"]   { --primary:#b45309; --primary-foreground:#ffffff; --accent:#fef3c7; --accent-foreground:#b45309; --blob:#f59e0b; }
+  html[data-theme="light"][data-accent="ocean"]   { --primary:#0369a1; --primary-foreground:#ffffff; --accent:#e0f2fe; --accent-foreground:#0369a1; --blob:#0ea5e9; }
+  html[data-theme="dark"][data-accent="emerald"]  { --primary:#34d399; --primary-foreground:#121316; --accent:#064e3b; --accent-foreground:#6ee7b7; --blob:#10b981; }
+  html[data-theme="dark"][data-accent="teal"]     { --primary:#2dd4bf; --primary-foreground:#121316; --accent:#134e4a; --accent-foreground:#5eead4; --blob:#14b8a6; }
+  html[data-theme="dark"][data-accent="amber"]    { --primary:#fbbf24; --primary-foreground:#121316; --accent:#78350f; --accent-foreground:#fcd34d; --blob:#f59e0b; }
+  html[data-theme="dark"][data-accent="ocean"]    { --primary:#38bdf8; --primary-foreground:#121316; --accent:#0c4a6e; --accent-foreground:#7dd3fc; --blob:#0ea5e9; }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: radial-gradient(circle at 20% 10%, var(--page-a), var(--page-b) 70%);
+    color: var(--foreground);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 14px;
+    padding: 20px;
+    position: relative;
+    overflow-x: hidden;
+    transition: background .25s ease, color .25s ease;
+  }
+  /* soft color blobs behind the glass, so the blur is visible; accent-colored but never filling a whole block */
+  .blob {
+    position: fixed;
+    width: 360px; height: 360px;
+    border-radius: 50%;
+    background: var(--blob);
+    opacity: var(--blob-opacity);
+    filter: blur(70px);
+    z-index: 0;
+    pointer-events: none;
+    transition: background .25s ease;
+  }
+  .blob.b1 { top: -80px; left: 10%; }
+  .blob.b2 { bottom: -100px; right: 8%; background: var(--blob); }
+  .blob.b3 { top: 40%; left: 60%; width: 240px; height: 240px; }
+
+  .wrap { position: relative; z-index: 1; max-width: 1180px; margin: 0 auto; }
+
+  h1 { font-size: 19px; margin: 0 0 2px; }
+  .sub { color: var(--muted-foreground); font-size: 12.5px; margin: 0 0 16px; }
+
+  /* ---------- controls ---------- */
+  .controls {
+    display: flex; gap: 18px; flex-wrap: wrap; align-items: center;
+    background: var(--glass-bg-strong);
+    border: 1px solid var(--glass-border);
+    backdrop-filter: blur(16px) saturate(150%);
+    -webkit-backdrop-filter: blur(16px) saturate(150%);
+    border-radius: 14px;
+    padding: 10px 14px;
+    margin-bottom: 26px;
+    box-shadow: var(--shadow);
+  }
+  .control-group { display: flex; align-items: center; gap: 8px; }
+  .control-label { font-size: 11px; color: var(--muted-foreground); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+  .seg { display: flex; gap: 4px; background: var(--muted-bg); border-radius: 10px; padding: 3px; }
+  .seg button {
+    border: none; background: transparent; color: var(--muted-foreground);
+    font-size: 12px; font-weight: 600; padding: 5px 11px; border-radius: 8px;
+    cursor: pointer; transition: all .15s ease;
+  }
+  .seg button.active { background: var(--primary); color: var(--primary-foreground); }
+  .swatch { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 5px; vertical-align: -1px; }
+
+  h2 { font-size: 15px; margin: 34px 0 12px; }
+
+  /* ---------- glass card base ---------- */
+  .glass {
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    backdrop-filter: blur(14px) saturate(150%);
+    -webkit-backdrop-filter: blur(14px) saturate(150%);
+    border-radius: 16px;
+    box-shadow: var(--shadow);
+  }
+
+  /* ---------- buttons / badges / progress / inputs ---------- */
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 8px 16px; border-radius: 10px; border: none;
+    background: var(--primary); color: var(--primary-foreground);
+    font-weight: 600; font-size: 13px; cursor: pointer;
+  }
+  .btn.ghost {
+    background: var(--glass-bg-strong); color: var(--foreground);
+    border: 1px solid var(--glass-border);
+  }
+  .btn.icon { padding: 8px 10px; }
+  .badge {
+    display: inline-block; padding: 2px 9px; border-radius: 999px;
+    background: var(--accent); color: var(--accent-foreground);
+    font-weight: 700; font-size: 10.5px;
+  }
+  .badge.neutral { background: var(--muted-bg); color: var(--muted-foreground); }
+  .progress-track { height: 7px; border-radius: 999px; background: var(--muted-bg); overflow: hidden; }
+  .progress-fill { height: 100%; border-radius: 999px; background: var(--primary); }
+  input[type=text], textarea, select {
+    width: 100%; font-family: inherit; font-size: 13px; color: var(--foreground);
+    background: var(--glass-bg-strong); border: 1px solid var(--glass-border);
+    border-radius: 10px; padding: 8px 11px; outline: none;
+  }
+  input[type=text]:focus, textarea:focus, select:focus {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 30%, transparent);
+  }
+  label { font-size: 11.5px; font-weight: 600; color: var(--muted-foreground); display: block; margin-bottom: 4px; }
+  .field { margin-bottom: 12px; }
+
+  /* ---------- Intake ---------- */
+  .intake-card { padding: 22px; max-width: 480px; }
+  .intake-card h3 { margin: 0 0 3px; font-size: 16px; }
+  .intake-card .lead { color: var(--muted-foreground); font-size: 12.5px; margin: 0 0 16px; }
+  .row3 { display: flex; gap: 8px; }
+  .row3 .field { flex: 1; }
+
+  /* ---------- Ideas list ---------- */
+  .idea-grid { display: flex; gap: 14px; flex-wrap: wrap; }
+  .idea-card { flex: 1; min-width: 190px; max-width: 230px; padding: 14px; display: flex; flex-direction: column; gap: 7px; }
+  .idea-card.rejected { opacity: .45; }
+  .idea-title { font-weight: 700; font-size: 13px; line-height: 1.3; }
+  .idea-rationale { font-size: 11.5px; color: var(--muted-foreground); line-height: 1.4; }
+  .idea-stats { display: flex; gap: 6px; font-size: 10.5px; color: var(--muted-foreground); }
+  .idea-stats span { background: var(--muted-bg); border-radius: 6px; padding: 2px 6px; }
+  .idea-source { font-size: 9.5px; color: var(--muted-foreground); font-style: italic; }
+  .idea-actions { display: flex; gap: 5px; margin-top: auto; }
+  .idea-actions button {
+    flex: 1; font-size: 10.5px; padding: 5px 0; border-radius: 7px; border: 1px solid var(--glass-border);
+    background: var(--glass-bg-strong); color: var(--foreground); cursor: pointer; font-weight: 600;
+  }
+  .idea-actions button.primary { background: var(--primary); color: var(--primary-foreground); border: none; }
+
+  /* ---------- Plan workspace ---------- */
+  .workspace { display: flex; gap: 14px; align-items: flex-start; }
+  .sidebar { width: 250px; display: flex; flex-direction: column; gap: 12px; }
+  .sidebar .glass { padding: 14px; }
+  .sidebar h4 { margin: 0 0 6px; font-size: 11px; color: var(--muted-foreground); text-transform: uppercase; letter-spacing: .04em; }
+  .step-current { font-weight: 700; font-size: 13.5px; margin-bottom: 4px; }
+  .step-current-desc { font-size: 11.5px; color: var(--muted-foreground); }
+  .step-next { font-size: 11.5px; color: var(--muted-foreground); margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--glass-border); }
+  .proj-amount { font-size: 18px; font-weight: 700; color: var(--accent-foreground); }
+  .proj-sub { font-size: 11px; color: var(--muted-foreground); margin-top: 2px; }
+
+  .main-panel { flex: 1; display: flex; flex-direction: column; min-height: 440px; }
+  .chat-scroll { flex: 1; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+  .banner {
+    background: var(--accent); color: var(--accent-foreground);
+    border-radius: 10px; padding: 9px 12px; font-size: 12px; font-weight: 600;
+  }
+  .msg { max-width: 78%; }
+  .msg.agent { align-self: flex-start; }
+  .msg.user { align-self: flex-end; text-align: right; }
+  .bubble {
+    padding: 9px 12px; border-radius: 12px; font-size: 12.5px; line-height: 1.45;
+  }
+  .msg.agent .bubble { background: var(--glass-bg-strong); border: 1px solid var(--glass-border); border-bottom-left-radius: 3px; }
+  .msg.user .bubble { background: var(--primary); color: var(--primary-foreground); border-bottom-right-radius: 3px; }
+  .msg-meta { font-size: 9.5px; color: var(--muted-foreground); margin-top: 3px; display: flex; gap: 6px; align-items: center; }
+  .msg.user .msg-meta { justify-content: flex-end; }
+  .thumbs { cursor: pointer; opacity: .7; }
+  .composer {
+    display: flex; gap: 8px; padding: 12px 16px;
+    border-top: 1px solid var(--glass-border);
+  }
+  .composer input { flex: 1; }
+  .mic-btn {
+    width: 38px; height: 38px; border-radius: 50%; border: none;
+    background: var(--primary); color: var(--primary-foreground);
+    font-size: 15px; cursor: pointer; flex-shrink: 0;
+  }
+
+  /* ---------- narrow/mobile frame ---------- */
+  .phone {
+    width: 300px;
+    border-radius: 26px;
+    border: 1px solid var(--glass-border);
+    padding: 10px;
+  }
+  .phone .mobile-header { display:flex; justify-content:space-between; align-items:center; padding: 8px 10px; border-radius: 12px; margin-bottom: 8px; }
+  .phone .mobile-header .step-current { font-size: 12px; margin: 0; }
+  .phone .mobile-header .proj-amount { font-size: 13px; }
+  .phone .chat-scroll { min-height: 300px; padding: 10px; }
+  .preview-row { display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-start; }
+
+  footer { margin-top: 44px; color: var(--muted-foreground); font-size: 11px; }
+</style>
+</head>
+<body>
+
+<div class="blob b1"></div>
+<div class="blob b2"></div>
+<div class="blob b3"></div>
+
+<div class="wrap">
+
+  <h1>Second Income Coach — Layout Preview</h1>
+  <p class="sub">Static file, one small inline toggle script, no external assets. Everything below re-themes live from one accent token set.</p>
+
+  <div class="controls">
+    <div class="control-group">
+      <span class="control-label">Accent</span>
+      <div class="seg" id="accent-seg">
+        <button data-accent="emerald"><span class="swatch" style="background:#10b981"></span>Emerald</button>
+        <button data-accent="teal" class="active"><span class="swatch" style="background:#14b8a6"></span>Teal ✓</button>
+        <button data-accent="amber"><span class="swatch" style="background:#f59e0b"></span>Amber</button>
+        <button data-accent="ocean"><span class="swatch" style="background:#0ea5e9"></span>Ocean</button>
+      </div>
+    </div>
+    <div class="control-group">
+      <span class="control-label">Theme</span>
+      <div class="seg" id="theme-seg">
+        <button data-theme="light" class="active">Light</button>
+        <button data-theme="dark">Dark</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= INTAKE ================= -->
+  <h2>1. Intake — structured form</h2>
+  <div class="glass intake-card">
+    <h3>Tell us about yourself</h3>
+    <p class="lead">A few questions so your ideas are actually matched to you, not generic.</p>
+
+    <div class="field">
+      <label>Skills &amp; experience</label>
+      <textarea rows="2">Spreadsheets, basic bookkeeping, I love taking care of plants</textarea>
+    </div>
+    <div class="field">
+      <label>Interests</label>
+      <textarea rows="2">Gardening, reselling things, organizing</textarea>
+    </div>
+    <div class="row3">
+      <div class="field">
+        <label>Time / week</label>
+        <select><option>5–10 hrs</option></select>
+      </div>
+      <div class="field">
+        <label>Budget</label>
+        <select><option>Under $100</option></select>
+      </div>
+      <div class="field">
+        <label>Risk</label>
+        <select><option>Low</option></select>
+      </div>
+    </div>
+    <div class="field">
+      <label>What's stopped you from starting something like this before?</label>
+      <textarea rows="2">I usually get overwhelmed once there are too many steps and lose track of things.</textarea>
+    </div>
+    <button class="btn">Find my ideas →</button>
+  </div>
+
+  <!-- ================= IDEAS LIST ================= -->
+  <h2>2. Ideas List — cards</h2>
+  <div class="glass" style="padding:16px;">
+    <div class="idea-grid">
+
+      <div class="glass idea-card">
+        <div><span class="badge">selected</span></div>
+        <div class="idea-title">Resell thrifted plant pots &amp; planters</div>
+        <div class="idea-rationale">Matches your interest in plants, fits a 5–10 hr/week schedule, needs under $100 to start.</div>
+        <div class="idea-stats"><span>6h/wk</span><span>$45</span><span>Low risk</span></div>
+        <div class="idea-source">Rate sourced: local marketplace fee guide, 2026</div>
+        <div class="idea-actions">
+          <button class="primary">Select</button>
+          <button>Bookmark</button>
+          <button>Reject</button>
+        </div>
+      </div>
+
+      <div class="glass idea-card">
+        <div><span class="badge neutral">bookmarked</span></div>
+        <div class="idea-title">Freelance spreadsheet cleanup for small shops</div>
+        <div class="idea-rationale">Uses your spreadsheet skills directly; flexible hours, no startup cost.</div>
+        <div class="idea-stats"><span>4h/wk</span><span>$0</span><span>Low risk</span></div>
+        <div class="idea-source">Rate sourced: freelance rate survey, 2026</div>
+        <div class="idea-actions">
+          <button>Select</button>
+          <button class="primary">Bookmark</button>
+          <button>Reject</button>
+        </div>
+      </div>
+
+      <div class="glass idea-card">
+        <div><span class="badge neutral">bookmarked</span></div>
+        <div class="idea-title">Weekend plant-sitting for neighbors</div>
+        <div class="idea-rationale">Plays to your plant care interest; near-zero budget, short weekly commitment.</div>
+        <div class="idea-stats"><span>3h/wk</span><span>$10</span><span>Low risk</span></div>
+        <div class="idea-source">Rate sourced: local pet/plant-sitting listings, 2026</div>
+        <div class="idea-actions">
+          <button>Select</button>
+          <button class="primary">Bookmark</button>
+          <button>Reject</button>
+        </div>
+      </div>
+
+      <div class="glass idea-card rejected">
+        <div><span class="badge neutral">rejected</span></div>
+        <div class="idea-title">Flip garage-sale finds online</div>
+        <div class="idea-rationale">Higher time commitment than stated; risk of overwhelm given your intake answer.</div>
+        <div class="idea-stats"><span>10h/wk</span><span>$150</span><span>Med risk</span></div>
+        <div class="idea-source">Rate sourced: resale marketplace data, 2026</div>
+        <div class="idea-actions">
+          <button>Select</button>
+          <button>Bookmark</button>
+          <button class="primary">Reject</button>
+        </div>
+      </div>
+
+      <div class="glass idea-card">
+        <div><span class="badge neutral">bookmarked</span></div>
+        <div class="idea-title">Batch-bake and sell sourdough at the farmers market</div>
+        <div class="idea-rationale">New interest area, but fits your budget and a weekend-only schedule.</div>
+        <div class="idea-stats"><span>5h/wk</span><span>$80</span><span>Low risk</span></div>
+        <div class="idea-source">Rate sourced: farmers-market vendor pricing, 2026</div>
+        <div class="idea-actions">
+          <button>Select</button>
+          <button class="primary">Bookmark</button>
+          <button>Reject</button>
+        </div>
+      </div>
+
+    </div>
+    <div style="margin-top:14px;"><button class="btn ghost">+ More Ideas</button></div>
+  </div>
+
+  <!-- ================= PLAN WORKSPACE ================= -->
+  <h2>3. Plan Workspace — unified</h2>
+  <div class="workspace">
+    <div class="sidebar">
+      <div class="glass">
+        <h4>Current Step</h4>
+        <div class="step-current">List your first pot on Marketplace</div>
+        <div class="step-current-desc">Take one clear photo, write a short description, set a price.</div>
+        <div class="step-next">Next (locked): Take photos of 3 more items</div>
+      </div>
+      <div class="glass">
+        <h4>Projection</h4>
+        <div class="proj-amount">~$38/mo</div>
+        <div class="proj-sub">at this pace · unlocks: your first sale</div>
+        <div class="progress-track" style="margin-top:10px;"><div class="progress-fill" style="width:35%;"></div></div>
+      </div>
+    </div>
+
+    <div class="glass main-panel">
+      <div class="chat-scroll">
+        <div class="banner">Welcome back 🙂 No worries about the gap — I've adjusted your timeline, let's pick up where you left off.</div>
+
+        <div class="msg agent">
+          <div class="bubble">Nice, you listed your first pot 🪴 That's step one done.</div>
+          <div class="msg-meta"><span>128 tokens · ~$0.001</span><span class="thumbs">👍</span><span class="thumbs">👎</span></div>
+        </div>
+        <div class="msg user">
+          <div class="bubble">yeah took a bit to get good photos</div>
+        </div>
+        <div class="msg agent">
+          <div class="bubble">Totally fine — good photos matter more than speed. Want to list a second one, or pause here for today?</div>
+          <div class="msg-meta"><span>146 tokens · ~$0.001</span><span class="thumbs">👍</span><span class="thumbs">👎</span></div>
+        </div>
+      </div>
+      <div class="composer">
+        <input type="text" placeholder="Type a message…">
+        <button class="mic-btn">🎙</button>
+      </div>
+    </div>
+  </div>
+
+  <h2>3b. Plan Workspace — narrow / mobile</h2>
+  <div class="phone glass">
+    <div class="glass mobile-header">
+      <div>
+        <div class="step-current">List your first pot</div>
+        <div class="proj-sub" style="margin-top:2px;">Next: 3 more photos</div>
+      </div>
+      <div class="proj-amount">$38<span style="font-size:9px;">/mo</span></div>
+    </div>
+    <div class="chat-scroll">
+      <div class="banner" style="font-size:11px;">Welcome back 🙂 timeline adjusted.</div>
+      <div class="msg agent">
+        <div class="bubble" style="font-size:11.5px;">Nice, you listed your first pot 🪴</div>
+        <div class="msg-meta"><span>128 tok · $0.001</span><span class="thumbs">👍</span><span class="thumbs">👎</span></div>
+      </div>
+      <div class="msg user">
+        <div class="bubble" style="font-size:11.5px;">yeah took a bit for photos</div>
+      </div>
+    </div>
+    <div class="composer" style="padding:10px 2px 2px;">
+      <input type="text" placeholder="Type a message…">
+      <button class="mic-btn">🎙</button>
+    </div>
+  </div>
+
+  <footer>Static preview — _bmad-output/planning-artifacts/layout-preview.html — no external assets. Inline toggle script only switches <code>data-theme</code> / <code>data-accent</code> attributes; all visuals are plain CSS custom properties.</footer>
+</div>
+
+<script>
+  (function () {
+    var html = document.documentElement;
+    function setActive(container, attr, value) {
+      container.querySelectorAll('button').forEach(function (b) {
+        b.classList.toggle('active', b.dataset[attr] === value);
+      });
+    }
+    document.getElementById('accent-seg').addEventListener('click', function (e) {
+      var btn = e.target.closest('button');
+      if (!btn) return;
+      html.setAttribute('data-accent', btn.dataset.accent);
+      setActive(this, 'accent', btn.dataset.accent);
+    });
+    document.getElementById('theme-seg').addEventListener('click', function (e) {
+      var btn = e.target.closest('button');
+      if (!btn) return;
+      html.setAttribute('data-theme', btn.dataset.theme);
+      setActive(this, 'theme', btn.dataset.theme);
+    });
+  })();
+</script>
+
+</body>
+</html>
