@@ -2,7 +2,7 @@
 title: 'Story 1.1: Project Scaffolding & Themed UI Shell'
 type: 'feature'
 created: '2026-11-15'
-status: 'in-progress'
+status: 'done'
 route: 'dispatch'
 review_loop_iteration: 0
 baseline_commit: '8c2cb67d3edbdd916a818c35ee551b1b1788fa32'
@@ -93,6 +93,26 @@ context: ['{project-root}/_bmad-output/implementation-artifacts/epic-1-context.m
 ## Spec Change Log
 
 ## Review Triage Log
+
+- **CORS allowlist always includes `localhost:5173`/`127.0.0.1:5173` even in production** (`src/api/middleware/cors.ts:10`, found independently by blind-hunter, verification-gap, edge-case-hunter) — `medium` — real: `createCorsMiddleware` always unions the configured `CORS_ORIGIN` with two hardcoded dev origins, with `credentials: true`, regardless of `NODE_ENV`; contradicts the "deny-by-default... never a wildcard" intent stated in the same file. Route: **patch**.
+- **Disallowed CORS origin surfaces as a generic 500, not a distinct 4xx** (`src/api/middleware/cors.ts`, blind-hunter) — `low` — real, confirmed by the test's own `res.status(500)` assertion; conflates a client-origin policy rejection with server failure, would make 5xx-based alerting noisy once deployed. Route: **patch**.
+- **`express-rate-limit` has zero behavioral test coverage** (`src/api/middleware/rateLimit.ts`, blind-hunter + verification-gap) — `medium` — real: confirmed only 4 tests exist in `app.test.ts`, none sends more than one request or asserts a 429/`RateLimit-*` header; deleting the rate-limiter `app.use` call would not fail any test. Route: **patch**.
+- **No `app.set('trust proxy', ...)`** (`src/api/app.ts`, blind-hunter) — `medium` — real: behind any reverse proxy/Cloud Run, the rate limiter (and any future IP-based logic) resolves the proxy's IP for every client, collapsing all users into one shared bucket. Route: **patch**.
+- **`/api/health/db` success and error branches are both entirely untested** (`src/api/routes/health.ts`, verification-gap) — `medium` — real, confirmed via repo-wide grep: no test references `health/db` or `checkDbConnection`; inverting the branch logic would ship undetected on the app's only DB-connectivity signal. Route: **patch**.
+- **`/api/health/db`'s catch block swallows the DB error with no logging** (`src/api/routes/health.ts`, blind-hunter) — `medium` — real: `catch { ... }` discards the error entirely before returning 503, leaving no server-side signal to distinguish a real outage from a code bug. Route: **patch**.
+- **`drizzle.config.ts` calls `loadEnv()` unguarded at module top level** (`src/drizzle.config.ts`, blind-hunter) — `low` — real: unlike `api/index.ts`'s deliberate try/catch, running `drizzle-kit generate`/`push` with a bad env throws a raw `EnvValidationError` stack instead of the same clean exit pattern. Route: **patch**.
+- **`.env.example` omits `POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB`/`POSTGRES_PORT`** (blind-hunter) — `low` — real: `docker-compose.yml` reads these with defaults matching `DATABASE_URL`'s hardcoded creds, but nothing documents them for a developer wanting non-default local credentials/port. Route: **patch**.
+- **No SIGTERM/SIGINT graceful-shutdown handling** (`src/api/index.ts`, blind-hunter) — `low` — real but unlikely to be encountered in local dev (a deploy-time/Cloud-Run concern), and the fix (signal handlers closing the pool/server) adds new behavior rather than a direct correction. Route: **rejected** (low + fix exceeds a direct correction, per triage rule).
+- **`@types/node` pinned to `^26.6.6` vs. `engines.node: ">=20.19.0"`** (`src/package.json`, blind-hunter) — `low` — real: typechecking against Node-26-only APIs could pass `tsc` while failing at runtime on the actually-supported Node 20; no such API is used yet, so latent risk only. Route: **patch**.
+- **Theme flips to dark only inside a post-paint `useEffect`** (`web/src/theme/theme-provider.tsx`, blind-hunter) — `low` — real and happens on every reload for a dark-mode user (cosmetic flash of light theme before JS runs); the I/O matrix's "dark mode still active" is eventually true but doesn't guarantee no visible flash. Route: **patch**.
+- **CORS allow-branch (origin matching `CORS_ORIGIN`) never exercised by a test** (`src/api/middleware/cors.ts`, verification-gap) — `medium` — real: all 4 existing tests either send no `Origin` header or a disallowed one; an inverted allowlist check would pass the full suite while locking out the real frontend entirely. Route: **patch**.
+- **Frontend health badge (`useApiHealth`) has no test** (`web/src/App.tsx`, verification-gap) — cosmetic placeholder indicator with no downstream consumer yet. Route: **defer** (per verification-gap's own filed disposition).
+- **`checkDbConnection`'s boolean return value is never checked by its caller** (`src/db/client.ts`/`src/api/routes/health.ts`, verification-gap "Other findings") — `false` — the only query it runs is the constant `select 1 as ok`, which cannot resolve with zero rows when it succeeds; the asserted bad outcome (silently reporting "ok" on a logically-empty result) cannot occur at this call site.
+- **`app.listen()` has no `.on('error', ...)` handler** (`src/api/index.ts`, edge-case-hunter) — `low` — real and plausible in everyday local dev (e.g. `EADDRINUSE` from a leftover process on the port): an unhandled error crashes with a raw Node stack instead of the same clean "startup failed" messaging used for env errors. Route: **patch**.
+- **`pg` Pool has no `pool.on('error', ...)` handler** (`src/db/client.ts`, edge-case-hunter) — `medium` — real and a well-documented `pg` gotcha: an idle-client connection error (DB restart, network blip) unrelated to any in-flight request crashes the entire process. Route: **patch**.
+- **`BODY_LIMIT` env var only checked for non-emptiness, not validated as a byte-size string** (`src/config/env.ts`, edge-case-hunter) — `low` — real: a malformed value (e.g. `"nope"`) passes startup validation and could silently fail to enforce the limit instead of failing fast. Route: **patch**.
+- **`DATABASE_URL` env var only checked for non-emptiness, not validated as a URL** (`src/config/env.ts`, edge-case-hunter) — `low` — real: a malformed value passes startup validation and only fails later at Pool connect/query time, compounded by the unguarded pool error above. Route: **patch**.
+- **Only JSON bodies are size-limited** (`src/api/app.ts`, edge-case-hunter) — `medium` — real: `express.json({limit})` only caps requests Express parses as JSON; other content types (`multipart/form-data`, `text/plain`) bypass the configured body-size limit entirely, undermining the AD-30 "body-size limit" requirement as a blanket protection. Route: **patch**.
 
 ## Verification
 

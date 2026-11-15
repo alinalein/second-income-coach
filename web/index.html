@@ -4,6 +4,20 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Second Income Coach</title>
+    <script>
+      // Apply the persisted theme synchronously, before first paint, so a
+      // dark-mode user never sees a flash of the light theme on reload. Must
+      // stay in sync with the storage key read by web/src/theme/theme-provider.tsx.
+      (function () {
+        try {
+          if (window.localStorage.getItem('second-income-coach:theme') === 'dark') {
+            document.documentElement.classList.add('dark');
+          }
+        } catch (_err) {
+          // localStorage can throw (privacy mode, disabled storage, etc.) — fall back to light.
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

@@ -8,8 +8,15 @@ try {
   const { db } = createDb(env);
   const app = createApp({ env, db });
 
-  app.listen(env.PORT, () => {
+  const server = app.listen(env.PORT, () => {
     console.log(`[api] listening on http://localhost:${env.PORT} (${env.NODE_ENV})`);
+  });
+
+  server.on('error', (error: NodeJS.ErrnoException) => {
+    // Same clean "startup failed" messaging as an env error, e.g. EADDRINUSE —
+    // instead of crashing with a raw Node stack trace.
+    console.error(`[api] startup failed:\n${error.message}`);
+    process.exit(1);
   });
 } catch (error) {
   if (error instanceof EnvValidationError) {

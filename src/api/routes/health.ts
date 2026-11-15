@@ -34,7 +34,8 @@ export function createHealthRouter({ db }: HealthRouterDeps) {
           timestamp: new Date().toISOString(),
         }),
       );
-    } catch {
+    } catch (error) {
+      console.error('[health] db connectivity check failed:', error);
       res.status(503).json(
         healthStatusSchema.parse({
           status: 'error',

@@ -13,6 +13,12 @@ import type { Env } from '../config/env.js';
  */
 export function createDb(env: Pick<Env, 'DATABASE_URL'>) {
   const pool = new Pool({ connectionString: env.DATABASE_URL });
+  // An idle pooled client can emit a connection-level error (DB restart,
+  // network blip) outside of any query; without a listener, Node treats that
+  // as an unhandled 'error' event and crashes the whole process.
+  pool.on('error', (error) => {
+    console.error('[db] idle client error:', error);
+  });
   const db = drizzle(pool);
   return { db, pool };
 }

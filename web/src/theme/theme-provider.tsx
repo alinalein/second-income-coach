@@ -36,6 +36,9 @@ function applyThemeClass(theme: Theme) {
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [theme, setThemeState] = React.useState<Theme>(() => readStoredTheme() ?? 'light');
 
+  // The inline script in web/index.html already applies the persisted class
+  // synchronously before first paint (avoiding a flash of light theme on
+  // reload); this effect keeps the `dark` class in sync with in-app toggles.
   React.useEffect(() => {
     applyThemeClass(theme);
   }, [theme]);
