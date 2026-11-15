@@ -8,7 +8,7 @@ scope: "Governs the agent paradigm, tool/state boundaries, resilience fabric, mo
 status: final
 created: "2026-11-13"
 updated: "2026-11-15"
-binds: [CAP-1, CAP-2, CAP-3, CAP-4, CAP-5, CAP-6, CAP-7, CAP-8, CAP-9, CAP-10, CAP-11]
+binds: [CAP-1, CAP-2, CAP-3, CAP-4, CAP-5, CAP-6, CAP-7, CAP-8, CAP-9, CAP-10, CAP-11, CAP-12]
 sources: ["../../specs/spec-second-income-coach/SPEC.md"]
 companions: []
 ---
@@ -142,11 +142,11 @@ Namespace mapping:
 - **Prevents:** multiple LangGraph threads being created for the same discovery session or the same plan, a thread being shared/reused across different authenticated users, or plan-specific and pre-plan discovery context bleeding into each other.
 - **Rule:** Two thread kinds, never conflated: (1) exactly one **discovery thread** per user, used before any plan is chosen, covering intake and idea discussion (CAP-1/CAP-2); (2) exactly one **plan thread** per plan, created when that plan's draft is first generated, used for all CAP-3/CAP-4 activity on that plan including follow-up questions. A thread id is always derived from the Google-authenticated user's session (AD-17); a user never shares a thread with another user, and a given discovery session or plan never spans more than its own single thread.
 
-### AD-19 — Request/response delivery (no streaming) [ADOPTED]
+### AD-19 — Request/response delivery (no streaming of final output) [ADOPTED] (amended: progress-event exception, Story 1.5)
 
-- **Binds:** CAP-1 through CAP-6 (all user-facing interactions)
-- **Prevents:** building unneeded streaming/SSE infrastructure for turn-based interactions that don't benefit from it.
-- **Rule:** All capabilities use standard request/response — no streaming delivery of partial agent output. Check-ins and every other interaction in this app are turn-based, not a continuous live stream, so streaming adds complexity without a matching benefit here.
+- **Binds:** CAP-1 through CAP-6, CAP-12 (all user-facing interactions)
+- **Prevents:** building a general partial-output streaming API (token-by-token model output) that no capability here actually benefits from; a progress-event channel being reinterpreted as a backdoor for streaming not-yet-moderated answer text.
+- **Rule:** The agent's **final answer** is always delivered as one complete, already-moderated unit — no capability streams partial model output, and none is planned to. Within a single turn, **discrete progress-status events** (CAP-12, AD-31) are delivered incrementally over one **Server-Sent Events (SSE)** connection scoped to that turn's own request/response cycle — chosen over polling because LangGraph.js's own `.stream()` API already emits one event per real node/hook transition, so SSE forwards those events directly with no artificial status-derivation layer, and because it needs no new stateful infrastructure (polling would require a side-channel job/progress store this system doesn't otherwise have). This is a narrow, turn-scoped lifecycle channel, not a general streaming API: it never carries partial answer text, only step labels (AD-31), and the connection closes when the turn's single final response event is sent.
 
 ### AD-20 — Personality & model registry [ADOPTED]
 
@@ -214,13 +214,25 @@ Namespace mapping:
 - **Prevents:** SQL injection via hand-built query strings, XSS via unescaped rendering of agent- or user-generated content, an open/wildcard CORS policy, unbounded request volume against the cost-bearing LLM-backed tools, CSRF against session-authenticated mutations, oversized request bodies/messages exhausting resources or model context, and raw user message content ending up in logs.
 - **Rule:** Moderation (AD-11) and the guilt-language check (AD-12) cover content safety; this AD covers the separate concern of application/transport security - a request or query being hostile, oversized, or malformed in a way no content filter is meant to catch.
   - **SQL injection:** all Postgres access from the plain-code tools (AD-3/AD-4) goes through **Drizzle ORM** - parameterized by construction, no raw string-built SQL anywhere. Drizzle's schema definitions are the DB-side half of AD-16's enum-lockstep requirement (`failurePattern`/`ideaStatus`/`planStatus`) - generated alongside the shared Zod schemas, never hand-copied separately.
-  - **XSS:** agent-generated and user-generated text is never rendered via `dangerouslySetInnerHTML`; React's default escaping is relied on for all chat/content rendering, with no exception - enforced by an ESLint `react/no-danger` rule that fails the build on any use. `helmet` is applied to the Express app for baseline security headers (CSP, X-Frame-Options, etc.) as defense-in-depth.
+  - **XSS:** agent-generated and user-generated text is never rendered via `dangerouslySetInnerHTML` — enforced by an ESLint `react/no-danger` rule that fails the build on any use. React's default escaping is relied on for all chat/content rendering, with one bounded exception (Story 1.5, AD-32): agent responses may render a constrained Markdown subset (headings, lists, bold) through a safe Markdown renderer that builds its own React element tree directly — never via `dangerouslySetInnerHTML`, and never passing raw HTML embedded in the source through to the DOM. `helmet` is applied to the Express app for baseline security headers (CSP, X-Frame-Options, etc.) as defense-in-depth.
   - **CORS and origin:** the built React app is served from the **same Express service** as the API - a single origin in production, so cross-origin requests are not the normal case at all. The `cors` package is still configured, restricted to that one origin (plus `localhost` during local development, where the Vite dev proxy forwards API calls to the same effective origin) - deny-by-default, never a wildcard.
   - **Rate limiting:** `express-rate-limit` applies to every API route, with a stricter limit on `generate_ideas`/`create_plan` (the LLM-backed, cost-bearing tools, AD-4) than on plain-code reads - doubling as an abuse guard and a cost-control backstop alongside AD-21.
   - **CSRF:** the Google-OAuth session (AD-17) is a **server-side session set in an `HttpOnly`, `Secure`, `SameSite=Lax` cookie** after the backend verifies Google sign-in - never a bearer token, never exposed to client-side JavaScript. `SameSite=Lax` is the first line of defense; every state-changing (mutating) request is additionally rejected unless its `Origin` header matches the app's own origin, checked by backend middleware before the request reaches any tool. Together these two checks are the CSRF defense - no separate CSRF-token mechanism is introduced.
   - **Request/message size limits:** the Express body-parser enforces a configured maximum request body size, rejecting oversized requests before any further processing. Independently, the shared Zod schema for a user message (AD-16) enforces a maximum length - an over-length message is rejected at the schema boundary before it ever reaches the model, never truncated silently.
   - **Log hygiene:** no log destination (incident logs, LangSmith trace metadata, error logs) ever contains the raw text of a user message - only metadata (flags, categories, ids, lengths) is logged. This applies everywhere AD-11/AD-12 already log an incident; logging the trigger category is required, logging the flagged text itself is not.
   - **TLS:** Cloud Run terminates TLS at the edge in production; local-only development runs over plain HTTP on `localhost` - not a gap, since no production traffic ever takes that path.
+
+### AD-31 — Agent progress display: real-step sourcing, SSE transport, reveal gating [ADOPTED] (new, Story 1.5)
+
+- **Binds:** CAP-12
+- **Prevents:** a status display that's cosmetic/fake (not tied to what the agent is actually doing); internal tool or function names leaking into user-facing UI; the model's own generated text being trusted as a progress signal (prompt-injection surface); the final answer being shown before it's been moderated.
+- **Rule:** Every progress-status label shown to the user is derived from a **real** agent-loop transition — a `beforeModel`/`afterModel` hook boundary or a tool-call boundary — never from the model's own output text. The backend maps each real step/tool identifier to a **fixed, enumerated status key** via a step-to-label registry; the frontend looks up that key's translated text via the i18n layer (AD-24, both German and English from the moment each key is introduced). The raw internal identifier (hook name, tool name) is never sent to the client and never interpolated into a label — an unmapped tool (introduced by a later story before that story adds its own label) falls back to one fixed generic label, never a blank state or the raw name. Each tool-introducing story (starting Epic 2) registers its own tool's label key, the same "introducing story owns its own addition" pattern as the env-variable rule. Transport is SSE (AD-19 amended) — the natural fit, since LangGraph.js's `.stream()` emits one event per real node transition already, requiring no artificial status-derivation layer and no new stateful infrastructure. The final answer is released to the client only as the stream's one terminal event, and only after it has passed `afterModel` moderation (AD-11) and, for any capability AD-12 binds, the guilt-language check — the typing-effect reveal (frontend-only) is applied to that already-complete, already-safe text, never used to simulate progressive generation of unmoderated content.
+
+### AD-32 — Chat Markdown rendering [ADOPTED] (new, Story 1.5)
+
+- **Binds:** CAP-12
+- **Prevents:** a hand-rolled Markdown-to-HTML path that reintroduces an XSS surface AD-30 otherwise closes off.
+- **Rule:** `ChatMessage` renders a constrained Markdown subset — headings, lists, bold — via a Markdown renderer that parses into a React element tree directly (e.g. `react-markdown` in its default configuration, with no raw-HTML-passthrough plugin enabled). This never touches `dangerouslySetInnerHTML` and never renders raw HTML embedded in the Markdown source — the existing ESLint `react/no-danger` rule (AD-30) remains a real backstop, not bypassed by this exception. Scope is deliberately narrow (headings/lists/bold only); anything beyond that subset is out of scope for this story.
 
 ### Dependency direction
 
@@ -364,6 +376,7 @@ web/
 | CAP-9 — Feedback | `tools/plain/record_feedback` | AD-11, AD-22 |
 | CAP-10 — Bilingual chat (DE/EN) | `agent/` (prompt construction), `voice/` | AD-24, AD-25, AD-26 |
 | CAP-11 — Quality & Decisions page (public) | `web/src/` (public route) | AD-17 (scoped exception), AD-28, AD-29 |
+| CAP-12 — Agent progress display & chat Markdown rendering | `agent/` (step/tool → label mapping), `api/` (SSE channel), `web/src/chat/` (`ChatThread`/`ChatMessage`) | AD-11, AD-12, AD-19 (amended), AD-24, AD-30 (amended), AD-31, AD-32 |
 | Cross-cutting: moderation & safety | `agent/` middleware hooks | AD-11, AD-12 |
 | Cross-cutting: resilience | `agent/` node config | AD-7 |
 | Cross-cutting: shared types | `shared/schemas/` | AD-16 |

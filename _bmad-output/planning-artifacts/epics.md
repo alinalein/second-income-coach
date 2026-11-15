@@ -49,6 +49,10 @@ FR16: User can set a currency (EUR or USD, default EUR) in Settings, covering bo
 
 FR17: A public, unauthenticated "Quality & Decisions" page presents the latest evaluation results, a summary of key architecture decisions (reason + trade-off), and a reflection (known problems, improvement suggestions, when to use prompt engineering vs. RAG vs. agents) - every fact generated from an existing source, never hand-copied. UI chrome is localized; report/decision content stays English, stated on the page. Contains no user data, secrets, or private LangSmith trace links.
 
+FR18: While an agent turn is in progress, the user sees a short, localized, friendly status label reflecting the agent's real current step (e.g. "Thinking…", "Searching the web…", "Coming up with ideas…") - sourced from the actual step/tool being executed via a fixed step-to-label mapping, never from the model's own generated text and never exposing an internal tool or function name. The final answer is revealed only after it passes output moderation (and, where applicable, the guilt-language check), via a client-side typing effect over the already-safe text.
+
+FR19: Agent responses in the chat render basic Markdown (headings, lists, bold text); no raw HTML is ever rendered from agent- or user-authored content, consistent with the app's XSS defense.
+
 ### Additional NonFunctional Requirements
 
 NFR7: Eval tooling is TypeScript-only (`agentevals` + Vitest + LangSmith) - no Python eval packages. A trajectory suite (15-25 cases) plus deterministic unit and guardrail tests run against all 4 model-registry entries, with a report script producing a linked markdown/HTML report (tool-call accuracy, constraint-test results, model x accuracy table, run date).
@@ -113,8 +117,8 @@ UX-DR4: Text contrast meets at least 4.5:1 (WCAG AA for normal text) in both lig
 ## Epic List
 
 ### Epic 1: Sign In & First Contact
-Users can sign in with Google and exchange at least one safe, moderated message with the agent - the thinnest possible end-to-end slice proving the whole stack (auth, agent loop, Postgres, moderation, resilience, Zod schemas, LangSmith, and the themed UI shell) actually works together before any capability-specific feature is built on top of it. This epic establishes the UI foundation every later epic's screens build on: shadcn/ui + shadcn-glass-ui, a theme provider defaulting to light mode with a dark-mode toggle (choice persisted), a glass visual style, a teal accent scheme (chosen final, after an emerald/teal/amber/ocean contrast-verified comparison), and verified text contrast (>=4.5:1) in both themes. This epic also establishes the i18n foundation (German + English) every user-facing string goes through from here on, and creates the README skeleton, which every later epic appends its own section to. Epics 2-5 deliver their own screens on top of this foundation rather than building any of it themselves.
-**Covers:** NFR4, UX-DR1-4, and the Additional Requirements (stack wiring, auth, persistence plumbing, moderation baseline, observability, Express/React shell, i18n foundation, web/API security baseline per AD-30).
+Users can sign in with Google and exchange at least one safe, moderated message with the agent - the thinnest possible end-to-end slice proving the whole stack (auth, agent loop, Postgres, moderation, resilience, Zod schemas, LangSmith, and the themed UI shell) actually works together before any capability-specific feature is built on top of it. This epic establishes the UI foundation every later epic's screens build on: shadcn/ui + shadcn-glass-ui, a theme provider defaulting to light mode with a dark-mode toggle (choice persisted), a glass visual style, a teal accent scheme (chosen final, after an emerald/teal/amber/ocean contrast-verified comparison), and verified text contrast (>=4.5:1) in both themes. This epic also establishes the i18n foundation (German + English) every user-facing string goes through from here on, creates the README skeleton (which every later epic appends its own section to), and finishes the shared chat UI with real-step progress display and Markdown rendering. Epics 2-5 deliver their own screens on top of this foundation rather than building any of it themselves.
+**Covers:** FR18, FR19, NFR4, UX-DR1-4, and the Additional Requirements (stack wiring, auth, persistence plumbing, moderation baseline, observability, Express/React shell, i18n foundation, web/API security baseline per AD-30).
 
 ### Epic 2: Tailored Idea Discovery
 Users complete an intake and receive 5 second-income ideas matched to their own skills, time, budget, and risk tolerance - not a generic list - and can curate that list by bookmarking or rejecting ideas.
@@ -159,6 +163,8 @@ FR14: Epic 5 (Story 5.4) - UI language switch (DE/EN), persisted, defaults to En
 FR15: Epic 1 (Story 1.4, i18n foundation) + Epic 4 (voice, Story 4.3 amendment) - agent replies in whichever language the user writes/speaks in
 FR16: Epic 5 (Story 5.5) - currency switch (EUR/USD), persisted, defaults to EUR; Stories 2.2/4.4/5.2 amended to be currency-aware; the `user_settings` table (currency, personality, model, ui_language) is created in Story 1.2 so none of them has a forward dependency on Epic 5; the shared money helper is created in Story 2.2
 FR17: Epic 7 (Story 7.5) - public Quality & Decisions page, depends on Story 6.3's eval report (Epic 6) and Stories 7.2/7.4's rationale/weaknesses content (Epic 7) - placed last so it has no forward dependencies
+FR18: Epic 1 (Story 1.5) - real-step progress display (SSE transport, AD-31), i18n-backed friendly labels, reveal gated behind output moderation/guilt-language check; each later tool-introducing story (2.2, 3.1, 4.1, etc.) adds that tool's own label key, same pattern as the env-variable rule
+FR19: Epic 1 (Story 1.5) - Markdown rendering in the shared `ChatMessage` component, no raw HTML (AD-30 amended, AD-32)
 NFR1-3, NFR5: Epic 4 - non-punitive design, voice-first-class, no audio retention, verifiable tone
 NFR4: Epic 1 (baseline hooks) + enforced across Epics 2-5 wherever input/output occurs
 NFR6: cross-cutting demo-reliability bar, verified across Epics 1-4
@@ -167,7 +173,7 @@ NFR8: Epic 2/Epic 3 (discovery thread in Story 2.1, plan thread in Story 3.1)
 NFR9: Epic 5 (Story 5.3) + Epic 6 (guardrail tests re-verify it)
 UX-DR1-4: Epic 1 (theme/UI shell foundation incl. shadcn-glass-ui, teal accent scheme, contrast check); Epics 2-5 build their own screens on top of it
 Additional Requirements (stack/paradigm/persistence/resilience/auth/deployment/i18n): Epic 1 (foundation incl. i18n) and Epic 7 (deployment); README skeleton starts in Epic 1, every epic appends its section, Epic 7 finalizes
-AD-30 (web/API security baseline - Drizzle, helmet, CORS, rate limiting, body/message-length limits, log hygiene, ESLint react/no-danger): Epic 1 (Stories 1.1-1.3); session cookie + CSRF Origin-check (AD-17/AD-30): Epic 1 (Story 1.2)
+AD-30 (web/API security baseline - Drizzle, helmet, CORS, rate limiting, body/message-length limits, log hygiene, ESLint react/no-danger): Epic 1 (Stories 1.1-1.3, amended in Story 1.5 for safe Markdown rendering); session cookie + CSRF Origin-check (AD-17/AD-30): Epic 1 (Story 1.2)
 
 ## Epic 1: Sign In & First Contact
 
@@ -343,6 +349,44 @@ So that I can use it comfortably in my own language, not just English.
 **Given** the personality setting (CAP-7, configured in Epic 5)
 **When** a response is generated in either language
 **Then** the chosen tone (formal/friendly/terse) renders correctly in both languages - personality and reply-language are handled by the same prompt-construction step, not separate per-language personality definitions
+
+### Story 1.5: Agent Progress Display & Markdown Rendering
+
+As a signed-in user,
+I want to see what the agent is actually doing while it works, and read its replies with basic formatting,
+So that a longer turn doesn't feel like a frozen screen, and longer answers stay easy to read.
+
+(Depends on Story 1.3's `ChatThread`/`ChatMessage` component and Story 1.4's i18n layer for the status labels below - sequenced after both.)
+
+**Acceptance Criteria:**
+
+**Given** an agent turn in progress
+**When** it moves through a real step (checking the message, generating a response, calling a tool, checking the answer)
+**Then** the chat shows a short, friendly, localized status label for that exact step (e.g. "Checking your message…", "Thinking…", "Checking the answer…") - sourced from a fixed step-to-label mapping keyed by the real internal step/tool identifier, never by interpolating or exposing that identifier itself, and never derived from the model's own generated text (AD-31)
+
+**Given** a tool call occurs during a turn (from Epic 2 onward - this epic has no tools of its own)
+**When** its status label is shown
+**Then** it is the friendly label its own introducing story registers for that tool (e.g. Story 2.2 registers "Searching the web…" for `web_search` and "Coming up with ideas…" for `generate_ideas`; Story 3.1 registers "Working on your plan…" for `create_plan`; Story 4.1 registers "Saving your check-in…" for `record_check_in`) - an unmapped tool (introduced later, label not yet added) falls back to one fixed generic label, never a blank state or the raw tool name
+
+**Given** every status label text
+**When** it is added
+**Then** it goes through the i18n layer (AD-24) with both a German and an English key from the moment it is introduced - no status label ships English-only
+
+**Given** the agent's final answer
+**When** it becomes available
+**Then** it is only revealed to the user after it has passed `afterModel` output moderation (AD-11) and, for any capability AD-12 binds, the guilt-language check - never shown, partially or fully, before both have run
+
+**Given** the fully-moderated final answer
+**When** it is revealed
+**Then** it is revealed via a client-side typing effect applied to the complete, already-safe text - a cosmetic reveal only, never a mechanism that streams partial, not-yet-moderated model output to the user (AD-19 amended)
+
+**Given** progress-status events for a single turn
+**When** they are delivered to the client
+**Then** they arrive over one Server-Sent Events (SSE) connection scoped to that turn's own request/response cycle - not polling, and not a general streaming API for model output (AD-19 amended)
+
+**Given** an agent response containing Markdown (headings, lists, bold)
+**When** it is rendered in `ChatMessage`
+**Then** it renders as formatted content via a safe Markdown renderer that never passes raw HTML through and never uses `dangerouslySetInnerHTML` - the existing ESLint `react/no-danger` rule still enforces this (AD-30 amended, AD-32)
 
 ## Epic 2: Tailored Idea Discovery
 
