@@ -1,9 +1,9 @@
 import * as React from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   chatHistoryResponseSchema,
   sendMessageResponseSchema,
   CHAT_MESSAGE_MAX_LENGTH,
-  MODEL_FAILURE_MESSAGE,
   type ChatMessage as ChatMessageType,
 } from '@app/shared';
 import { Button } from '../components/ui/button';
@@ -28,6 +28,7 @@ function makeLocalMessage(role: ChatMessageType['role'], kind: ChatMessageType['
  * (AD-19: no streaming).
  */
 export function ChatThread() {
+  const { t } = useTranslation('chat');
   const [messages, setMessages] = React.useState<ChatMessageType[]>([]);
   const [historyLoaded, setHistoryLoaded] = React.useState(false);
   const [draft, setDraft] = React.useState('');
@@ -74,27 +75,29 @@ export function ChatThread() {
           const result = sendMessageResponseSchema.safeParse(body);
           setMessages((prev) => [
             ...prev,
-            result.success ? result.data.message : makeLocalMessage('assistant', 'error', MODEL_FAILURE_MESSAGE),
+            result.success
+              ? result.data.message
+              : makeLocalMessage('assistant', 'error', t('error.modelFailure')),
           ]);
         })
         .catch(() => {
-          setMessages((prev) => [...prev, makeLocalMessage('assistant', 'error', MODEL_FAILURE_MESSAGE)]);
+          setMessages((prev) => [...prev, makeLocalMessage('assistant', 'error', t('error.modelFailure'))]);
         })
         .finally(() => setSending(false));
     },
-    [draft, sending],
+    [draft, sending, t],
   );
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Coach chat</CardTitle>
+        <CardTitle>{t('title')}</CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         {!historyLoaded ? (
-          <p className="text-sm text-muted-foreground">Loading…</p>
+          <p className="text-sm text-muted-foreground">{t('loading')}</p>
         ) : messages.length === 0 ? (
-          <p className="text-sm text-muted-foreground">Say hello to get started.</p>
+          <p className="text-sm text-muted-foreground">{t('empty')}</p>
         ) : (
           messages.map((message) => <ChatMessage key={message.id} message={message} />)
         )}
@@ -105,14 +108,14 @@ export function ChatThread() {
             type="text"
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
-            placeholder="Type a message…"
+            placeholder={t('placeholder')}
             maxLength={CHAT_MESSAGE_MAX_LENGTH}
             disabled={sending}
-            aria-label="Message"
+            aria-label={t('messageAriaLabel')}
             className="h-10 flex-1 rounded-md border border-border bg-card px-3 text-sm text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background"
           />
           <Button type="submit" disabled={sending || !draft.trim()}>
-            Send
+            {t('sendButton')}
           </Button>
         </form>
       </CardFooter>

@@ -2,6 +2,7 @@ import { AIMessage, HumanMessage, type BaseMessage } from '@langchain/core/messa
 import { Mistral } from '@mistralai/mistralai';
 import { createMiddleware } from 'langchain';
 import type { Env } from '../config/env.js';
+import { detectReplyLanguage } from './language.js';
 
 /** Intent: "Moderation: Mistral Moderation 2 (`mistral-moderation-2603`, via
  * the official `@mistralai/mistralai` SDK)". */
@@ -13,12 +14,32 @@ export const MODERATION_MODEL_NAME = 'mistral-moderation-2603';
 export const JAILBREAK_REJECTION_MESSAGE =
   "I can't help with that request. Let's get back to your second income goals — what would you like to work on?";
 
+/** Story 1.4 (AC2): the German form of `JAILBREAK_REJECTION_MESSAGE`, picked
+ * by `detectReplyLanguage` on the rejected message. Colocated here (not in
+ * `web/src/locales/`) per Design Notes — the checkpointer only ever persists
+ * final, already-resolved `BaseMessage` text, never a translation key. */
+export const JAILBREAK_REJECTION_MESSAGE_DE =
+  'Dabei kann ich nicht helfen. Lass uns zu deinen Zielen für ein Nebeneinkommen zurückkehren — woran möchtest du arbeiten?';
+
 /** Intent: the fixed, user-facing text for an `afterModel` unsafe-output
  * replacement. */
 export const UNSAFE_RESPONSE_FALLBACK_MESSAGE =
   "I wasn't able to give a safe response to that — let's try a different angle. What would you like to focus on?";
 
-const NOTICE_TEXTS: ReadonlySet<string> = new Set([JAILBREAK_REJECTION_MESSAGE, UNSAFE_RESPONSE_FALLBACK_MESSAGE]);
+/** Story 1.4 (AC2): the German form of `UNSAFE_RESPONSE_FALLBACK_MESSAGE`,
+ * picked by `detectReplyLanguage` on the triggering human message. */
+export const UNSAFE_RESPONSE_FALLBACK_MESSAGE_DE =
+  'Ich konnte darauf keine sichere Antwort geben — lass uns einen anderen Ansatz versuchen. Worauf möchtest du dich konzentrieren?';
+
+// Design Notes: "history read-back re-derives `kind` by exact text match —
+// so every language variant needs to be in the set" — all 4 literals, not
+// just the EN pair.
+const NOTICE_TEXTS: ReadonlySet<string> = new Set([
+  JAILBREAK_REJECTION_MESSAGE,
+  JAILBREAK_REJECTION_MESSAGE_DE,
+  UNSAFE_RESPONSE_FALLBACK_MESSAGE,
+  UNSAFE_RESPONSE_FALLBACK_MESSAGE_DE,
+]);
 
 /**
  * AC: "the shared `ChatThread`/`ChatMessage` component ... error and
@@ -114,7 +135,8 @@ export async function evaluateUserMessage(
 
   if (flaggedCategories(categories, [JAILBREAK_CATEGORY]).length > 0) {
     logModerationIncident('jailbreak_rejected', { threadId, length: text.length });
-    return { action: 'reject', content: JAILBREAK_REJECTION_MESSAGE };
+    const content = detectReplyLanguage(text) === 'de' ? JAILBREAK_REJECTION_MESSAGE_DE : JAILBREAK_REJECTION_MESSAGE;
+    return { action: 'reject', content };
   }
 
   if (flaggedCategories(categories, [PII_CATEGORY]).length > 0) {
@@ -138,25 +160,31 @@ export type AssistantMessageVerdict = { action: 'pass' } | { action: 'replace'; 
 
 /**
  * `afterModel` decision logic (I/O matrix: "Unsafe model output"), same
- * pure-function shape as `evaluateUserMessage` above.
+ * pure-function shape as `evaluateUserMessage` above. `humanText` is the
+ * last human message in the conversation (the turn that triggered this
+ * reply) — used only to pick the EN/DE form of the fixed fallback (AC2), not
+ * passed to `classify`, which still only ever sees the assistant's own text.
  */
 export async function evaluateAssistantMessage(
   text: string,
   classify: ClassifyText,
   threadId: string | undefined,
+  humanText?: string,
 ): Promise<AssistantMessageVerdict> {
   const categories = await classify(text);
   const flagged = flaggedCategories(categories, UNSAFE_OUTPUT_CATEGORIES);
 
   if (flagged.length > 0) {
     logModerationIncident('unsafe_output_replaced', { threadId, length: text.length, categories: flagged });
-    return { action: 'replace', content: UNSAFE_RESPONSE_FALLBACK_MESSAGE };
+    const content =
+      detectReplyLanguage(humanText ?? '') === 'de' ? UNSAFE_RESPONSE_FALLBACK_MESSAGE_DE : UNSAFE_RESPONSE_FALLBACK_MESSAGE;
+    return { action: 'replace', content };
   }
 
   return { action: 'pass' };
 }
 
-function lastMessageOfType(messages: BaseMessage[], type: 'human' | 'ai'): BaseMessage | undefined {
+export function lastMessageOfType(messages: BaseMessage[], type: 'human' | 'ai'): BaseMessage | undefined {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     if (messages[i]!._getType() === type) return messages[i];
   }
@@ -209,7 +237,13 @@ export function createModerationMiddleware(
       const lastAi = lastMessageOfType(state.messages, 'ai');
       if (!lastAi?.text) return undefined;
 
-      const verdict = await evaluateAssistantMessage(lastAi.text, classify, runtime.configurable?.thread_id);
+      const lastHuman = lastMessageOfType(state.messages, 'human');
+      const verdict = await evaluateAssistantMessage(
+        lastAi.text,
+        classify,
+        runtime.configurable?.thread_id,
+        lastHuman?.text,
+      );
       if (verdict.action === 'replace') {
         return { messages: [new AIMessage({ id: lastAi.id, content: verdict.content })] };
       }

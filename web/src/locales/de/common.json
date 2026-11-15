@@ -1,0 +1,18 @@
+{
+  "app": {
+    "title": "Second Income Coach"
+  },
+  "auth": {
+    "signInTitle": "Bei Second Income Coach anmelden",
+    "signInDescription": "Melde dich mit deinem Google-Konto an, um fortzufahren.",
+    "signInError": "Die Anmeldung hat nicht geklappt. Bitte versuche es erneut.",
+    "signInButton": "Mit Google anmelden",
+    "signOutButton": "Abmelden"
+  },
+  "theme": {
+    "switchToLightLabel": "Zu hellem Modus wechseln",
+    "switchToDarkLabel": "Zu dunklem Modus wechseln",
+    "light": "Hell",
+    "dark": "Dunkel"
+  }
+}

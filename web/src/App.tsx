@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useTranslation } from 'react-i18next';
 import { authSessionSchema, type AuthUser } from '@app/shared';
 import { Button } from './components/ui/button';
 import { Badge } from './components/ui/badge';
@@ -70,22 +71,24 @@ function useAuthError(): boolean {
 }
 
 function SignInCard({ showError }: { showError: boolean }) {
+  const { t } = useTranslation('common');
+
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Sign in to Second Income Coach</CardTitle>
-        <CardDescription>Sign in with your Google account to continue.</CardDescription>
+        <CardTitle>{t('auth.signInTitle')}</CardTitle>
+        <CardDescription>{t('auth.signInDescription')}</CardDescription>
       </CardHeader>
       <CardContent>
         {showError ? (
           <Badge variant="muted" role="alert">
-            Sign-in didn&apos;t go through. Please try again.
+            {t('auth.signInError')}
           </Badge>
         ) : null}
       </CardContent>
       <CardFooter>
         <Button type="button" onClick={() => window.location.assign('/api/auth/google')}>
-          Sign in with Google
+          {t('auth.signInButton')}
         </Button>
       </CardFooter>
     </Card>
@@ -93,6 +96,7 @@ function SignInCard({ showError }: { showError: boolean }) {
 }
 
 function SignOutButton({ onSignedOut }: { onSignedOut: () => void }) {
+  const { t } = useTranslation('common');
   const [pending, setPending] = React.useState(false);
 
   const handleClick = React.useCallback(() => {
@@ -107,12 +111,13 @@ function SignOutButton({ onSignedOut }: { onSignedOut: () => void }) {
 
   return (
     <Button type="button" variant="outline" size="sm" onClick={handleClick} disabled={pending}>
-      Sign out
+      {t('auth.signOutButton')}
     </Button>
   );
 }
 
 export function App() {
+  const { t } = useTranslation('common');
   const [authStatus, refreshAuthStatus] = useAuthStatus();
   const hasAuthError = useAuthError();
 
@@ -121,7 +126,7 @@ export function App() {
       <div className="min-h-screen bg-background text-foreground">
         <header className="border-b border-border">
           <div className="mx-auto flex max-w-3xl items-center justify-between px-6 py-4">
-            <span className="text-sm font-semibold tracking-tight">Second Income Coach</span>
+            <span className="text-sm font-semibold tracking-tight">{t('app.title')}</span>
             <ThemeToggle />
           </div>
         </header>
@@ -136,7 +141,7 @@ export function App() {
     <div className="min-h-screen bg-background text-foreground">
       <header className="border-b border-border">
         <div className="mx-auto flex max-w-3xl items-center justify-between px-6 py-4">
-          <span className="text-sm font-semibold tracking-tight">Second Income Coach</span>
+          <span className="text-sm font-semibold tracking-tight">{t('app.title')}</span>
           <div className="flex items-center gap-3">
             <ThemeToggle />
             <SignOutButton onSignedOut={refreshAuthStatus} />

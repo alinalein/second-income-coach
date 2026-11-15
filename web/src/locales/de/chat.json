@@ -1,0 +1,11 @@
+{
+  "title": "Coach-Chat",
+  "loading": "Lädt…",
+  "empty": "Sag Hallo, um loszulegen.",
+  "placeholder": "Nachricht eingeben…",
+  "messageAriaLabel": "Nachricht",
+  "sendButton": "Senden",
+  "error": {
+    "modelFailure": "Bei uns ist etwas schiefgelaufen und ich konnte keine Antwort erzeugen. Bitte versuche es gleich noch einmal."
+  }
+}

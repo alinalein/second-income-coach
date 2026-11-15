@@ -12,7 +12,8 @@ import type { Env } from '../../config/env.js';
 import type { CoachAgent } from '../../agent/index.js';
 import { buildDiscoveryThreadId } from '../../agent/index.js';
 import { classifyAssistantMessageKind } from '../../agent/moderation.js';
-import { MODEL_FAILURE_MESSAGE } from '../../agent/resilience.js';
+import { MODEL_FAILURE_MESSAGE, MODEL_FAILURE_MESSAGE_DE } from '../../agent/resilience.js';
+import { detectReplyLanguage } from '../../agent/language.js';
 import { createStrictRateLimiter } from '../middleware/rateLimit.js';
 
 export interface ChatRouterDeps {
@@ -67,6 +68,12 @@ export function createChatRouter({ env, agent }: ChatRouterDeps) {
 
     const threadId = buildDiscoveryThreadId(req.session.userId!);
     const userMessage = new HumanMessage(parseResult.data.content);
+    // I/O matrix: "Model call exhausts retries, German message" -> the fixed
+    // failure text is picked via `detectReplyLanguage` on the submitted
+    // content, same as moderation's own DE/EN picks (AC2) — computed once so
+    // both fallback sites below (no-usable-reply / catch) stay consistent.
+    const modelFailureMessage =
+      detectReplyLanguage(parseResult.data.content) === 'de' ? MODEL_FAILURE_MESSAGE_DE : MODEL_FAILURE_MESSAGE;
 
     try {
       const result = await agent.invoke({ messages: [userMessage] }, { configurable: { thread_id: threadId } });
@@ -89,7 +96,7 @@ export function createChatRouter({ env, agent }: ChatRouterDeps) {
               id: randomUUID(),
               role: 'assistant',
               kind: 'error',
-              content: MODEL_FAILURE_MESSAGE,
+              content: modelFailureMessage,
               createdAt: new Date().toISOString(),
             }),
         }),
@@ -109,7 +116,7 @@ export function createChatRouter({ env, agent }: ChatRouterDeps) {
             id: randomUUID(),
             role: 'assistant',
             kind: 'error',
-            content: MODEL_FAILURE_MESSAGE,
+            content: modelFailureMessage,
             createdAt: new Date().toISOString(),
           }),
         }),

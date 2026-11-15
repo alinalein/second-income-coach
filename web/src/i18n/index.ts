@@ -1,0 +1,31 @@
+import i18n from 'i18next';
+import { initReactI18next } from 'react-i18next';
+import commonEn from '../locales/en/common.json';
+import commonDe from '../locales/de/common.json';
+import chatEn from '../locales/en/chat.json';
+import chatDe from '../locales/de/chat.json';
+
+/**
+ * AD-24: `react-i18next`, resources bundled statically (no HTTP backend —
+ * Vite inlines the 4 JSON files at build time via `resolveJsonModule`), one
+ * namespace per feature area (`common`, `chat`). `lng`/`fallbackLng` both
+ * default to `'en'` — Story 5.4's settings screen is the only place this
+ * changes later; until then every signed-in user sees English regardless of
+ * browser locale, matching `user_settings.uiLanguage`'s own English default
+ * (Story 1.2).
+ *
+ * Side-effect import only (`import './i18n'` in `main.tsx`) — `useTranslation()`
+ * reads this module-level singleton instance, no `I18nextProvider` needed.
+ */
+void i18n.use(initReactI18next).init({
+  resources: {
+    en: { common: commonEn, chat: chatEn },
+    de: { common: commonDe, chat: chatDe },
+  },
+  lng: 'en',
+  fallbackLng: 'en',
+  interpolation: { escapeValue: false },
+  returnNull: false,
+});
+
+export default i18n;

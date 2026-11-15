@@ -1,0 +1,18 @@
+{
+  "app": {
+    "title": "Second Income Coach"
+  },
+  "auth": {
+    "signInTitle": "Sign in to Second Income Coach",
+    "signInDescription": "Sign in with your Google account to continue.",
+    "signInError": "Sign-in didn't go through. Please try again.",
+    "signInButton": "Sign in with Google",
+    "signOutButton": "Sign out"
+  },
+  "theme": {
+    "switchToLightLabel": "Switch to light mode",
+    "switchToDarkLabel": "Switch to dark mode",
+    "light": "Light",
+    "dark": "Dark"
+  }
+}

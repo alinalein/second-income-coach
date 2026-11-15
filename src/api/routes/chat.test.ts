@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { AIMessage, HumanMessage } from '@langchain/core/messages';
 import { createChatRouter, type ChatRouterDeps } from './chat.js';
 import { JAILBREAK_REJECTION_MESSAGE } from '../../agent/moderation.js';
-import { MODEL_FAILURE_MESSAGE } from '../../agent/resilience.js';
+import { MODEL_FAILURE_MESSAGE, MODEL_FAILURE_MESSAGE_DE } from '../../agent/resilience.js';
 
 const testEnv: ChatRouterDeps['env'] = { RATE_LIMIT_WINDOW_MS: 60_000 };
 
@@ -51,15 +51,35 @@ describe('createChatRouter POST /messages', () => {
   });
 
   // I/O matrix: "Model call exhausts retries" -> "User sees the fixed generic
-  // error message" / "App keeps running, no crash".
-  it('returns the fixed generic error message when the agent invocation rejects', async () => {
+  // error message" / "App keeps running, no crash". AC2 extends this: the
+  // fixed message's language is picked from the submitted content via
+  // `detectReplyLanguage`, same as moderation's own DE/EN picks.
+  it.each([
+    ['English content', 'Hello there', MODEL_FAILURE_MESSAGE],
+    ['German content', 'Hallo, ich brauche Hilfe bei meinem Nebeneinkommen', MODEL_FAILURE_MESSAGE_DE],
+  ] as const)('returns the fixed %s error message when the agent invocation rejects', async (_label, content, expected) => {
     const agent = fakeAgent({ invoke: vi.fn().mockRejectedValue(new Error('retries exhausted')) });
     const app = buildTestApp(agent);
 
-    const res = await request(app).post('/api/chat/messages').send({ content: 'Hello there' });
+    const res = await request(app).post('/api/chat/messages').send({ content });
 
     expect(res.status).toBe(200);
-    expect(res.body.message).toMatchObject({ role: 'assistant', kind: 'error', content: MODEL_FAILURE_MESSAGE });
+    expect(res.body.message).toMatchObject({ role: 'assistant', kind: 'error', content: expected });
+  });
+
+  // I/O matrix row 6 (AC2), distinct failure branch from the one above: the
+  // agent resolves without throwing but produces nothing renderable (no
+  // messages at all) — this is the *other* `MODEL_FAILURE_MESSAGE` use site
+  // in `chat.ts` (the "no usable reply" branch), which must pick the same
+  // way.
+  it('returns the German fixed error message when the agent resolves with no usable reply, for German content', async () => {
+    const agent = fakeAgent({ invoke: vi.fn().mockResolvedValue({ messages: [] }) });
+    const app = buildTestApp(agent);
+
+    const res = await request(app).post('/api/chat/messages').send({ content: 'Ich möchte etwas fragen' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.message).toMatchObject({ role: 'assistant', kind: 'error', content: MODEL_FAILURE_MESSAGE_DE });
   });
 
   // I/O matrix: "Second message, same session" -> "Same LangGraph thread

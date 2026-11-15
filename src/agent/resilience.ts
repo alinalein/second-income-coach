@@ -34,6 +34,16 @@ export const MODEL_NODE_TIMEOUT_MS = 30_000;
 export { MODEL_FAILURE_MESSAGE };
 
 /**
+ * Story 1.4 (AC2): the German form of `MODEL_FAILURE_MESSAGE`, picked by
+ * `detectReplyLanguage` on the message that triggered the failed turn
+ * (`src/api/routes/chat.ts`). A local constant, not `shared/schemas` — same
+ * reasoning as `JAILBREAK_REJECTION_MESSAGE_DE`/`UNSAFE_RESPONSE_FALLBACK_MESSAGE_DE`
+ * in `src/agent/moderation.ts` (Design Notes).
+ */
+export const MODEL_FAILURE_MESSAGE_DE =
+  'Bei uns ist etwas schiefgelaufen und ich konnte keine Antwort erzeugen. Bitte versuche es gleich noch einmal.';
+
+/**
  * The narrow slice of `StateGraph` this needs — just `setNodeDefaults` —
  * kept as its own interface so a unit test can assert the exact policy
  * applied without constructing a real graph.

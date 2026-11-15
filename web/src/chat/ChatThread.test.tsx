@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, cleanup, fireEvent } from '@testing-library/react';
 import { ChatThread } from './ChatThread';
+import chatEn from '../locales/en/chat.json';
 
 function mockFetch(responses: Record<string, Response | (() => Response)>) {
   return vi.fn((input: RequestInfo | URL) => {
@@ -89,5 +90,31 @@ describe('ChatThread (AC: chat UI)', () => {
     expect(screen.getByText('How do I get started?')).toBeInTheDocument();
     await waitFor(() => expect(input.value).toBe(''));
     expect(postedBody).toEqual({ content: 'How do I get started?' });
+  });
+
+  // AC1 / I/O matrix: "Network/parse failure before any server reply" -> the
+  // local fallback is resolved via `t('error.modelFailure')` against the
+  // current UI language (no server round-trip happened, so no per-message
+  // detection is possible — Design Notes). Guards the swap from the old
+  // hardcoded `MODEL_FAILURE_MESSAGE` import to the i18n key: the rendered
+  // text must still match that exact sentence in the default (English) UI.
+  it('shows the localized model-failure fallback when the POST fetch itself rejects (no server round-trip)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (!url.includes('/api/chat/messages')) throw new Error(`Unmocked fetch: ${url}`);
+        if (init?.method === 'POST') return Promise.reject(new Error('network down'));
+        return Promise.resolve(new Response(JSON.stringify({ messages: [] }), { status: 200 }));
+      }),
+    );
+
+    render(<ChatThread />);
+
+    const input = (await screen.findByRole('textbox', { name: /message/i })) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'Hello?' } });
+    fireEvent.click(screen.getByRole('button', { name: /send/i }));
+
+    expect(await screen.findByText(chatEn.error.modelFailure)).toBeInTheDocument();
   });
 });

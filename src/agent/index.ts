@@ -1,4 +1,4 @@
-import { createAgent } from 'langchain';
+import { createAgent, dynamicSystemPromptMiddleware } from 'langchain';
 import { END, MessagesAnnotation, START, StateGraph } from '@langchain/langgraph';
 import type { BaseCheckpointSaver } from '@langchain/langgraph-checkpoint';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
@@ -6,6 +6,54 @@ import type { Env } from '../config/env.js';
 import { createChatModel } from './model.js';
 import { createModerationMiddleware, type ClassifyText } from './moderation.js';
 import { applyModelNodeResilience } from './resilience.js';
+
+/**
+ * AD-20 (deferred): the fixed personality tones a `user_settings.personality`
+ * row will eventually select between. Only `'friendly'` is reachable until
+ * Story 5.1 adds the `set_personality` tool/UI — same hardcoded-default
+ * pattern Story 1.3 used for the model (Design Notes).
+ */
+export const PERSONALITY_PROMPTS = {
+  formal: 'Keep a formal, professional tone — no slang, no exclamation points.',
+  friendly: 'Keep a warm, encouraging, friendly tone, like a supportive coach.',
+  terse: 'Keep replies short and to the point — no filler, no pleasantries.',
+} as const;
+
+export type Personality = keyof typeof PERSONALITY_PROMPTS;
+
+/** Design Notes: "Personality default" — hardcoded until Story 5.1 wires the
+ * real `user_settings.personality` value through. */
+export const DEFAULT_PERSONALITY: Personality = 'friendly';
+
+/**
+ * AD-25: "personality × language is handled as one prompt-construction step,
+ * not as separate per-language personality definitions". This instruction is
+ * deliberately language-agnostic text (not computed per message) — the model
+ * itself matches the user's most recent message's language (AC3), re-
+ * evaluating it on every turn since this function runs before every model
+ * call via `dynamicSystemPromptMiddleware` below, not just once per thread.
+ */
+const REPLY_LANGUAGE_INSTRUCTION =
+  "Always reply in the same language the user's most recent message is written in — German or English — " +
+  'regardless of any other setting. Re-decide this for every reply; do not stick to a language from earlier in ' +
+  'the conversation if the user has since switched.';
+
+/**
+ * Code Map: "add a `prompt: (state) => [SystemMessage]` option to the
+ * `createAgent(...)` call". The installed `langchain@1.6.5`'s `createAgent`
+ * only accepts a *static* `systemPrompt: string | SystemMessage` — there is
+ * no per-turn `prompt` callback field on `CreateAgentParams`. The equivalent,
+ * still-inside-`createAgent`-construction mechanism this version exposes is
+ * `dynamicSystemPromptMiddleware`, added to the same `middleware` array the
+ * moderation middleware already lives in (AD-25: "a prompt-construction
+ * concern ... not a routing concern" — this keeps it there, not in
+ * `api/routes/chat.ts`). `buildSystemPrompt` is exported standalone so its
+ * output can be asserted directly in a unit test without constructing a
+ * LangGraph runtime.
+ */
+export function buildSystemPrompt(): string {
+  return `${PERSONALITY_PROMPTS[DEFAULT_PERSONALITY]} ${REPLY_LANGUAGE_INSTRUCTION}`;
+}
 
 /**
  * Design Notes: "Thread id shape: `discovery:${userId}`, not bare `userId` —
@@ -42,10 +90,11 @@ export interface CreateCoachAgentDeps {
 export function createCoachAgent({ env, checkpointer, model, classify }: CreateCoachAgentDeps) {
   const chatModel = model ?? createChatModel(env);
   const moderation = createModerationMiddleware(env, { classify });
+  const systemPrompt = dynamicSystemPromptMiddleware(buildSystemPrompt);
 
   const reactAgent = createAgent({
     model: chatModel,
-    middleware: [moderation],
+    middleware: [moderation, systemPrompt],
   });
 
   const graph = new StateGraph(MessagesAnnotation).addNode('model', async (state, runtime) => {

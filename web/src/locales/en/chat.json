@@ -1,0 +1,11 @@
+{
+  "title": "Coach chat",
+  "loading": "Loading…",
+  "empty": "Say hello to get started.",
+  "placeholder": "Type a message…",
+  "messageAriaLabel": "Message",
+  "sendButton": "Send",
+  "error": {
+    "modelFailure": "Something went wrong on our end and I couldn't generate a response. Please try again in a moment."
+  }
+}
