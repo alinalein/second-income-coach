@@ -4,6 +4,7 @@ import helmet from 'helmet';
 import type { Pool } from 'pg';
 import type { Env } from '../config/env.js';
 import type { createDb } from '../db/client.js';
+import type { CoachAgent } from '../agent/index.js';
 import { createCorsMiddleware } from './middleware/cors.js';
 import { createGeneralRateLimiter } from './middleware/rateLimit.js';
 import { createRequireSameOrigin } from './middleware/requireSameOrigin.js';
@@ -11,11 +12,13 @@ import { requireAuth } from './middleware/requireAuth.js';
 import { createSessionMiddleware } from './middleware/session.js';
 import { createHealthRouter } from './routes/health.js';
 import { createAuthRouter } from './routes/auth.js';
+import { createChatRouter } from './routes/chat.js';
 
 export interface AppDeps {
   env: Env;
   db: ReturnType<typeof createDb>['db'];
   pool: Pool;
+  agent: CoachAgent;
 }
 
 /**
@@ -30,7 +33,7 @@ export interface AppDeps {
  * Built as a factory (not a top-level `listen()`) so tests can construct the
  * app against injected deps without binding a real port or a real database.
  */
-export function createApp({ env, db, pool }: AppDeps) {
+export function createApp({ env, db, pool, agent }: AppDeps) {
   const app = express();
 
   // Behind a reverse proxy (Cloud Run, or any future load balancer), trust the
@@ -73,6 +76,12 @@ export function createApp({ env, db, pool }: AppDeps) {
   // themselves. Anything else, including an undefined route, falls through
   // to this blanket gate and gets 401 rather than leaking a 404.
   app.use(requireAuth);
+
+  // Story 1.3: the core agent loop, mounted only after the blanket auth gate
+  // above — every route on this router is reachable only by a signed-in
+  // session (Boundary: "Every route this story adds sits behind the existing
+  // `requireAuth` gate").
+  app.use('/api/chat', createChatRouter({ env, agent }));
 
   // Centralized error handler. Oversized bodies and malformed JSON surface
   // here as errors from the body parser — this is what keeps the process

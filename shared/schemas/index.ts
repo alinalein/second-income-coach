@@ -40,3 +40,63 @@ export const authSessionSchema = z.object({
 });
 
 export type AuthSession = z.infer<typeof authSessionSchema>;
+
+/**
+ * Story 1.3: the shared chat message shape, used by both the backend's
+ * `POST`/`GET /api/chat/messages` routes and the frontend's `ChatThread`/
+ * `ChatMessage` components. `kind` distinguishes a normal agent reply
+ * (`'message'`) from the two fixed moderation/safety texts (`'notice'`) and a
+ * model-failure fallback (`'error'`), so the UI can render each distinctly
+ * (Code Map: "message list, text input, 'notice'/'error' kinds styled
+ * distinctly from 'message' bubbles").
+ */
+export const chatMessageSchema = z.object({
+  id: z.string().min(1),
+  role: z.enum(['user', 'assistant']),
+  kind: z.enum(['message', 'notice', 'error']),
+  content: z.string().min(1),
+  createdAt: z.iso.datetime(),
+});
+
+export type ChatMessage = z.infer<typeof chatMessageSchema>;
+
+/**
+ * Intent: "the shared Zod message schema ... enforces a 4000-char max; an
+ * over-length message is rejected at the schema boundary, never silently
+ * truncated." This is the one place that limit is defined — both
+ * `sendMessageRequestSchema` below and the frontend's input affordance import
+ * it rather than hard-coding the number twice.
+ */
+export const CHAT_MESSAGE_MAX_LENGTH = 4000;
+
+export const sendMessageRequestSchema = z.object({
+  content: z
+    .string()
+    .min(1, 'Message cannot be empty')
+    .max(CHAT_MESSAGE_MAX_LENGTH, `Message cannot exceed ${CHAT_MESSAGE_MAX_LENGTH} characters`),
+});
+
+export type SendMessageRequest = z.infer<typeof sendMessageRequestSchema>;
+
+export const sendMessageResponseSchema = z.object({
+  message: chatMessageSchema,
+});
+
+export type SendMessageResponse = z.infer<typeof sendMessageResponseSchema>;
+
+export const chatHistoryResponseSchema = z.object({
+  messages: z.array(chatMessageSchema),
+});
+
+export type ChatHistoryResponse = z.infer<typeof chatHistoryResponseSchema>;
+
+/**
+ * Intent: "A model call that still fails after its configured retries
+ * returns the user a clear, generic error ... the process stays up." One
+ * shared literal — the backend's resilience-exhausted fallback
+ * (`src/agent/resilience.ts`) and the frontend's own transport-failure
+ * fallback (`web/src/chat/ChatThread.tsx`) both import this instead of each
+ * hard-coding the same sentence separately.
+ */
+export const MODEL_FAILURE_MESSAGE =
+  "Something went wrong on our end and I couldn't generate a response. Please try again in a moment.";

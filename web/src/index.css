@@ -1,5 +1,4 @@
 @import 'tailwindcss';
-@import 'shadcn-glass-ui/styles.css';
 
 /* Class-based dark mode (explicit toggle, never OS preference) — Tailwind v4's
    documented pattern for swapping `prefers-color-scheme` for a manual class. */

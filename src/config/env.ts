@@ -45,6 +45,19 @@ const envSchema = z.object({
   SESSION_SECRET: z
     .string()
     .min(32, 'SESSION_SECRET is required and must be at least 32 characters (see .env.example)'),
+  // Story 1.3: core agent loop (model provider), Mistral Moderation 2, and
+  // LangSmith observability. `LANGSMITH_TRACING`/`LANGSMITH_API_KEY`/
+  // `LANGSMITH_PROJECT` are read directly off `process.env` by LangChain's
+  // own tracing integration (Intent: "no bespoke per-call tracing code") --
+  // validated here only so a missing/misconfigured one fails fast and by name
+  // at startup, same as every other required var.
+  OPENAI_API_KEY: z.string().min(1, 'OPENAI_API_KEY is required (see .env.example)'),
+  MISTRAL_API_KEY: z.string().min(1, 'MISTRAL_API_KEY is required (see .env.example)'),
+  LANGSMITH_TRACING: z.enum(['true', 'false'], {
+    error: 'LANGSMITH_TRACING is required and must be "true" or "false" (see .env.example)',
+  }),
+  LANGSMITH_API_KEY: z.string().min(1, 'LANGSMITH_API_KEY is required (see .env.example)'),
+  LANGSMITH_PROJECT: z.string().min(1, 'LANGSMITH_PROJECT is required (see .env.example)'),
 });
 
 export type Env = z.infer<typeof envSchema>;

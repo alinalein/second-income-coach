@@ -17,11 +17,17 @@ function testEnv(overrides: Partial<Env> = {}): Env {
     GOOGLE_CLIENT_SECRET: 'test-client-secret',
     GOOGLE_REDIRECT_URI: 'http://localhost:3000/api/auth/google/callback',
     SESSION_SECRET: 'test-session-secret-at-least-32-characters',
+    OPENAI_API_KEY: 'test-openai-key',
+    MISTRAL_API_KEY: 'test-mistral-key',
+    LANGSMITH_TRACING: 'false',
+    LANGSMITH_API_KEY: 'test-langsmith-key',
+    LANGSMITH_PROJECT: 'test-project',
     ...overrides,
   };
 }
 
 type AppDb = Parameters<typeof createApp>[0]['db'];
+type AppAgent = Parameters<typeof createApp>[0]['agent'];
 
 function fakeDb(execute: AppDb['execute'] = vi.fn().mockResolvedValue({ rows: [{ ok: 1 }] })) {
   return { execute } as unknown as AppDb;
@@ -34,12 +40,19 @@ function fakePool() {
   return { query: vi.fn(), on: vi.fn() } as unknown as Pool;
 }
 
+// None of this file's tests reach the chat router (all gated behind
+// requireAuth, which every test here hits unauthenticated) — a minimal fake
+// is enough; `src/api/routes/chat.test.ts` covers the router's own behavior.
+function fakeAgent() {
+  return { invoke: vi.fn(), getState: vi.fn() } as unknown as AppAgent;
+}
+
 describe('createApp', () => {
   // AC: "the Express backend ... both start successfully with TypeScript,
   // Zod, and the shared schema package wired" — /api/health responds using
   // the shared healthStatusSchema.
   it('GET /api/health returns an ok status built from the shared schema', async () => {
-    const app = createApp({ env: testEnv(), db: fakeDb(), pool: fakePool() });
+    const app = createApp({ env: testEnv(), db: fakeDb(), pool: fakePool(), agent: fakeAgent() });
 
     const res = await request(app).get('/api/health');
 
@@ -50,7 +63,7 @@ describe('createApp', () => {
   // AC: "the Express app, when it starts, then helmet, same-origin cors,
   // express-rate-limit, and a body-size limit are all active" (helmet slice).
   it('sets baseline security headers via helmet', async () => {
-    const app = createApp({ env: testEnv(), db: fakeDb(), pool: fakePool() });
+    const app = createApp({ env: testEnv(), db: fakeDb(), pool: fakePool(), agent: fakeAgent() });
 
     const res = await request(app).get('/api/health');
 
@@ -60,7 +73,7 @@ describe('createApp', () => {
   // I/O matrix: "Oversized request body" -> "Request rejected before the
   // route handler runs" / "Generic error response, process stays up".
   it('rejects an oversized request body with a generic error, before any route handler runs', async () => {
-    const app = createApp({ env: testEnv({ BODY_LIMIT: '10b' }), db: fakeDb(), pool: fakePool() });
+    const app = createApp({ env: testEnv({ BODY_LIMIT: '10b' }), db: fakeDb(), pool: fakePool(), agent: fakeAgent() });
 
     const res = await request(app)
       .post('/api/health')
@@ -74,7 +87,7 @@ describe('createApp', () => {
   // AC: same-origin CORS — a disallowed browser origin is rejected as a 403
   // (client policy rejection), not conflated with a 500 server failure.
   it('rejects a request from a disallowed CORS origin with 403', async () => {
-    const app = createApp({ env: testEnv(), db: fakeDb(), pool: fakePool() });
+    const app = createApp({ env: testEnv(), db: fakeDb(), pool: fakePool(), agent: fakeAgent() });
 
     const res = await request(app).get('/api/health').set('Origin', 'https://evil.example.com');
 
@@ -85,7 +98,7 @@ describe('createApp', () => {
   // AC: same-origin CORS — the allow branch (an origin matching CORS_ORIGIN)
   // is let through, with the matching Access-Control-Allow-Origin header.
   it('allows a request from the configured CORS_ORIGIN', async () => {
-    const app = createApp({ env: testEnv(), db: fakeDb(), pool: fakePool() });
+    const app = createApp({ env: testEnv(), db: fakeDb(), pool: fakePool(), agent: fakeAgent() });
 
     const res = await request(app).get('/api/health').set('Origin', 'http://localhost:5173');
 
@@ -96,7 +109,7 @@ describe('createApp', () => {
   // AC: "express-rate-limit ... active" — a request beyond the configured
   // window limit is rejected with 429.
   it('returns 429 once the general rate limit is exceeded', async () => {
-    const app = createApp({ env: testEnv({ RATE_LIMIT_MAX: 1 }), db: fakeDb(), pool: fakePool() });
+    const app = createApp({ env: testEnv({ RATE_LIMIT_MAX: 1 }), db: fakeDb(), pool: fakePool(), agent: fakeAgent() });
 
     const first = await request(app).get('/api/health');
     const second = await request(app).get('/api/health');
@@ -108,7 +121,7 @@ describe('createApp', () => {
   // AC: "the Postgres access layer, when configured, then it connects
   // through Drizzle ORM" — /api/health/db success branch.
   it('GET /api/health/db returns ok when the db check succeeds', async () => {
-    const app = createApp({ env: testEnv(), db: fakeDb(), pool: fakePool() });
+    const app = createApp({ env: testEnv(), db: fakeDb(), pool: fakePool(), agent: fakeAgent() });
 
     const res = await request(app).get('/api/health/db');
 
@@ -123,6 +136,7 @@ describe('createApp', () => {
       env: testEnv(),
       db: fakeDb(vi.fn().mockRejectedValue(new Error('connection refused'))),
       pool: fakePool(),
+      agent: fakeAgent(),
     });
 
     const res = await request(app).get('/api/health/db');
@@ -139,7 +153,7 @@ describe('createApp', () => {
   describe('auth gate (AC: 401 before any handler logic runs)', () => {
     it('rejects an unauthenticated request to a gated auth route with 401', async () => {
       const db = fakeDb();
-      const app = createApp({ env: testEnv(), db, pool: fakePool() });
+      const app = createApp({ env: testEnv(), db, pool: fakePool(), agent: fakeAgent() });
 
       const res = await request(app).get('/api/auth/session');
 
@@ -150,7 +164,7 @@ describe('createApp', () => {
     });
 
     it('rejects an unauthenticated request to an undefined route with 401, not 404', async () => {
-      const app = createApp({ env: testEnv(), db: fakeDb(), pool: fakePool() });
+      const app = createApp({ env: testEnv(), db: fakeDb(), pool: fakePool(), agent: fakeAgent() });
 
       const res = await request(app).get('/api/does-not-exist');
 
@@ -158,7 +172,7 @@ describe('createApp', () => {
     });
 
     it('does not gate /api/health or /api/health/db', async () => {
-      const app = createApp({ env: testEnv(), db: fakeDb(), pool: fakePool() });
+      const app = createApp({ env: testEnv(), db: fakeDb(), pool: fakePool(), agent: fakeAgent() });
 
       const health = await request(app).get('/api/health');
       const healthDb = await request(app).get('/api/health/db');
@@ -168,7 +182,7 @@ describe('createApp', () => {
     });
 
     it('does not gate the public Google OAuth entry points', async () => {
-      const app = createApp({ env: testEnv(), db: fakeDb(), pool: fakePool() });
+      const app = createApp({ env: testEnv(), db: fakeDb(), pool: fakePool(), agent: fakeAgent() });
 
       const res = await request(app).get('/api/auth/google');
 

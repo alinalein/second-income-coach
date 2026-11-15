@@ -52,8 +52,11 @@ describe('App (AC: authenticated view renders)', () => {
   });
 
   // AC: "authenticated view renders" — a successful session response shows
-  // the existing shell plus a sign-out control.
-  it('shows the authenticated shell and sign-out control when GET /api/auth/session returns a user', async () => {
+  // the authenticated shell (sign-out control, chat UI) instead of the
+  // sign-in card. Story 1.3 replaced the placeholder card with `ChatThread`
+  // (Code Map); `web/src/chat/ChatThread.test.tsx` covers that component's
+  // own behavior in detail.
+  it('shows the authenticated shell, sign-out control, and chat UI when GET /api/auth/session returns a user', async () => {
     vi.stubGlobal(
       'fetch',
       mockFetch({
@@ -61,16 +64,15 @@ describe('App (AC: authenticated view renders)', () => {
           JSON.stringify({ user: { id: 'u1', email: 'a@example.com', name: 'Ada Lovelace', picture: null } }),
           { status: 200 },
         ),
-        '/api/health': new Response(JSON.stringify({ status: 'ok', service: 'api', timestamp: new Date().toISOString() }), {
-          status: 200,
-        }),
+        '/api/chat/messages': new Response(JSON.stringify({ messages: [] }), { status: 200 }),
       }),
     );
 
     renderApp();
 
-    expect(await screen.findByText(/signed in as ada lovelace/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /sign out/i })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /sign out/i })).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: /message/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /send/i })).toBeInTheDocument();
   });
 
   // Design Notes: "Callback failure" — a neutral, detail-free error is shown
