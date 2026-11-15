@@ -24,7 +24,7 @@ describe('loadEnv (I/O matrix: fresh checkout, missing env)', () => {
   };
 
   const requiredStory13Vars = {
-    OPENAI_API_KEY: 'openai-key',
+    OPENROUTER_API_KEY: 'openrouter-key',
     MISTRAL_API_KEY: 'mistral-key',
     LANGSMITH_TRACING: 'true',
     LANGSMITH_API_KEY: 'langsmith-key',
@@ -81,7 +81,7 @@ describe('loadEnv (I/O matrix: fresh checkout, missing env)', () => {
     } catch (error) {
       expect(error).toBeInstanceOf(EnvValidationError);
       const issues = (error as EnvValidationError).issues.join('\n');
-      expect(issues).toContain('OPENAI_API_KEY');
+      expect(issues).toContain('OPENROUTER_API_KEY');
       expect(issues).toContain('MISTRAL_API_KEY');
       expect(issues).toContain('LANGSMITH_TRACING');
       expect(issues).toContain('LANGSMITH_API_KEY');

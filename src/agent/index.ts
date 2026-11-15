@@ -16,7 +16,7 @@ export function buildDiscoveryThreadId(userId: string): string {
 }
 
 export interface CreateCoachAgentDeps {
-  env: Pick<Env, 'OPENAI_API_KEY' | 'MISTRAL_API_KEY'>;
+  env: Pick<Env, 'OPENROUTER_API_KEY' | 'MISTRAL_API_KEY'>;
   checkpointer: BaseCheckpointSaver;
   /** Test-only seam: a fake chat model instead of a real `ChatOpenAI`. */
   model?: BaseChatModel;

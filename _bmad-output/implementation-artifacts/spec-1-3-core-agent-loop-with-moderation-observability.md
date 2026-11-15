@@ -21,7 +21,7 @@ context: ['{project-root}/_bmad-output/implementation-artifacts/epic-1-context.m
 
 **Always:**
 - Every route this story adds sits behind the existing `requireAuth` gate (`src/api/app.ts`); the LangGraph thread id derives from `req.session.userId`.
-- Model: `gpt-6-luna` (OpenAI, via `@langchain/openai`) — the single hardcoded default until Story 5.1's registry/selection UI exists.
+- Model: `gpt-6-luna`, routed through OpenRouter's OpenAI-compatible endpoint (`https://openrouter.ai/api/v1`, model id `openai/gpt-6-luna`, via `@langchain/openai`'s `configuration.baseURL`) — the single hardcoded default until Story 5.1's registry/selection UI exists. One `OPENROUTER_API_KEY` covers every provider; not a direct `OPENAI_API_KEY`. (Renegotiated 2026-11-15 — see Spec Change Log.)
 - Moderation: Mistral Moderation 2 (`mistral-moderation-2603`, via the official `@mistralai/mistralai` SDK) at `beforeModel` (jailbreak → reject the turn, return `"I can't help with that request. Let's get back to your second income goals — what would you like to work on?"`, log the incident; PII → clean/redact, log, don't reject) and `afterModel` (unsafe output → replace with `"I wasn't able to give a safe response to that — let's try a different angle. What would you like to focus on?"`, log the incident).
 - Checkpointing: `@langchain/langgraph-checkpoint-postgres`'s `PostgresSaver` against the existing `DATABASE_URL`; `PostgresSaver.setup()` runs once, idempotently, at API startup (its own schema — not a Drizzle migration).
 - `setNodeDefaults` carries retry/timeout for the model node (AD-7) — no retry logic duplicated in route/middleware code.
@@ -29,7 +29,7 @@ context: ['{project-root}/_bmad-output/implementation-artifacts/epic-1-context.m
 - The shared Zod message schema (`shared/schemas/`) enforces a 4000-char max; an over-length message is rejected at the schema boundary, never silently truncated.
 - A model call that still fails after its configured retries returns the user a clear, generic error (`"Something went wrong on our end and I couldn't generate a response. Please try again in a moment."`) — the process stays up.
 - No log destination (incident logs, LangSmith metadata, error logs) ever contains raw user message text — only flags/categories/ids/lengths.
-- New env vars — `OPENAI_API_KEY`, `MISTRAL_API_KEY`, `LANGSMITH_TRACING`, `LANGSMITH_API_KEY`, `LANGSMITH_PROJECT` — are added to `.env.example` (placeholders only) and validated in `src/config/env.ts`.
+- New env vars — `OPENROUTER_API_KEY`, `MISTRAL_API_KEY`, `LANGSMITH_TRACING`, `LANGSMITH_API_KEY`, `LANGSMITH_PROJECT` — are added to `.env.example` (placeholders only) and validated in `src/config/env.ts`.
 - `POST /api/chat/messages` uses `createStrictRateLimiter` (`src/api/middleware/rateLimit.ts`) — see Design Notes.
 - `GET /api/chat/messages` reads history back from the checkpointer's own thread state — see Design Notes.
 
@@ -59,7 +59,7 @@ context: ['{project-root}/_bmad-output/implementation-artifacts/epic-1-context.m
 - `src/api/middleware/requireAuth.ts` / `session.ts` -- reuse as-is; `req.session.userId` is the thread-id source.
 - `src/config/env.ts`, `.env.example` -- add the 5 new vars, same pattern as the Story 1.2 block.
 - `src/db/client.ts` -- reuse `createDb`'s pool/`DATABASE_URL`; pass the same connection string into `PostgresSaver.fromConnString` rather than opening a second pool.
-- `src/agent/` (new) -- `model.ts` (ChatOpenAI `gpt-6-luna`), `moderation.ts` (Mistral client + `beforeModel`/`afterModel` hooks, log hygiene), `resilience.ts` (`setNodeDefaults`), `checkpointer.ts` (`PostgresSaver` + idempotent `setup()`), `index.ts` (`createCoachAgent()` wiring all of it into one compiled graph).
+- `src/agent/` (new) -- `model.ts` (ChatOpenAI `openai/gpt-6-luna` via OpenRouter's `baseURL`), `moderation.ts` (Mistral client + `beforeModel`/`afterModel` hooks, log hygiene), `resilience.ts` (`setNodeDefaults`), `checkpointer.ts` (`PostgresSaver` + idempotent `setup()`), `index.ts` (`createCoachAgent()` wiring all of it into one compiled graph).
 - `src/api/index.ts` -- `await` the checkpointer's `setup()` once at startup (top-level await, ESM) before `createApp`, same try/catch as the existing env-error handling.
 - `src/api/routes/chat.ts` (new) -- `createChatRouter`: `POST /api/chat/messages` (validate via `sendMessageRequestSchema`, invoke the agent for the session's thread, return the reply) and `GET /api/chat/messages` (thread's checkpointed state as history).
 - `shared/schemas/index.ts` -- add `chatMessageSchema` (`id`, `role: 'user'|'assistant'`, `kind: 'message'|'notice'|'error'`, `content`, `createdAt`), `sendMessageRequestSchema` (`content`, max 4000 chars), `sendMessageResponseSchema`, `chatHistoryResponseSchema` — same `z.infer`-only pattern as `healthStatusSchema`/`authSessionSchema`.
@@ -70,7 +70,7 @@ context: ['{project-root}/_bmad-output/implementation-artifacts/epic-1-context.m
 ## Tasks & Acceptance
 
 **Execution:**
-- [x] `src/config/env.ts` + `.env.example` -- add `OPENAI_API_KEY`, `MISTRAL_API_KEY`, `LANGSMITH_TRACING`, `LANGSMITH_API_KEY`, `LANGSMITH_PROJECT` -- env-variable rule for this story's external services
+- [x] `src/config/env.ts` + `.env.example` -- add `OPENROUTER_API_KEY`, `MISTRAL_API_KEY`, `LANGSMITH_TRACING`, `LANGSMITH_API_KEY`, `LANGSMITH_PROJECT` -- env-variable rule for this story's external services
 - [x] `shared/schemas/index.ts` -- add chat message/request/response/history schemas with max-length enforcement -- shared schema AC
 - [x] `src/agent/model.ts`, `resilience.ts`, `checkpointer.ts`, `moderation.ts`, `index.ts` -- wire `createAgent` + hooks + `setNodeDefaults` + `PostgresSaver` -- core agent loop AC
 - [x] `src/api/routes/chat.ts` + `src/api/app.ts` -- gated send/history routes, strict rate limiter -- auth-gated agent access AC
@@ -89,6 +89,8 @@ context: ['{project-root}/_bmad-output/implementation-artifacts/epic-1-context.m
 ## Implementation Notes
 
 ## Spec Change Log
+
+- **2026-11-15 — human-requested renegotiation, post-`done`:** the human uses OpenRouter (one `OPENROUTER_API_KEY` for every provider), not direct per-provider keys. Checked `ARCHITECTURE-SPINE.md`/`stack.md` first — neither specifies direct provider keys as a requirement; the only router-related text (`mistral-large-4`'s note) explicitly anticipates a router being used, so nothing blocked this. Switched the model path from direct OpenAI to OpenRouter's OpenAI-compatible endpoint (`https://openrouter.ai/api/v1`, model id `openai/gpt-6-luna` — confirmed via OpenRouter's own model listing, not guessed from its naming convention alone); `OPENAI_API_KEY` replaced by `OPENROUTER_API_KEY` everywhere (`.env.example`, `src/config/env.ts`, `src/agent/model.ts`, `src/agent/index.ts`, and the tests referencing it). **Moderation kept on direct `MISTRAL_API_KEY`**, not switched: OpenRouter has no pass-through for Mistral's specific `mistral-moderation-2603` classifier/taxonomy — it only offers its own, differently-shaped "guardrail policies" product, which is not a drop-in equivalent and wasn't asked for. KEEP: the rest of the agent wiring (moderation hooks, checkpointer, resilience, chat routes, UI) is unchanged — this was a model-access-path swap only.
 
 ## Review Triage Log
 

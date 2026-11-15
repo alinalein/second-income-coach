@@ -51,7 +51,7 @@ const envSchema = z.object({
   // own tracing integration (Intent: "no bespoke per-call tracing code") --
   // validated here only so a missing/misconfigured one fails fast and by name
   // at startup, same as every other required var.
-  OPENAI_API_KEY: z.string().min(1, 'OPENAI_API_KEY is required (see .env.example)'),
+  OPENROUTER_API_KEY: z.string().min(1, 'OPENROUTER_API_KEY is required (see .env.example)'),
   MISTRAL_API_KEY: z.string().min(1, 'MISTRAL_API_KEY is required (see .env.example)'),
   LANGSMITH_TRACING: z.enum(['true', 'false'], {
     error: 'LANGSMITH_TRACING is required and must be "true" or "false" (see .env.example)',

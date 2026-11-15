@@ -17,7 +17,7 @@ function testEnv(overrides: Partial<Env> = {}): Env {
     GOOGLE_CLIENT_SECRET: 'test-client-secret',
     GOOGLE_REDIRECT_URI: 'http://localhost:3000/api/auth/google/callback',
     SESSION_SECRET: 'test-session-secret-at-least-32-characters',
-    OPENAI_API_KEY: 'test-openai-key',
+    OPENROUTER_API_KEY: 'test-openrouter-key',
     MISTRAL_API_KEY: 'test-mistral-key',
     LANGSMITH_TRACING: 'false',
     LANGSMITH_API_KEY: 'test-langsmith-key',
