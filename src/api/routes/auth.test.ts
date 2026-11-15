@@ -16,6 +16,7 @@ const testEnv = {
   GOOGLE_CLIENT_ID: 'test-client-id',
   GOOGLE_CLIENT_SECRET: 'test-client-secret',
   GOOGLE_REDIRECT_URI: 'http://localhost:5173/api/auth/google/callback',
+  CORS_ORIGIN: 'http://localhost:5173',
 };
 
 type AppDb = Parameters<typeof createAuthRouter>[0]['db'];
@@ -52,7 +53,7 @@ describe('createAuthRouter /google/callback', () => {
     const res = await request(app).get('/api/auth/google/callback?error=access_denied');
 
     expect(res.status).toBe(302);
-    expect(res.headers.location).toBe('/?auth_error=1');
+    expect(res.headers.location).toBe(`${testEnv.CORS_ORIGIN}/?auth_error=1`);
   });
 
   // Same I/O matrix row — an OAuth `state` that doesn't match the one this
@@ -65,7 +66,7 @@ describe('createAuthRouter /google/callback', () => {
     const res = await agent.get('/api/auth/google/callback?code=some-code&state=forged-state');
 
     expect(res.status).toBe(302);
-    expect(res.headers.location).toBe('/?auth_error=1');
+    expect(res.headers.location).toBe(`${testEnv.CORS_ORIGIN}/?auth_error=1`);
   });
 
   // AC: "sign-in + backfill rows" / I/O matrix: "First-ever sign-in" ->
@@ -96,7 +97,7 @@ describe('createAuthRouter /google/callback', () => {
       const res = await agent.get(`/api/auth/google/callback?code=test-code&state=${issuedState}`);
 
       expect(res.status).toBe(302);
-      expect(res.headers.location).toBe('/');
+      expect(res.headers.location).toBe(`${testEnv.CORS_ORIGIN}/`);
       expect(res.headers['set-cookie']).toBeDefined();
 
       const [userRow] = await db.select().from(users).where(eq(users.googleId, googleId));
@@ -135,7 +136,7 @@ describe('createAuthRouter /google/callback', () => {
     const res = await agent.get(`/api/auth/google/callback?code=test-code&state=${issuedState}`);
 
     expect(res.status).toBe(302);
-    expect(res.headers.location).toBe('/?auth_error=1');
+    expect(res.headers.location).toBe(`${testEnv.CORS_ORIGIN}/?auth_error=1`);
   });
 
   // Same row — ID-token verification rejecting (bad signature/audience).
@@ -152,7 +153,7 @@ describe('createAuthRouter /google/callback', () => {
     const res = await agent.get(`/api/auth/google/callback?code=test-code&state=${issuedState}`);
 
     expect(res.status).toBe(302);
-    expect(res.headers.location).toBe('/?auth_error=1');
+    expect(res.headers.location).toBe(`${testEnv.CORS_ORIGIN}/?auth_error=1`);
   });
 
   // Same row — a token exchange that resolves without an id_token.
@@ -166,7 +167,7 @@ describe('createAuthRouter /google/callback', () => {
     const res = await agent.get(`/api/auth/google/callback?code=test-code&state=${issuedState}`);
 
     expect(res.status).toBe(302);
-    expect(res.headers.location).toBe('/?auth_error=1');
+    expect(res.headers.location).toBe(`${testEnv.CORS_ORIGIN}/?auth_error=1`);
   });
 
   // Same row — a verified payload missing `sub`.
@@ -185,7 +186,7 @@ describe('createAuthRouter /google/callback', () => {
     const res = await agent.get(`/api/auth/google/callback?code=test-code&state=${issuedState}`);
 
     expect(res.status).toBe(302);
-    expect(res.headers.location).toBe('/?auth_error=1');
+    expect(res.headers.location).toBe(`${testEnv.CORS_ORIGIN}/?auth_error=1`);
   });
 
   // Same row — a verified payload missing `email`.
@@ -204,7 +205,7 @@ describe('createAuthRouter /google/callback', () => {
     const res = await agent.get(`/api/auth/google/callback?code=test-code&state=${issuedState}`);
 
     expect(res.status).toBe(302);
-    expect(res.headers.location).toBe('/?auth_error=1');
+    expect(res.headers.location).toBe(`${testEnv.CORS_ORIGIN}/?auth_error=1`);
   });
 
   // Same row — an unverified email is rejected the same neutral way as any
@@ -224,7 +225,7 @@ describe('createAuthRouter /google/callback', () => {
     const res = await agent.get(`/api/auth/google/callback?code=test-code&state=${issuedState}`);
 
     expect(res.status).toBe(302);
-    expect(res.headers.location).toBe('/?auth_error=1');
+    expect(res.headers.location).toBe(`${testEnv.CORS_ORIGIN}/?auth_error=1`);
   });
 });
 

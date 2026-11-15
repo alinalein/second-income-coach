@@ -14,7 +14,7 @@ import { requireAuth } from '../middleware/requireAuth.js';
 export type AuthOAuthClient = Pick<OAuth2Client, 'generateAuthUrl' | 'getToken' | 'verifyIdToken'>;
 
 export interface AuthRouterDeps {
-  env: Pick<Env, 'GOOGLE_CLIENT_ID' | 'GOOGLE_CLIENT_SECRET' | 'GOOGLE_REDIRECT_URI'>;
+  env: Pick<Env, 'GOOGLE_CLIENT_ID' | 'GOOGLE_CLIENT_SECRET' | 'GOOGLE_REDIRECT_URI' | 'CORS_ORIGIN'>;
   db: ReturnType<typeof createDb>['db'];
   /** Defaults to a real `OAuth2Client`; tests inject a fake (same factory/DI
    * pattern as `createApp`'s injected `db`). */
@@ -29,8 +29,8 @@ const GOOGLE_SCOPES = ['openid', 'email', 'profile'];
  * with a stack trace, and never a reason specific enough to leak anything
  * about why it failed (I/O matrix: "Google OAuth failure/denial").
  */
-function redirectToSignInError(res: Response) {
-  res.redirect('/?auth_error=1');
+function redirectToSignInError(res: Response, appOrigin: string) {
+  res.redirect(`${appOrigin}/?auth_error=1`);
 }
 
 /**
@@ -42,6 +42,10 @@ function redirectToSignInError(res: Response) {
  */
 export function createAuthRouter({ env, db, oauthClient: injectedOauthClient }: AuthRouterDeps) {
   const router = Router();
+  // Where the browser lands after the OAuth round-trip. The callback arrives on the API's own
+  // origin, which in local dev is not the frontend's (Vite on 5173 vs API on 3000), so a bare
+  // '/' would hit the API. In production both share one origin and CORS_ORIGIN is that origin.
+  const appOrigin = env.CORS_ORIGIN.replace(/\/+$/, '');
   const oauthClient =
     injectedOauthClient ??
     new OAuth2Client({
@@ -67,7 +71,7 @@ export function createAuthRouter({ env, db, oauthClient: injectedOauthClient }: 
     delete req.session.oauthState;
 
     if (error || typeof code !== 'string' || typeof state !== 'string' || !expectedState || state !== expectedState) {
-      redirectToSignInError(res);
+      redirectToSignInError(res, appOrigin);
       return;
     }
 
@@ -75,14 +79,14 @@ export function createAuthRouter({ env, db, oauthClient: injectedOauthClient }: 
       const { tokens } = await oauthClient.getToken(code);
       const idToken = tokens.id_token;
       if (!idToken) {
-        redirectToSignInError(res);
+        redirectToSignInError(res, appOrigin);
         return;
       }
 
       const ticket = await oauthClient.verifyIdToken({ idToken, audience: env.GOOGLE_CLIENT_ID });
       const payload = ticket.getPayload();
       if (!payload?.sub || !payload.email || !payload.email_verified) {
-        redirectToSignInError(res);
+        redirectToSignInError(res, appOrigin);
         return;
       }
 
@@ -96,15 +100,15 @@ export function createAuthRouter({ env, db, oauthClient: injectedOauthClient }: 
       req.session.regenerate((regenerateError) => {
         if (regenerateError) {
           console.error('[auth] session regenerate failed:', regenerateError);
-          redirectToSignInError(res);
+          redirectToSignInError(res, appOrigin);
           return;
         }
         req.session.userId = user.id;
-        res.redirect('/');
+        res.redirect(`${appOrigin}/`);
       });
     } catch (callbackError) {
       console.error('[auth] google callback failed:', callbackError);
-      redirectToSignInError(res);
+      redirectToSignInError(res, appOrigin);
     }
   });
 
