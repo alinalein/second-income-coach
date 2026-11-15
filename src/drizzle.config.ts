@@ -1,3 +1,4 @@
+import './config/loadDotenv.js';
 import { defineConfig } from 'drizzle-kit';
 import { EnvValidationError, loadEnv } from './config/env.js';
 

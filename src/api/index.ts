@@ -1,4 +1,4 @@
-import 'dotenv/config';
+import '../config/loadDotenv.js';
 import { EnvValidationError, loadEnv } from '../config/env.js';
 import { createDb } from '../db/client.js';
 import { createApp } from './app.js';
