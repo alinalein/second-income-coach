@@ -6,6 +6,7 @@
 - While working, run only the tests a change can affect — not the full suite after every step.
 - The full eval suite runs only on demand via `npm run eval`, never as part of a story build.
 - At the end of each story, report: the new tests, the AC or AD each one maps to, and the total run time. Remove any test you cannot map.
+- Per story, at most one test per I/O-matrix row or acceptance criterion, plus one per distinct failure branch in security-relevant code; put variants of the same case into one table-driven test (it.each). If a story would need more than 20 new tests, stop and list them with the reason before writing any.
 
 ## External service configuration
 
