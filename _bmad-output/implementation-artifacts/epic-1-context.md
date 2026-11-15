@@ -12,6 +12,7 @@ Prove the whole stack works together end to end, as thinly as possible, before a
 - Story 1.2: Google Sign-In
 - Story 1.3: Core Agent Loop with Moderation & Observability
 - Story 1.4: Internationalization Foundation & Bilingual Replies
+- Story 1.5: Agent Progress Display & Markdown Rendering
 
 ## Requirements & Constraints
 
@@ -19,7 +20,7 @@ Prove the whole stack works together end to end, as thinly as possible, before a
 - Light mode is the default theme; dark mode is available via a toggle whose choice persists across sessions; text contrast must be at least 4.5:1 (WCAG AA) in both themes.
 - All user input and all agent output must pass through a moderation check (Mistral Moderation 2) before being processed or shown — mandatory, not optional.
 - Auth gates the entire session from first use — there is no unauthenticated capability, including the first agent message or intake.
-- Standard request/response delivery only — no streaming — for every user-facing interaction.
+- Standard request/response delivery for the final answer — never streamed. The only exception (Story 1.5) is one narrow, turn-scoped SSE channel for progress-status events, never partial answer text.
 - Every user-facing string goes through the i18n layer from this epic onward; no hardcoded text ships in either language, ever.
 - A LangSmith trace is recorded for every agent interaction (observability baseline).
 - Web/API security baseline applies to every route from this epic forward: parameterized DB access, security headers, same-origin CORS, rate limiting, request/message size limits, CSRF defense, and log hygiene (no raw user message text in any log).
@@ -42,12 +43,15 @@ Prove the whole stack works together end to end, as thinly as possible, before a
 - **i18n:** `react-i18next`, translation keys under `src/locales/<language-code>/<namespace>.json`, one namespace per feature area. Fixed system texts introduced in this epic (jailbreak-rejection message, model-failure error, unsafe-response fallback) must ship with both German and English keys from the start.
 - **Reply-language matching:** the agent's reply language is derived per message from what the user wrote, independent of the UI language setting (not user-configurable yet — that control arrives in Epic 5); re-evaluated every message, not locked to the thread's first message.
 - **Personality rendering:** tone (formal/friendly/terse, configured later in Epic 5) and reply-language are handled by the same prompt-construction step, not separate per-language personality definitions — established here in Story 1.4.
+- **Progress display (Story 1.5):** every status label comes from a real agent-loop transition (hook or tool-call boundary) via a fixed step-to-label registry — never from model text, never exposing an internal tool/hook name; unmapped steps fall back to one generic label. Delivered over one turn-scoped SSE connection. The final answer is released only after output moderation (and the guilt-language check where AD-12 applies), then revealed client-side with a typing effect over the already-safe text.
+- **Markdown rendering (Story 1.5):** `ChatMessage` renders via a renderer that builds a React element tree with no raw-HTML passthrough — never `dangerouslySetInnerHTML`; the `react/no-danger` ESLint rule still applies.
 - **Chat UI component:** the shared `ChatThread`/`ChatMessage` component (message list, text input, error/neutral-notice rendering) is built directly in Story 1.3; Story 3.1 later extends it additively (footer/input extension points) rather than replacing or duplicating it.
 - **UI visual system:** shadcn/ui + shadcn-glass-ui glass aesthetic; teal accent (final choice after a contrast-verified emerald/teal/amber/ocean comparison) — light `--primary:#0f766e`/`--primary-foreground:#ffffff`, dark `--primary:#2dd4bf`/near-black foreground; neutral background/card/foreground/border tokens are shared regardless of accent. Accent color is applied only to buttons, badges, progress fill, focus rings, and banners — never whole surfaces. Muted badge labels use `--foreground`, not `--muted-foreground`, to keep contrast passing.
 
 ## UX & Interaction Patterns
 
 - Theme toggle (light default, dark via explicit toggle) with the choice persisted across reloads/sessions.
+- Story 1.5: during a turn the chat shows short, friendly, localized status labels (e.g. "Thinking…"); agent answers render a constrained Markdown subset (headings, lists, bold); all chat text (user messages, agent answers, system notices) uses one shared font size, with Markdown structure distinguished by weight and spacing only.
 - No fixed UI layout is mandated for this epic beyond the shell itself — the card, form, and unified-screen layout decisions documented for later epics (intake, ideas, plan workspace) don't apply here.
 
 ## Cross-Story Dependencies
@@ -57,3 +61,4 @@ Prove the whole stack works together end to end, as thinly as possible, before a
 - Story 1.2's `user_settings` table is a forward dependency for Epic 2 (Story 2.2), Epic 4 (Story 4.4), and Epic 5 (Stories 5.1, 5.2, 5.4, 5.5) — none of those stories creates or migrates the table, only reads/extends it.
 - Story 1.3 produces the shared `ChatThread`/`ChatMessage` component and the fixed system texts (jailbreak-rejection, model-failure, unsafe-fallback messages); Story 3.1 extends the component additively, and Story 1.4 must retrofit those texts with German/English translation keys.
 - Everything in this epic is a foundation dependency for Epics 2-5: the UI shell, i18n layer, auth/session model, and moderated agent loop are reused, not rebuilt, by every later epic's own screens and capabilities.
+- Story 1.5 depends on Story 1.3's `ChatThread`/`ChatMessage` component and Story 1.4's i18n layer (status labels need German and English keys) — sequenced after both. Each later tool-introducing story registers its own progress-label key, the same pattern as the env-variable rule.

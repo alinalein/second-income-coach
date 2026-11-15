@@ -388,6 +388,10 @@ So that a longer turn doesn't feel like a frozen screen, and longer answers stay
 **When** it is rendered in `ChatMessage`
 **Then** it renders as formatted content via a safe Markdown renderer that never passes raw HTML through and never uses `dangerouslySetInnerHTML` - the existing ESLint `react/no-danger` rule still enforces this (AD-30 amended, AD-32)
 
+**Given** any text shown in the chat message list - user messages, agent answers (including Markdown-rendered ones), and system notices (the jailbreak-rejection message, the error fallback, the unsafe-response fallback)
+**When** it is rendered
+**Then** all of it uses the same font size, taken from one shared style value in `ChatMessage` - not set per message type; Markdown structure (headings, bold, lists) is distinguished by weight and spacing, never by a different font size
+
 ## Epic 2: Tailored Idea Discovery
 
 Users complete an intake and receive 5 second-income ideas matched to their own skills, time, budget, and risk tolerance - not a generic list - and can curate that list by bookmarking or rejecting ideas.
