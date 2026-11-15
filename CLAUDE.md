@@ -22,3 +22,7 @@
 ## Planning document ownership
 
 - `epics.md`, `sprint-status.yaml`, and `ARCHITECTURE-SPINE.md` are written only by the planning session or the main worktree — never by a build session.
+
+## Specs
+
+- Write specs tersely: no filler words, no explanation of why unless a decision is non-obvious, and no restating an AC or AD; refer to it by ID instead of repeating its text.
