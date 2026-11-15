@@ -82,7 +82,8 @@ NFR6: The full intake -> idea generation -> initial plan path must run reliably 
 - Voice sits behind one interface contract so v1 (MediaRecorder -> `gpt-transcribe` -> editable transcript) can be swapped for v2 (`gpt-audio-mini` speech-to-speech, deferred) without touching check-in logic.
 - "Exactly one active plan" enforced via a database-level partial unique constraint inside a single transaction, not application-level checks alone.
 - Shared Zod schemas (including domain enums `failurePattern`/`ideaStatus`/`planStatus`) in one location imported by backend and frontend; DB enum/check-constraint representations kept in lockstep with them, never hand-copied.
-- Auth: Google OAuth (`google-auth-library`) gates the entire session from first use, including intake submission.
+- Auth: Google OAuth (`google-auth-library`) gates the entire session from first use, including intake submission. The session itself is a server-side `HttpOnly`/`Secure`/`SameSite=Lax` cookie, never a bearer token; the built frontend is served from the same Express service (same-origin), with CSRF defended by `SameSite` plus an Origin-header check on state-changing requests (AD-17/AD-30).
+- **Web/API security baseline (AD-30)**: Postgres access via Drizzle ORM (parameterized, no raw SQL); `helmet` security headers; `cors` same-origin policy; `express-rate-limit` on every route (stricter on `generate_ideas`/`create_plan`); an Express request-body size limit; a max-length constraint on the shared Zod user-message schema; a log-hygiene rule (no raw user message text in any log); and an ESLint `react/no-danger` rule enforcing React's default escaping against XSS.
 - One LangGraph thread per conversation, derived from the authenticated session.
 - Standard request/response delivery - no streaming.
 - Observability: LangSmith tracing/evals.
@@ -112,7 +113,7 @@ UX-DR4: Text contrast meets at least 4.5:1 (WCAG AA for normal text) in both lig
 
 ### Epic 1: Sign In & First Contact
 Users can sign in with Google and exchange at least one safe, moderated message with the agent - the thinnest possible end-to-end slice proving the whole stack (auth, agent loop, Postgres, moderation, resilience, Zod schemas, LangSmith, and the themed UI shell) actually works together before any capability-specific feature is built on top of it. This epic establishes the UI foundation every later epic's screens build on: shadcn/ui + shadcn-glass-ui, a theme provider defaulting to light mode with a dark-mode toggle (choice persisted), a glass visual style, a teal accent scheme (chosen final, after an emerald/teal/amber/ocean contrast-verified comparison), and verified text contrast (>=4.5:1) in both themes. This epic also establishes the i18n foundation (German + English) every user-facing string goes through from here on, and creates the README skeleton, which every later epic appends its own section to. Epics 2-5 deliver their own screens on top of this foundation rather than building any of it themselves.
-**Covers:** NFR4, UX-DR1-4, and the Additional Requirements (stack wiring, auth, persistence plumbing, moderation baseline, observability, Express/React shell, i18n foundation).
+**Covers:** NFR4, UX-DR1-4, and the Additional Requirements (stack wiring, auth, persistence plumbing, moderation baseline, observability, Express/React shell, i18n foundation, web/API security baseline per AD-30).
 
 ### Epic 2: Tailored Idea Discovery
 Users complete an intake and receive 5 second-income ideas matched to their own skills, time, budget, and risk tolerance - not a generic list - and can curate that list by bookmarking or rejecting ideas.
@@ -165,6 +166,7 @@ NFR8: Epic 2/Epic 3 (discovery thread in Story 2.1, plan thread in Story 3.1)
 NFR9: Epic 5 (Story 5.3) + Epic 6 (guardrail tests re-verify it)
 UX-DR1-4: Epic 1 (theme/UI shell foundation incl. shadcn-glass-ui, teal accent scheme, contrast check); Epics 2-5 build their own screens on top of it
 Additional Requirements (stack/paradigm/persistence/resilience/auth/deployment/i18n): Epic 1 (foundation incl. i18n) and Epic 7 (deployment); README skeleton starts in Epic 1, every epic appends its section, Epic 7 finalizes
+AD-30 (web/API security baseline - Drizzle, helmet, CORS, rate limiting, body/message-length limits, log hygiene, ESLint react/no-danger): Epic 1 (Stories 1.1-1.3); session cookie + CSRF Origin-check (AD-17/AD-30): Epic 1 (Story 1.2)
 
 ## Epic 1: Sign In & First Contact
 
@@ -196,6 +198,26 @@ So that the app feels polished and comfortable to use in either light or dark mo
 
 **And** `README.md` exists with a basic project description and setup skeleton
 
+**Given** the backend's Postgres access layer
+**When** any plain-code tool reads or writes data
+**Then** it goes through **Drizzle ORM** (AD-30) - parameterized by construction, no raw string-built SQL anywhere
+
+**Given** the Express app
+**When** it starts
+**Then** `helmet` is applied for baseline security headers, and `cors` is configured so the built React app is served from this same Express service (same-origin in production; the Vite dev proxy reaches the same effective origin locally) - never a wildcard origin (AD-30)
+
+**Given** any API route
+**When** a request arrives
+**Then** `express-rate-limit` applies, with a stricter limit on `generate_ideas`/`create_plan` than on plain-code reads (AD-30)
+
+**Given** any API route
+**When** a request body is received
+**Then** it is rejected if it exceeds a configured maximum size, before any further processing (AD-30)
+
+**Given** the frontend codebase
+**When** linted
+**Then** an ESLint rule (`react/no-danger`) fails the build on any use of `dangerouslySetInnerHTML` (AD-30)
+
 ### Story 1.2: Google Sign-In
 
 As a user,
@@ -219,6 +241,14 @@ So that my data is private to me and persists across sessions.
 **Given** an unauthenticated request to any capability
 **When** it reaches the backend
 **Then** it is rejected - auth gates the entire session from first use (AD-17)
+
+**Given** a user completes Google OAuth
+**When** the backend verifies their identity
+**Then** it sets a server-side session in an `HttpOnly`, `Secure`, `SameSite=Lax` cookie - no session token is ever exposed to client-side JavaScript or carried as a bearer token (AD-17/AD-30)
+
+**Given** a state-changing request (any mutation)
+**When** it reaches the backend
+**Then** it is rejected unless its `Origin` header matches the app's own origin - this, together with `SameSite=Lax`, is the CSRF defense (AD-30), with no separate CSRF-token mechanism needed
 
 ### Story 1.3: Core Agent Loop with Moderation & Observability
 
@@ -259,6 +289,14 @@ So that I know the underlying system actually works before any specific feature 
 **Given** `afterModel` flags a response as unsafe
 **When** that happens
 **Then** the unsafe response is replaced with a safe default response before being shown, and the incident is logged
+
+**Given** the shared Zod schema for a user message
+**When** a message is submitted
+**Then** it enforces a maximum length - an over-length message is rejected at the schema boundary before it ever reaches the model, never silently truncated (AD-30)
+
+**Given** any log entry written for this story (incident logs, LangSmith trace metadata, error logs)
+**When** it is written
+**Then** it never contains the raw text of a user message - only metadata (flags, categories, ids, lengths) is logged (AD-30)
 
 ### Story 1.4: Internationalization (i18n) Foundation & Bilingual Replies
 
@@ -836,6 +874,14 @@ So that correctness doesn't rest on a claim alone.
 **When** tested
 **Then** guilt/streak-language triggering (AD-12), moderation triggering (AD-11), and a simulated prompt-injection via a `web_search` result are each covered
 
+**Given** direct prompt injection attempted in a user message - "ignore/disregard your instructions", "output your system prompt", "list your tools", and an injected instruction embedded inside an otherwise normal check-in message - each case run in both German and English
+**When** tested
+**Then** this is a distinct guardrail case from the jailbreak/moderation trigger above, not folded into it; the assertion is on the **outcome**, not which layer caught it - no tool call outside the Zod-validated schemas is ever made, no plan reaches `active` without passing through the approval pause (AD-14), and the system prompt or tool list is never disclosed in the response
+
+**Given** the same four direct-prompt-injection cases
+**When** the report is generated
+**Then** it separately records, as a non-gating metric that never affects pass/fail, how often Mistral Moderation's own jailbreak category flagged each input on its own - visibility only, keeping the open question over Mistral Moderation 2's own pending validation visible rather than hidden behind a pass/fail result
+
 **Given** each of the 3 personalities (CAP-7)
 **When** the guilt/streak-language guardrail test runs
 **Then** it is run once per personality, not just the default one
@@ -852,7 +898,7 @@ So that correctness doesn't rest on a claim alone.
 **When** tested
 **Then** a negative test confirms a plan can never become `active` without going through the HITL pause/approval step - there is no code path that skips it
 
-**Given** the guilt/streak-language, moderation, HITL-bypass, and prompt-injection tests above
+**Given** the guilt/streak-language, moderation, HITL-bypass, `web_search` prompt-injection, and direct prompt-injection outcome tests above
 **When** the suite runs
 **Then** they must all pass at a hard 100% bar, zero tolerance - a single failure here fails the suite, unlike the 80% trajectory-accuracy target in Story 6.2
 

@@ -7,7 +7,7 @@ paradigm: "single LLM agent with tool-calling via LangChain's createAgent, runni
 scope: "Governs the agent paradigm, tool/state boundaries, resilience fabric, moderation, voice-interface abstraction, and idea/plan/check-in lifecycle rules for the Second Income Coach agent, backend, and frontend."
 status: final
 created: "2026-11-13"
-updated: "2026-11-13"
+updated: "2026-11-15"
 binds: [CAP-1, CAP-2, CAP-3, CAP-4, CAP-5, CAP-6, CAP-7, CAP-8, CAP-9, CAP-10, CAP-11]
 sources: ["../../specs/spec-second-income-coach/SPEC.md"]
 companions: []
@@ -134,7 +134,7 @@ Namespace mapping:
 
 - **Binds:** all (the entire session, from first use)
 - **Prevents:** per-user state (intake, selected idea, plan, check-in history) being accessible without an identified user.
-- **Rule:** Auth is via Google OAuth (Google sign-in) and gates the entire session from first use, including `submit_intake` — intake data itself is per-user persisted state under AD-3, so there is no unauthenticated capability. CAP-4 additionally depends on this for cross-session persistence of check-in history.
+- **Rule:** Auth is via Google OAuth (Google sign-in) and gates the entire session from first use, including `submit_intake` — intake data itself is per-user persisted state under AD-3, so there is no unauthenticated capability. CAP-4 additionally depends on this for cross-session persistence of check-in history. Once Google sign-in is verified, the backend establishes the session as a server-side cookie (`HttpOnly`, `Secure`, `SameSite=Lax`) — never a token exposed to client-side JavaScript or carried as a bearer token. See AD-30 for the CSRF defense this session mechanism depends on, and for why the frontend is served same-origin from the same Express service rather than a separate origin.
 
 ### AD-18 — Thread/session mapping [ADOPTED] (amended: chat topology)
 
@@ -170,7 +170,7 @@ Namespace mapping:
 
 - **Binds:** all (quality assurance, cross-cutting)
 - **Prevents:** introducing Python-based eval tooling into an otherwise TypeScript-only project, and validating tool-calling behavior against only one model when four are selectable (AD-20).
-- **Rule:** Evals are TypeScript-only: `agentevals` (`createTrajectoryMatchEvaluator` with `toolArgsMatchMode` enabled - tool arguments checked, not just tool names - and `createTrajectoryLLMAsJudge`) running inside Vitest, results linked to LangSmith. No Python eval package (e.g. Ragas) is introduced. The suite includes: deterministic unit tests for the plain-code tools; an integration test against a **real Postgres instance** (not a mock) for the exactly-one-active-plan partial unique constraint (AD-14); a negative test proving `activate_plan` can never reach `active` status without passing through the HITL pause; guardrail tests (guilt/streak language - run once per personality, AD-20 - moderation, prompt-injection via `web_search`); and a 15-25 case trajectory suite (including a "no tool call on smalltalk" case), versioned as committed fixture files. Trajectory-match checks (`createTrajectoryMatchEvaluator`) are fully deterministic - no judge model involved; only the LLM-as-judge quality cases (`createTrajectoryLLMAsJudge`) use the fixed judge model, `gpt-6-sol` (OpenAI, $2/$10 per 1M, pinned by exact id in config), distinct from all 4 registry entries and never exposed in the user-facing model list - the report must disclose that this judge shares a provider (OpenAI) with one evaluated registry model (`gpt-6-luna`) as a known limitation. Two distinct, never-conflated pass bars: trajectory/tool-call accuracy targets 80% **per model** (the report always shows the actual measured number, even below threshold, never suppressed); the safety/guardrail tests (guilt/streak language across all 3 personalities, moderation, the HITL-bypass negative test, the `web_search` prompt-injection test) require a hard 100% pass bar with zero tolerance. The full suite runs at least once against each of the 4 model-registry entries (AD-20), triggered on demand (`npm run eval`) - never wired into CI to run on every commit. See `evals.md` for the full requirement, including the report script (one command, includes known limitations and the eval run's own estimated cost per AD-21).
+- **Rule:** Evals are TypeScript-only: `agentevals` (`createTrajectoryMatchEvaluator` with `toolArgsMatchMode` enabled - tool arguments checked, not just tool names - and `createTrajectoryLLMAsJudge`) running inside Vitest, results linked to LangSmith. No Python eval package (e.g. Ragas) is introduced. The suite includes: deterministic unit tests for the plain-code tools; an integration test against a **real Postgres instance** (not a mock) for the exactly-one-active-plan partial unique constraint (AD-14); a negative test proving `activate_plan` can never reach `active` status without passing through the HITL pause; guardrail tests (guilt/streak language - run once per personality, AD-20 - moderation, prompt-injection via `web_search`); a **distinct direct prompt-injection guardrail test** - not folded into the jailbreak/moderation trigger above - covering four patterns ("ignore/disregard your instructions", "output your system prompt", "list your tools", and an injected instruction embedded inside an otherwise normal check-in message), each run in both German and English, asserting the **outcome** rather than which layer caught it: no tool call outside the Zod-validated schemas (AD-16), no plan reaching `active` without the approval pause (AD-14), and the system prompt/tool list never disclosed; and a 15-25 case trajectory suite (including a "no tool call on smalltalk" case), versioned as committed fixture files. Trajectory-match checks (`createTrajectoryMatchEvaluator`) are fully deterministic - no judge model involved; only the LLM-as-judge quality cases (`createTrajectoryLLMAsJudge`) use the fixed judge model, `gpt-6-sol` (OpenAI, $2/$10 per 1M, pinned by exact id in config), distinct from all 4 registry entries and never exposed in the user-facing model list - the report must disclose that this judge shares a provider (OpenAI) with one evaluated registry model (`gpt-6-luna`) as a known limitation. Two distinct, never-conflated pass bars: trajectory/tool-call accuracy targets 80% **per model** (the report always shows the actual measured number, even below threshold, never suppressed); the safety/guardrail tests (guilt/streak language across all 3 personalities, moderation, the HITL-bypass negative test, the `web_search` prompt-injection test, and the direct prompt-injection outcome test) require a hard 100% pass bar with zero tolerance. Separately, as a **non-gating metric** that never affects that pass/fail bar, the report records how often Mistral Moderation's own jailbreak category independently flagged each of the four direct prompt-injection inputs - visibility only, keeping the open question over Mistral Moderation 2's own pending validation (see Deferred, below) visible rather than hidden behind a pass/fail result. The full suite runs at least once against each of the 4 model-registry entries (AD-20), triggered on demand (`npm run eval`) - never wired into CI to run on every commit. See `evals.md` for the full requirement, including the report script (one command, includes known limitations and the eval run's own estimated cost per AD-21).
 
 ### AD-24 — i18n layer [ADOPTED] [VERIFIED]
 
@@ -207,6 +207,20 @@ Namespace mapping:
 - **Binds:** CAP-11
 - **Prevents:** the page's content silently drifting from its sources because someone hand-typed a parallel summary instead of deriving it from what already exists.
 - **Rule:** Each of the three sections reads from a structured source, not freehand prose: (1) **Evaluation Results** reads a machine-readable JSON summary that the eval report script (Story 6.3) also emits alongside its human-readable markdown/HTML report; (2) **Key Decisions** reads a curated decisions-summary data file maintained alongside this architecture spine, each entry citing its `AD-n` id - a derived index of the spine, not a disconnected rewrite; (3) **Reflection** reads the same structured content Story 7.4 produces for the known-weaknesses/traceability documentation, reused rather than retyped. No section independently duplicates facts that could drift from these sources.
+
+### AD-30 — Web/API security baseline [ADOPTED] (revised: cookie session + Origin-check CSRF, body/length limits, log hygiene)
+
+- **Binds:** all (every HTTP-exposed endpoint and the Postgres access layer)
+- **Prevents:** SQL injection via hand-built query strings, XSS via unescaped rendering of agent- or user-generated content, an open/wildcard CORS policy, unbounded request volume against the cost-bearing LLM-backed tools, CSRF against session-authenticated mutations, oversized request bodies/messages exhausting resources or model context, and raw user message content ending up in logs.
+- **Rule:** Moderation (AD-11) and the guilt-language check (AD-12) cover content safety; this AD covers the separate concern of application/transport security - a request or query being hostile, oversized, or malformed in a way no content filter is meant to catch.
+  - **SQL injection:** all Postgres access from the plain-code tools (AD-3/AD-4) goes through **Drizzle ORM** - parameterized by construction, no raw string-built SQL anywhere. Drizzle's schema definitions are the DB-side half of AD-16's enum-lockstep requirement (`failurePattern`/`ideaStatus`/`planStatus`) - generated alongside the shared Zod schemas, never hand-copied separately.
+  - **XSS:** agent-generated and user-generated text is never rendered via `dangerouslySetInnerHTML`; React's default escaping is relied on for all chat/content rendering, with no exception - enforced by an ESLint `react/no-danger` rule that fails the build on any use. `helmet` is applied to the Express app for baseline security headers (CSP, X-Frame-Options, etc.) as defense-in-depth.
+  - **CORS and origin:** the built React app is served from the **same Express service** as the API - a single origin in production, so cross-origin requests are not the normal case at all. The `cors` package is still configured, restricted to that one origin (plus `localhost` during local development, where the Vite dev proxy forwards API calls to the same effective origin) - deny-by-default, never a wildcard.
+  - **Rate limiting:** `express-rate-limit` applies to every API route, with a stricter limit on `generate_ideas`/`create_plan` (the LLM-backed, cost-bearing tools, AD-4) than on plain-code reads - doubling as an abuse guard and a cost-control backstop alongside AD-21.
+  - **CSRF:** the Google-OAuth session (AD-17) is a **server-side session set in an `HttpOnly`, `Secure`, `SameSite=Lax` cookie** after the backend verifies Google sign-in - never a bearer token, never exposed to client-side JavaScript. `SameSite=Lax` is the first line of defense; every state-changing (mutating) request is additionally rejected unless its `Origin` header matches the app's own origin, checked by backend middleware before the request reaches any tool. Together these two checks are the CSRF defense - no separate CSRF-token mechanism is introduced.
+  - **Request/message size limits:** the Express body-parser enforces a configured maximum request body size, rejecting oversized requests before any further processing. Independently, the shared Zod schema for a user message (AD-16) enforces a maximum length - an over-length message is rejected at the schema boundary before it ever reaches the model, never truncated silently.
+  - **Log hygiene:** no log destination (incident logs, LangSmith trace metadata, error logs) ever contains the raw text of a user message - only metadata (flags, categories, ids, lengths) is logged. This applies everywhere AD-11/AD-12 already log an incident; logging the trigger category is required, logging the flagged text itself is not.
+  - **TLS:** Cloud Run terminates TLS at the edge in production; local-only development runs over plain HTTP on `localhost` - not a gap, since no production traffic ever takes that path.
 
 ### Dependency direction
 
@@ -262,6 +276,10 @@ No arrow runs in reverse: tools never call the frontend, Postgres never calls ba
 | LangSmith | current |
 | Neon (Postgres hosting) | — |
 | Cloud Run (app hosting) | — |
+| Drizzle ORM (Postgres access, AD-30) | current |
+| helmet (Express security headers, AD-30) | current |
+| cors (Express CORS allowlist, AD-30) | current |
+| express-rate-limit (AD-30) | current |
 
 ## Structural Seed
 
@@ -320,7 +338,7 @@ src/
     plain/         # submit_intake, set_idea_status, get_current_step, start_step, complete_step, record_check_in, get_projection, activate_plan, set_personality, set_model, record_feedback
     mcp/           # web_search MCP client wiring
   voice/           # transcribeCheckIn / speakResponse interface + v1 (gpt-transcribe) implementation
-  db/              # Postgres access (hard-state tables; Neon in prod)
+  db/              # Postgres access via Drizzle ORM (hard-state tables; Neon in prod) - AD-30
   shared/
     schemas/       # Zod schemas (imported by backend + frontend)
   api/             # Express app - HTTP API consumed by frontend, request/response only (AD-19)
@@ -348,6 +366,7 @@ web/
 | Cross-cutting: shared types | `shared/schemas/` | AD-16 |
 | Cross-cutting: thread/session mapping | `api/` (Express), `agent/` | AD-17, AD-18 |
 | Cross-cutting: request/response delivery | `api/` (Express) | AD-19 |
+| Cross-cutting: web/API security (SQLi, XSS, CORS, rate limiting, CSRF, TLS) | `api/` (Express), `db/` (Drizzle) | AD-30 |
 
 ## Deferred
 
