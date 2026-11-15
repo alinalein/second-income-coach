@@ -1,3 +1,6 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { defineConfig, loadEnv } from 'vite';
 import react, { reactCompilerPreset } from '@vitejs/plugin-react';
 import babel from '@rolldown/plugin-babel';
@@ -14,12 +17,38 @@ import tailwindcss from '@tailwindcss/vite';
 // own frontend+backend pair on different ports without editing source
 // (Design Notes: "Parallel-worktree dev ports"). Dev-only, code-defaulted —
 // not part of src/config/env.ts's required startup validation.
+//
+// envDir can't be `process.cwd()`: `npm run dev --workspace=web` (how this
+// is normally started) runs with cwd set to `web/`, not the repo root, so
+// the root `.env` (where WEB_PORT/API_PROXY_TARGET actually live) would be
+// silently missed. Walk up to the workspace root instead, same approach as
+// src/config/loadDotenv.ts.
+function findWorkspaceRoot(startDir: string): string {
+  let dir = startDir;
+  for (;;) {
+    const pkgPath = join(dir, 'package.json');
+    if (existsSync(pkgPath)) {
+      try {
+        const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { workspaces?: unknown };
+        if (pkg.workspaces) return dir;
+      } catch {
+        // unreadable/invalid package.json: keep walking up
+      }
+    }
+    const parent = dirname(dir);
+    if (parent === dir) return startDir;
+    dir = parent;
+  }
+}
+
 export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, process.cwd(), '');
+  const repoRoot = findWorkspaceRoot(dirname(fileURLToPath(import.meta.url)));
+  const env = loadEnv(mode, repoRoot, '');
   const webPort = env.WEB_PORT ? Number(env.WEB_PORT) : 5173;
   const apiProxyTarget = env.API_PROXY_TARGET || 'http://localhost:3000';
 
   return {
+    envDir: repoRoot,
     plugins: [babel({ presets: [reactCompilerPreset()] }), react(), tailwindcss()],
     server: {
       port: webPort,
