@@ -1178,6 +1178,8 @@ So that I can evaluate the technical implementation and understand the reasoning
 
 ### Story 7.3: Deploy to Cloud Run + Neon
 
+**Scheduling: optional for the live demo on 2026-11-20; always sequenced last.** The demo runs local-only (NFR6 and the "local-only first" decision are unchanged). All ACs below stay as written and apply whenever this story is built; nothing is removed or downgraded, it simply does not gate the demo, and no other story waits on it.
+
 As the developer,
 I want the app running beyond my laptop,
 So that it's accessible without my machine running.
