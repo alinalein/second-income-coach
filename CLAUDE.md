@@ -12,6 +12,12 @@
 - Every story that introduces an external service adds its variable to `.env.example` (placeholder only, never a real key) and to the startup validation in `src/config/env.ts`.
 - That story's report lists which keys the user must fill in.
 
+## Environment files
+
+- Never create, overwrite, or delete `.env` (root or any workspace) for ad hoc verification or manual live checks — it may hold the user's own real values, and it's gitignored, so there's no history to recover it from if deleted.
+- For a live/manual check that needs env vars, pass them inline on the command line instead (`src/config/env.ts`'s `loadEnv()` reads directly from `process.env`, so no file is needed at all): e.g. `DATABASE_URL=... PORT=3000 npx tsx api/index.ts`. Same validation, same server behavior, zero touch on any `.env` file.
+- Docker Compose needs no `.env` either — its defaults in `docker-compose.yml` are sufficient for local verification.
+
 ## Planning document ownership
 
 - `epics.md`, `sprint-status.yaml`, and `ARCHITECTURE-SPINE.md` are written only by the planning session or the main worktree — never by a build session.
