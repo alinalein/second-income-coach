@@ -254,7 +254,7 @@ No arrow runs in reverse: tools never call the frontend, Postgres never calls ba
 
 | Name | Version |
 | --- | --- |
-| TypeScript | 7.0.2 |
+| TypeScript | 6.0.3 (deliberately not 7.x: typescript-eslint hard-errors on TS 7 as of 2026-11-15; revisit once that is fixed) |
 | Node.js | 26 (Active LTS) |
 | React | 19.3.1 |
 | google-auth-library | 11.3.3 |
@@ -326,7 +326,9 @@ flowchart LR
 
 Local-only first, on the user's laptop, for build and the live class demo. Deploys afterward to Cloud Run (app hosting) + Neon (Postgres). Neon was chosen over Supabase and a self-hosted GCP VM specifically because it auto-wakes on query after scaling to zero, whereas Supabase's free tier pauses idle projects and requires a manual dashboard resume — unacceptable risk for a live demo. Google Cloud SQL has no perpetual free tier (only a 30-day trial) and was ruled out.
 
-**Secrets/config:** local environment variables (`.env`) during local-only build and demo; Google Cloud's Secret Manager once deployed to Cloud Run. Applies to every credential this system holds: the voice model API key, Mistral Moderation's API key, the web-search MCP provider's key, the Google OAuth client secret, and the LangSmith API key.
+**Secrets/config:** local environment variables (`.env`) during local-only build and demo; Google Cloud's Secret Manager once deployed to Cloud Run. Applies to every credential this system holds: the voice model API key, Mistral Moderation's API key, the web-search MCP provider's key, the Google OAuth client secret (and the session secret), and the LangSmith API key.
+
+**Env-variable rule:** every story that introduces an external service adds its variable(s) to `.env.example` (placeholders only - never a real key) and to the startup check in `src/config/env.ts`, which names a missing variable without printing any value and states per variable whether it is required at startup or optional (the feature degrades per its own story). The story's completion report states which keys the user must fill in. Introducing stories: 1.2 (Google OAuth, session secret), 1.3 (model, moderation, LangSmith), 2.2 (web search), 4.3 (voice), 7.3 (deploy secrets), plus 5.1/5.3 if they add a provider not already covered. The same startup check runs unchanged against Secret Manager-provided values after deploy.
 
 ### Minimal source tree
 
@@ -342,6 +344,7 @@ src/
   shared/
     schemas/       # Zod schemas (imported by backend + frontend)
   api/             # Express app - HTTP API consumed by frontend, request/response only (AD-19)
+  config/          # env.ts - startup check of every required/optional environment variable
 web/
   src/             # React frontend, TanStack Query hooks
 ```

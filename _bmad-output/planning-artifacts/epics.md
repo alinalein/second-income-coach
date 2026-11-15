@@ -73,7 +73,7 @@ NFR6: The full intake -> idea generation -> initial plan path must run reliably 
 
 ### Additional Requirements (from Architecture)
 
-- **No starter/scaffold template** - this is a custom greenfield build (TypeScript 7.0.2, Node 26, Express, React 19.3.1), not based on a starter kit.
+- **No starter/scaffold template** - this is a custom greenfield build (TypeScript 6.0.3 - typescript-eslint hard-errors on TS 7 today, revisit once fixed; Node 26, Express, React 19.3.1), not based on a starter kit.
 - Single LLM agent via LangChain's `createAgent` on the LangGraph.js runtime (`langchain@1.6.5`, `@langchain/core@1.3.6`, `@langchain/langgraph@1.7.3`) - not multi-agent.
 - Tool boundary: LLM-backed (`generate_ideas`, `create_plan`, each validating output via Zod before a deterministic Postgres write) vs. plain-code (`submit_intake`, `set_idea_status`, `get_current_step`, `start_step`, `complete_step`, `record_check_in`, `get_projection`, `activate_plan`) vs. one MCP tool (`web_search`, via `@langchain/mcp-adapters`' `MCPAdapter`, used only by `generate_ideas`).
 - Persistence: hard/structured state in dedicated Postgres tables (Neon); `@langchain/langgraph-checkpoint-postgres`'s `PostgresSaver` for thread/checkpoint state and `PostgresStore`+pgvector for semantic memory - reserved for conversational context only, never hard facts.
@@ -89,6 +89,7 @@ NFR6: The full intake -> idea generation -> initial plan path must run reliably 
 - Observability: LangSmith tracing/evals.
 - Deployment: local-only first (build + live class demo), then Cloud Run (app) + Neon (Postgres); secrets via local `.env` now, Google Cloud Secret Manager after deploy.
 - **Documentation**: a README (setup/usage), documented example use cases, and a written rationale for the key technical decisions (can draw directly from the architecture spine's ADs and the spec/architecture memlogs rather than re-deriving reasoning from scratch).
+- **Environment variables and keys (project rule)**: every story that introduces an external service adds its variable(s) to `.env.example` (placeholder values only - never a real key, token or secret, in that file or anywhere in the repo) and to the startup check in `src/config/env.ts` (which names a missing variable without ever printing a value), and its completion report states exactly which keys the user must fill in. Stories that introduce keys: **1.2** (Google OAuth client id/secret, session secret), **1.3** (model provider key(s), Mistral Moderation key, LangSmith key/project), **2.2** (`web_search` provider key), **4.3** (voice transcription key), **7.3** (deployment secrets: Neon connection string, production OAuth settings, Secret Manager). Stories 5.1 (additional registry providers) and 5.3 (embeddings for semantic memory) add a variable too if they introduce a provider not already covered. Whether a variable is required at startup or optional (its feature degrades per that story's own ACs, e.g. an unconfigured registry provider is simply not selectable) is stated per variable in `src/config/env.ts`.
 - **Internationalization**: `react-i18next`, translation keys under `src/locales/<language-code>/<namespace>.json`, established from Story 1.1 onward - no hardcoded user-facing string in either language. German and English are the only two supported languages for both the UI and the chat.
 
 **Deferred items (from the architecture spine) and where they land:** exact Postgres schema column-level detail, exact preselected intake range boundaries, exact retry/backoff/timeout numbers, the voice interface's exact method signature, the audio-retention deletion endpoint, and the step-pointer semantics in the start/complete gap window are all implementation-level decisions to make *while building the story that owns them* - they'll be called out on the relevant story below, not as separate tickets. **Out of scope for this epic breakdown entirely** (v2/non-goals, no ticket anywhere): v2 voice (`gpt-audio-mini`), the gamified visual/plant companion, and background-job missed-check-in detection with push/email notifications.
@@ -156,7 +157,7 @@ FR12: Epic 5 - token/cost display and persistence
 FR13: Epic 5 - response feedback (rating + comment)
 FR14: Epic 5 (Story 5.4) - UI language switch (DE/EN), persisted, defaults to English
 FR15: Epic 1 (Story 1.4, i18n foundation) + Epic 4 (voice, Story 4.3 amendment) - agent replies in whichever language the user writes/speaks in
-FR16: Epic 5 (Story 5.5) - currency switch (EUR/USD), persisted, defaults to EUR; Stories 2.2/4.4/5.2 amended to be currency-aware
+FR16: Epic 5 (Story 5.5) - currency switch (EUR/USD), persisted, defaults to EUR; Stories 2.2/4.4/5.2 amended to be currency-aware; the `user_settings` table (currency, personality, model, ui_language) is created in Story 1.2 so none of them has a forward dependency on Epic 5; the shared money helper is created in Story 2.2
 FR17: Epic 7 (Story 7.5) - public Quality & Decisions page, depends on Story 6.3's eval report (Epic 6) and Stories 7.2/7.4's rationale/weaknesses content (Epic 7) - placed last so it has no forward dependencies
 NFR1-3, NFR5: Epic 4 - non-punitive design, voice-first-class, no audio retention, verifiable tone
 NFR4: Epic 1 (baseline hooks) + enforced across Epics 2-5 wherever input/output occurs
@@ -234,6 +235,15 @@ So that my data is private to me and persists across sessions.
 **When** no user record exists yet
 **Then** a new user row is created in Postgres, keyed to their Google identity
 
+**Given** that first-time sign-in
+**When** the user row is created
+**Then** a `user_settings` row for that user is created in the same transaction, in a dedicated `user_settings` table (AD-20/AD-27) holding `currency` (EUR by default), `personality`, `model`, and `ui_language` (English by default); the personality and model columns hold the configured default (the model column may hold "use the default model" until Story 5.1 introduces the registry) - a user row never exists without its settings row
+**And** the table and its Drizzle schema are created here, not in a later story: Stories 2.2, 4.4 and 5.2 read `currency` from it, and Stories 5.1, 5.4 and 5.5 add the settings screen, the `set_*` tools and validation on top of it without creating or migrating the table
+
+**Given** an existing user who has no `user_settings` row (e.g. created before this story shipped)
+**When** they next sign in
+**Then** the missing row is created with the same defaults - sign-in never fails or returns empty settings because the row is absent
+
 **Given** an authenticated session
 **When** the user closes and reopens the app
 **Then** they remain signed in without re-authenticating (within the session's validity)
@@ -249,6 +259,10 @@ So that my data is private to me and persists across sessions.
 **Given** a state-changing request (any mutation)
 **When** it reaches the backend
 **Then** it is rejected unless its `Origin` header matches the app's own origin - this, together with `SameSite=Lax`, is the CSRF defense (AD-30), with no separate CSRF-token mechanism needed
+
+**Given** this story introduces external credentials (the Google OAuth client id and secret, and the session secret)
+**When** it is built
+**Then** the project's environment-variable rule applies (see Additional Requirements): the variables are added to `.env.example` as placeholders and to the startup check in `src/config/env.ts`, and the completion report lists which keys the user must fill in
 
 ### Story 1.3: Core Agent Loop with Moderation & Observability
 
@@ -297,6 +311,14 @@ So that I know the underlying system actually works before any specific feature 
 **Given** any log entry written for this story (incident logs, LangSmith trace metadata, error logs)
 **When** it is written
 **Then** it never contains the raw text of a user message - only metadata (flags, categories, ids, lengths) is logged (AD-30)
+
+**Given** the chat UI this story needs to show a message exchange
+**When** it is built
+**Then** it builds the shared `ChatThread`/`ChatMessage` component directly (message list, text input, error and neutral-notice rendering) - Story 3.1 later extends it additively with extension points and the plan workspace around it, rather than replacing it
+
+**Given** this story introduces external credentials (the model provider key(s), the Mistral Moderation key, and the LangSmith key and project settings)
+**When** it is built
+**Then** the project's environment-variable rule applies (see Additional Requirements): each variable is added to `.env.example` as a placeholder and to the startup check in `src/config/env.ts`, and the completion report lists which keys the user must fill in
 
 ### Story 1.4: Internationalization (i18n) Foundation & Bilingual Replies
 
@@ -384,7 +406,11 @@ So that I'm not stuck with a generic list.
 
 **Given** an idea's startup cost
 **When** displayed
-**Then** it reads the currency value in `user_settings` (EUR by default - Story 5.5 later adds the UI control to change it, this story doesn't depend on that control existing yet), converted from the sourced currency using the configured rate and labeled an estimate if a conversion occurred (AD-27)
+**Then** it reads the currency value from the `user_settings` row created in Story 1.2 (EUR by default - Story 5.5 later adds the UI control to change it, this story doesn't depend on that control existing yet), converted from the sourced currency using the configured rate and labeled an estimate if a conversion occurred (AD-27)
+
+**Given** the money handling this story is the first to need (minor-unit amounts, conversion with the configured EUR/USD rate and its as-of date, `Intl.NumberFormat` formatting)
+**When** it is built
+**Then** it lives in one shared money helper created here and reused by Stories 4.4, 5.2 and 5.5 - not re-implemented per story
 
 **Given** the LLM's output
 **When** about to be saved
@@ -401,6 +427,10 @@ So that I'm not stuck with a generic list.
 **Given** the ideas list UI (layout decision, final)
 **When** displayed
 **Then** it is a card layout (option A) - each of the 5 cards shows its rationale and its sourced baseline-rate citation (AD-6) directly on the card, not hidden behind a detail view or expansion
+
+**Given** this story introduces the `web_search` provider's credential
+**When** it is built
+**Then** the project's environment-variable rule applies (see Additional Requirements): the variable is added to `.env.example` as a placeholder and to the startup check in `src/config/env.ts`, and the completion report lists which key the user must fill in
 
 ### Story 2.3: Bookmark and Reject Ideas
 
@@ -482,13 +512,41 @@ So that I know exactly what to do first instead of facing a vague goal.
 **When** that happens
 **Then** a dedicated plan thread is created for it (AD-18) - distinct from the discovery thread and from any other plan's thread
 
-**Given** the plan workspace UI (layout decision, final — applies here and to every Epic 4/Story 5.2/5.3 screen touching this same plan)
+**Given** the plan workspace UI (layout decision, final - one workspace component shared by this story, Epic 4, and Stories 5.2/5.3)
 **When** built
 **Then** it is a single unified screen (option A) - a status sidebar/header (current+next step, timeline) and a projection card alongside one chat thread for check-ins, follow-up questions, and messages with their token/cost line and thumbs - never split into separate "Overview" and "Chat" tabs
 
 **Given** that same unified layout
 **When** viewed on a narrow/mobile screen
 **Then** the status sidebar collapses into a compact header above the chat rather than disappearing or requiring a separate screen
+
+**Given** the workspace is a shared component built across several stories
+**When** this story builds it
+**Then** this story owns the workspace **shell and its extension points**, and later stories fill the extension points without restructuring the shell. Ownership (proposed paths under `web/src/features/plan-workspace/`, to be confirmed against the scaffold from Story 1.1):
+
+| Part of the workspace | Built by | Notes |
+|---|---|---|
+| `PlanWorkspace` layout (sidebar/header + chat column), narrow-screen collapse, route | **3.1** | Only 3.1 edits the layout file; no later story changes the layout |
+| `StatusPanel` (current + next step via `get_current_step`, timeline) | **3.1** | 4.1 adds the start/complete step actions and the energy/status check-in control as its own components rendered by `StatusPanel`/the chat input, not by editing the panel's layout |
+| `ChatThread` / `ChatMessage` (message list, text input, error/neutral-notice rendering) | **1.3** | Built directly in Story 1.3 as the shared component; 3.1 extends it and never replaces it. Also used by the discovery thread |
+| Free-form follow-up questions in the plan thread, bound to the plan's own thread | **3.1** | Wiring on top of 1.3's `ChatThread`, not a new chat component |
+| `ChatMessage` footer extension point (an ordered list of footer items rendered beneath each agent message) | **3.1** (empty by default; an additive extension of 1.3's component) | Items below are registered into it; none require editing `ChatMessage` itself |
+| Footer item: token count + estimated cost line | **5.2** | Own component `MessageCost`; persistence and cost math in `api/` |
+| Footer item: thumbs up/down + optional comment | **5.3** | Own component `MessageFeedback`; must never disable `ChatInput` |
+| Chat input extension point (extra input modes beside the text field) | **3.1** (empty by default) | |
+| Input mode: voice record + editable transcript | **4.3** | Own component; typed text stays available |
+| Projection card extension point (a slot in the sidebar/header) | **3.1** (renders nothing until 4.4) | |
+| Projection card content | **4.4** | Own component, filled via `get_projection` |
+| Draft review / confirm / modify / reject panel (shown while the plan is `draft`) | **3.2** | Own component, rendered in the workspace's main area for a draft plan; 3.1 renders the draft read-only |
+| Plan switcher (activate a different bookmarked idea's plan) | **3.3** | Own component, outside the layout file |
+
+**Given** the shared `ChatMessage` component built in Story 1.3
+**When** this story needs a footer extension point, a chat-input extension point and the workspace around it
+**Then** it extends 1.3's component additively (new props/slots, no replaced or duplicated message component) and keeps every Story 1.3 behavior working
+
+**Given** Stories 5.2 and 5.3 attach to chat messages
+**When** they are built
+**Then** they depend on this story's `ChatMessage` footer extension point (UI) in addition to their own backend work - they never create a second message component or a parallel chat screen
 
 **Given** an existing plan thread
 **When** the user asks a free-form follow-up question (not a structured check-in action)
@@ -594,6 +652,10 @@ So that I get specific encouragement without empty praise.
 **When** processed
 **Then** it passes through the same moderation/resilience hooks as any other turn (AD-11/AD-7)
 
+**Given** the check-in UI
+**When** built
+**Then** the energy/status control and the start/complete step actions are their own components plugged into the workspace built in Story 3.1 (status panel and chat input) - this story does not edit the workspace layout
+
 ### Story 4.2: Non-Punitive Missed Check-In Handling
 
 As a user who missed a check-in,
@@ -658,6 +720,14 @@ So that I stay in control of what gets recorded.
 **When** that happens
 **Then** typed text remains available - the check-in is never blocked (NFR2)
 
+**Given** the voice recorder and transcript-review UI
+**When** built
+**Then** they are an input mode registered into the chat input extension point from Story 3.1, in their own component - the workspace layout and the text input are not edited by this story
+
+**Given** this story introduces the voice transcription credential (`gpt-transcribe`)
+**When** it is built
+**Then** the project's environment-variable rule applies (see Additional Requirements): the variable is added to `.env.example` as a placeholder (even if it is the same provider key as an existing variable, the story says so explicitly) and to the startup check in `src/config/env.ts`, and the completion report lists which key the user must fill in
+
 ### Story 4.4: Live Income & Opportunity Projection
 
 As a user making progress,
@@ -682,9 +752,13 @@ So that checking in feels tangibly worth it.
 **When** called
 **Then** it is a plain deterministic tool (AD-4) - no LLM computes the projection math
 
+**Given** the projection card
+**When** built
+**Then** it fills the projection-card extension point of the workspace from Story 3.1 as its own component - the workspace layout is not edited by this story
+
 **Given** the projection
 **When** displayed
-**Then** the income estimate reads the currency value in `user_settings` (EUR by default; not dependent on Story 5.5's UI control existing yet) - converted from the baseline rate's sourced currency using the configured rate and labeled an estimate if a conversion occurred (AD-27), formatted via `Intl.NumberFormat` under the active UI language's locale
+**Then** the income estimate reads the currency value from the `user_settings` row created in Story 1.2 (EUR by default; not dependent on Story 5.5's UI control existing yet), using Story 2.2's shared money helper - converted from the baseline rate's sourced currency using the configured rate and labeled an estimate if a conversion occurred (AD-27), formatted via `Intl.NumberFormat` under the active UI language's locale
 
 ## Epic 5: Settings, Cost Transparency & Feedback
 
@@ -720,7 +794,11 @@ So that I can tune the experience without needing a developer to change code.
 
 **Given** a user's settings
 **When** saved
-**Then** they persist per user in a dedicated `user_settings` table, surfaced through an actual settings screen - not just a backend default
+**Then** they persist per user in the `user_settings` table created in Story 1.2 (this story adds no table and no migration for it), surfaced through an actual settings screen - not just a backend default
+
+**Given** the `model` column created in Story 1.2 (which until now means "use the default model")
+**When** this story completes
+**Then** it holds a model-registry id validated against the registry introduced here, and an unknown or no-longer-selectable id resolves to the default model rather than erroring
 
 **Given** the selected provider's key is missing, or a call to the selected model fails
 **When** that happens
@@ -748,7 +826,7 @@ So that I understand what I'm actually spending.
 
 **Given** the cost
 **When** displayed
-**Then** it reads the currency value in `user_settings` (EUR by default; this story doesn't depend on Story 5.5's UI control existing yet) - the registry price itself is natively USD (AD-21/AD-27), converted to EUR using the configured rate (and labeled an estimate) only when the stored currency is EUR; USD needs no conversion
+**Then** it reads the currency value from the `user_settings` row created in Story 1.2 (EUR by default; this story doesn't depend on Story 5.5's UI control existing yet), using Story 2.2's shared money helper - the registry price itself is natively USD (AD-21/AD-27), converted to EUR using the configured rate (and labeled an estimate) only when the stored currency is EUR; USD needs no conversion
 
 **Given** the turn
 **When** it completes
@@ -761,6 +839,10 @@ So that I understand what I'm actually spending.
 **Given** a persisted cost/token value
 **When** the user reloads the page
 **Then** the same values are shown, unchanged
+
+**Given** the cost line UI
+**When** built
+**Then** it is a `MessageCost` footer item registered into the `ChatMessage` footer extension point built in Story 3.1 - this story builds the cost computation, persistence and that one component, and does not create or restructure the message or workspace components
 
 ### Story 5.3: Response Feedback
 
@@ -798,6 +880,10 @@ So that I can give signal without friction.
 **When** the user changes or removes it
 **Then** the stored feedback updates or is deleted accordingly - ratings are not permanent once given
 
+**Given** the thumbs/comment UI
+**When** built
+**Then** it is a `MessageFeedback` footer item registered into the `ChatMessage` footer extension point built in Story 3.1, alongside (not inside) Story 5.2's `MessageCost` - this story does not create or restructure the message or workspace components
+
 ### Story 5.4: UI Language Selection
 
 As a user,
@@ -808,7 +894,7 @@ So that I can use the app comfortably regardless of which language I prefer for 
 
 **Given** the settings screen
 **When** the user picks German or English
-**Then** `set_ui_language` persists the choice in `user_settings`, and the whole UI (via the i18n layer, Story 1.4) switches immediately
+**Then** `set_ui_language` persists the choice in the `ui_language` column of `user_settings` (created in Story 1.2), and the whole UI (via the i18n layer, Story 1.4) switches immediately
 
 **Given** a first-time visit with no stored preference
 **When** the app loads
@@ -832,7 +918,7 @@ So that the numbers I see are in the currency that's meaningful to me.
 
 **Given** the settings screen
 **When** the user picks EUR or USD
-**Then** `set_currency` persists the choice in `user_settings` (AD-27), and every displayed amount re-renders in the newly chosen currency immediately
+**Then** `set_currency` persists the choice in the `currency` column of `user_settings` (created in Story 1.2, AD-27), and every displayed amount re-renders in the newly chosen currency immediately
 
 **Given** a first-time visit with no stored preference
 **When** the app loads
@@ -1069,6 +1155,10 @@ So that it's accessible without my machine running.
 **Given** Cloud Run's scale-to-zero
 **When** a request arrives after idle
 **Then** it responds correctly after cold start, with no manual intervention - consistent with Neon's auto-wake
+
+**Given** this story introduces deployment secrets (the Neon connection string, the production OAuth redirect/origin settings, and moving every existing key into Secret Manager)
+**When** it is built
+**Then** the project's environment-variable rule applies (see Additional Requirements): any new variable is added to `.env.example` as a placeholder and to the startup check in `src/config/env.ts`, the startup check works the same against Secret Manager-provided values, and the completion report lists which secrets the user must create or fill in
 
 ### Story 7.4: Known Weaknesses, Improvement Suggestions, and Grading Traceability
 
