@@ -141,6 +141,9 @@ set_env_var "$ENV_FILE" CORS_ORIGIN "http://localhost:${VITE_PORT}"
 # Must be the Vite origin, not the backend's: the browser only ever talks to
 # Vite's /api proxy (see .env.example / src/api/middleware/session.ts).
 set_env_var "$ENV_FILE" GOOGLE_REDIRECT_URI "http://localhost:${VITE_PORT}/api/auth/google/callback"
+# Cookies are scoped by domain, not port: without a distinct name, this lane
+# would clobber another lane's session cookie in the same browser.
+set_env_var "$ENV_FILE" SESSION_COOKIE_NAME "sic-${NAME}.sid"
 
 RAW_DB_URL="$(get_env_var "$ENV_FILE" DATABASE_URL)"
 DB_URL_BASE="${RAW_DB_URL%/*}"

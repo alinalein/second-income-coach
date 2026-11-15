@@ -40,13 +40,16 @@ export function buildSessionCookieOptions(env: Pick<Env, 'NODE_ENV'>): CookieOpt
  * request (AC: "closes and reopens the app within the session's validity,
  * then they remain signed in").
  */
-export function createSessionMiddleware(env: Pick<Env, 'NODE_ENV' | 'SESSION_SECRET'>, pool: Pool) {
+export function createSessionMiddleware(
+  env: Pick<Env, 'NODE_ENV' | 'SESSION_SECRET' | 'SESSION_COOKIE_NAME'>,
+  pool: Pool,
+) {
   const PgSession = connectPgSimple(session);
 
   return session({
     store: new PgSession({ pool, createTableIfMissing: true }),
     secret: env.SESSION_SECRET,
-    name: 'sic.sid',
+    name: env.SESSION_COOKIE_NAME,
     resave: false,
     saveUninitialized: false,
     rolling: true,

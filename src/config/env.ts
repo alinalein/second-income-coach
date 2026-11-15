@@ -45,6 +45,11 @@ const envSchema = z.object({
   SESSION_SECRET: z
     .string()
     .min(32, 'SESSION_SECRET is required and must be at least 32 characters (see .env.example)'),
+  // Lets a parallel worktree (scripts/new-lane.sh) give its session cookie a
+  // distinct name, since cookies are scoped by domain, not port, and two
+  // lanes sharing `localhost` in one browser would otherwise clobber each
+  // other's session cookie.
+  SESSION_COOKIE_NAME: z.string().min(1).default('sic.sid'),
   // Story 1.3: core agent loop (model provider), Mistral Moderation 2, and
   // LangSmith observability. `LANGSMITH_TRACING`/`LANGSMITH_API_KEY`/
   // `LANGSMITH_PROJECT` are read directly off `process.env` by LangChain's
