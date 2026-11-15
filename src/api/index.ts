@@ -1,0 +1,21 @@
+import 'dotenv/config';
+import { EnvValidationError, loadEnv } from '../config/env.js';
+import { createDb } from '../db/client.js';
+import { createApp } from './app.js';
+
+try {
+  const env = loadEnv();
+  const { db } = createDb(env);
+  const app = createApp({ env, db });
+
+  app.listen(env.PORT, () => {
+    console.log(`[api] listening on http://localhost:${env.PORT} (${env.NODE_ENV})`);
+  });
+} catch (error) {
+  if (error instanceof EnvValidationError) {
+    // Clear, non-silent failure naming the missing/invalid env var(s), then exit.
+    console.error(`[api] startup failed:\n${error.message}`);
+    process.exit(1);
+  }
+  throw error;
+}

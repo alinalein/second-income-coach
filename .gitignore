@@ -8,3 +8,4 @@ dist/
 !.env.example
 .DS_Store
 Blueprint-LLM-agent-app.md
+CLAUDE.md

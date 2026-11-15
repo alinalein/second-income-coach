@@ -165,7 +165,38 @@ Epic 7: Documentation & Deployment Handoff
 
 ## Getting started
 
-No runnable code exists yet — Story 1.1 (project scaffolding) hasn't been built. This section will be filled in once that lands.
+**Prerequisites:** Node.js 20.19+ (the architecture spine targets Node 26 once generally available), Docker (for local Postgres), npm 10+.
+
+1. Copy the environment template and adjust if needed — every required variable is validated at backend startup (`src/config/env.ts`); a missing one fails fast with a clear message naming it, instead of a silent crash or hang:
+   ```bash
+   cp .env.example .env
+   ```
+2. Start local Postgres (Docker Compose):
+   ```bash
+   docker compose up -d
+   ```
+3. Install dependencies (npm workspaces: `shared`, `src`, `web` — one install, both sides import shared Zod schemas via `@app/shared`):
+   ```bash
+   npm install
+   ```
+4. Run both the Express backend and the React frontend:
+   ```bash
+   npm run dev
+   ```
+   - API: http://localhost:3000 — health checks at `GET /api/health` and `GET /api/health/db`
+   - Frontend: http://localhost:5173 — Vite dev server, proxies `/api` to the backend (same-origin in production)
+
+Other commands:
+
+| Command | Does |
+|---|---|
+| `npm run build` | Production build of `shared`, `src`, and `web` |
+| `npm run lint` | ESLint across the whole repo (`react/no-danger` enforced) |
+| `npm run typecheck` | `tsc --noEmit` for every workspace |
+| `npm test` | Vitest for every workspace |
+| `npm run db:up` / `npm run db:down` | Start/stop the local Postgres container |
+
+The frontend defaults to light mode; the dark-mode toggle (top-right) persists the choice in `localStorage` across reloads. Teal accent tokens and contrast ratios are pinned in `stack.md` and wired in `web/src/index.css`.
 
 ---
 

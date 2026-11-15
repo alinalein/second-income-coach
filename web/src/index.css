@@ -1,0 +1,73 @@
+@import 'tailwindcss';
+@import 'shadcn-glass-ui/styles.css';
+
+/* Class-based dark mode (explicit toggle, never OS preference) — Tailwind v4's
+   documented pattern for swapping `prefers-color-scheme` for a manual class. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
+ * Pinned design tokens (spec-1-1 / stack.md) — exact values, verified
+ * contrast-wise independently of this library's own OKLCH primitives.
+ * Accent (`--primary`/`--accent`) is applied only to buttons, badges,
+ * progress fill, focus rings, and banners — never whole surfaces.
+ */
+:root {
+  --background: #f7f7f8;
+  --card: #ffffff;
+  --foreground: #1f2937;
+  --muted: #eef0f1;
+  --muted-foreground: #6b7280;
+  --border: #e2e2e4;
+
+  --primary: #0f766e;
+  --primary-foreground: #ffffff;
+  --accent: #ccfbf1;
+  --accent-foreground: #0f766e;
+
+  --radius: 0.75rem;
+}
+
+.dark {
+  --background: #121316;
+  --card: #1c1d20;
+  --foreground: #e9eaec;
+  --muted: #232528;
+  --muted-foreground: #9aa0a6;
+  --border: #2c2e31;
+
+  --primary: #2dd4bf;
+  --primary-foreground: #121316;
+  --accent: #134e4a;
+  --accent-foreground: #5eead4;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-input: var(--border);
+  --color-ring: var(--primary);
+
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}

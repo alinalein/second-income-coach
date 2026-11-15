@@ -1,0 +1,34 @@
+{
+  "name": "second-income-coach",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Second Income Coach monorepo — Express/Postgres backend, React frontend, shared Zod schemas.",
+  "type": "module",
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "workspaces": [
+    "shared",
+    "src",
+    "web"
+  ],
+  "scripts": {
+    "dev": "npm run build --workspace=shared && concurrently -k -n shared,api,web -c magenta,blue,green \"npm run dev --workspace=shared\" \"npm run dev --workspace=src\" \"npm run dev --workspace=web\"",
+    "build": "npm run build --workspace=shared && npm run build --workspace=src && npm run build --workspace=web",
+    "lint": "eslint .",
+    "typecheck": "npm run typecheck --workspace=shared && npm run typecheck --workspace=src && npm run typecheck --workspace=web",
+    "test": "npm run test --workspace=shared && npm run test --workspace=src && npm run test --workspace=web",
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "concurrently": "^10.0.7",
+    "eslint": "^9.39.5",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.14.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.72.2"
+  }
+}
