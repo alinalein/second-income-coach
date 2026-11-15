@@ -5,8 +5,8 @@ import { createApp } from './app.js';
 
 try {
   const env = loadEnv();
-  const { db } = createDb(env);
-  const app = createApp({ env, db });
+  const { db, pool } = createDb(env);
+  const app = createApp({ env, db, pool });
 
   const server = app.listen(env.PORT, () => {
     console.log(`[api] listening on http://localhost:${env.PORT} (${env.NODE_ENV})`);

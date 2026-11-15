@@ -2,14 +2,14 @@ import { Pool } from 'pg';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { sql } from 'drizzle-orm';
 import type { Env } from '../config/env.js';
+import * as schema from './schema/index.js';
 
 /**
  * Postgres access wired through Drizzle ORM (AD-30 / AD-3): every query goes
  * through Drizzle's query builder or tagged `sql` template, which are
  * parameterized by construction — no hand-built/concatenated SQL strings
- * anywhere in this codebase. No domain tables/schema are defined yet (those
- * land with the stories that need them); this module only establishes the
- * connection and proves it works.
+ * anywhere in this codebase. Domain tables live under `./schema/` (Story 1.2
+ * onward), imported here so `drizzle()` knows about them.
  */
 export function createDb(env: Pick<Env, 'DATABASE_URL'>) {
   const pool = new Pool({ connectionString: env.DATABASE_URL });
@@ -19,7 +19,7 @@ export function createDb(env: Pick<Env, 'DATABASE_URL'>) {
   pool.on('error', (error) => {
     console.error('[db] idle client error:', error);
   });
-  const db = drizzle(pool);
+  const db = drizzle(pool, { schema });
   return { db, pool };
 }
 

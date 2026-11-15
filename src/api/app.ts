@@ -1,15 +1,21 @@
 import bytes from 'bytes';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import helmet from 'helmet';
+import type { Pool } from 'pg';
 import type { Env } from '../config/env.js';
 import type { createDb } from '../db/client.js';
 import { createCorsMiddleware } from './middleware/cors.js';
 import { createGeneralRateLimiter } from './middleware/rateLimit.js';
+import { createRequireSameOrigin } from './middleware/requireSameOrigin.js';
+import { requireAuth } from './middleware/requireAuth.js';
+import { createSessionMiddleware } from './middleware/session.js';
 import { createHealthRouter } from './routes/health.js';
+import { createAuthRouter } from './routes/auth.js';
 
 export interface AppDeps {
   env: Env;
   db: ReturnType<typeof createDb>['db'];
+  pool: Pool;
 }
 
 /**
@@ -24,7 +30,7 @@ export interface AppDeps {
  * Built as a factory (not a top-level `listen()`) so tests can construct the
  * app against injected deps without binding a real port or a real database.
  */
-export function createApp({ env, db }: AppDeps) {
+export function createApp({ env, db, pool }: AppDeps) {
   const app = express();
 
   // Behind a reverse proxy (Cloud Run, or any future load balancer), trust the
@@ -48,7 +54,25 @@ export function createApp({ env, db }: AppDeps) {
   });
   app.use(express.json({ limit: env.BODY_LIMIT }));
 
+  // Story 1.2: Postgres-backed session cookie, then the CSRF-defense Origin
+  // check on every state-changing request (Intent: "CSRF defense =
+  // SameSite=Lax + an Origin-header check on mutations").
+  app.use(createSessionMiddleware(env, pool));
+  app.use(createRequireSameOrigin(env));
+
   app.use('/api/health', createHealthRouter({ db }));
+  app.use('/api/auth', createAuthRouter({ env, db }));
+
+  // Auth gate (Intent: "an auth gate on every non-health route"; AC: "any
+  // route other than /api/health* is hit without a valid session ... 401
+  // before any handler logic runs"). Mounted after /api/health and /api/auth
+  // so their own (already-registered) routes resolve first — including
+  // /api/auth/google and /api/auth/google/callback, which must stay public
+  // since they're how a session is established in the first place; /api/auth
+  // routes that do need a session (session, logout) apply `requireAuth`
+  // themselves. Anything else, including an undefined route, falls through
+  // to this blanket gate and gets 401 rather than leaking a 404.
+  app.use(requireAuth);
 
   // Centralized error handler. Oversized bodies and malformed JSON surface
   // here as errors from the body parser — this is what keeps the process

@@ -38,6 +38,13 @@ const envSchema = z.object({
     .min(1)
     .regex(BODY_LIMIT_PATTERN, 'BODY_LIMIT must be a byte-size string, e.g. "100kb" or "1mb"')
     .default('100kb'),
+  // Story 1.2: Google OAuth 2.0 (authorization-code flow) + server-side session.
+  GOOGLE_CLIENT_ID: z.string().min(1, 'GOOGLE_CLIENT_ID is required (see .env.example)'),
+  GOOGLE_CLIENT_SECRET: z.string().min(1, 'GOOGLE_CLIENT_SECRET is required (see .env.example)'),
+  GOOGLE_REDIRECT_URI: z.url('GOOGLE_REDIRECT_URI is required and must be a valid URL (see .env.example)'),
+  SESSION_SECRET: z
+    .string()
+    .min(32, 'SESSION_SECRET is required and must be at least 32 characters (see .env.example)'),
 });
 
 export type Env = z.infer<typeof envSchema>;

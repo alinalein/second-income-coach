@@ -16,13 +16,17 @@ export class CorsOriginError extends Error {
  * Same-origin CORS (AD-30): deny-by-default, allowlisting only the
  * configured frontend origin (the Vite dev proxy locally; the single
  * same-origin Express service in production) — never a wildcard. The
- * hardcoded local Vite dev origins are only added outside production.
+ * hardcoded local Vite dev origins are only added outside production —
+ * `5173`/`5183`/`5193` are this story's documented parallel-worktree
+ * `WEB_PORT` values (spec-1-2 Spec Change Log).
  */
 export function createCorsMiddleware(env: Pick<Env, 'CORS_ORIGIN' | 'NODE_ENV'>) {
   const allowedOrigins = new Set([env.CORS_ORIGIN]);
   if (env.NODE_ENV !== 'production') {
-    allowedOrigins.add('http://localhost:5173');
-    allowedOrigins.add('http://127.0.0.1:5173');
+    for (const port of ['5173', '5183', '5193']) {
+      allowedOrigins.add(`http://localhost:${port}`);
+      allowedOrigins.add(`http://127.0.0.1:${port}`);
+    }
   }
 
   return cors({

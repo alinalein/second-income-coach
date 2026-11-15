@@ -18,3 +18,25 @@ export const healthStatusSchema = z.object({
 });
 
 export type HealthStatus = z.infer<typeof healthStatusSchema>;
+
+/**
+ * Story 1.2: the authenticated-user shape returned by `GET /api/auth/session`
+ * and consumed by the frontend's `useAuthStatus()` hook to decide which view
+ * to render (I/O matrix: "authenticated view renders"). Mirrors the
+ * `healthStatusSchema` pattern above — one shared Zod schema, imported by
+ * both sides, with its TypeScript type derived via `z.infer`.
+ */
+export const authUserSchema = z.object({
+  id: z.string().min(1),
+  email: z.string().min(1),
+  name: z.string().min(1),
+  picture: z.string().nullable(),
+});
+
+export type AuthUser = z.infer<typeof authUserSchema>;
+
+export const authSessionSchema = z.object({
+  user: authUserSchema,
+});
+
+export type AuthSession = z.infer<typeof authSessionSchema>;
