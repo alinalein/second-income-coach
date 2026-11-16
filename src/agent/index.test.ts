@@ -79,6 +79,7 @@ describe('createCoachAgent (progress middleware ordering: AC1, I/O matrix happy/
     const model = fakeModel().respond(new AIMessage('Sure, happy to help!'));
     const agent = createCoachAgent({
       env: { OPENROUTER_API_KEY: 'test-key', MISTRAL_API_KEY: 'test-key' },
+      db: {} as never,
       checkpointer: new MemorySaver(),
       model,
       classify: async () => ({}),
@@ -100,6 +101,7 @@ describe('createCoachAgent (progress middleware ordering: AC1, I/O matrix happy/
     const model = fakeModel().respond(new AIMessage('should never be reached'));
     const agent = createCoachAgent({
       env: { OPENROUTER_API_KEY: 'test-key', MISTRAL_API_KEY: 'test-key' },
+      db: {} as never,
       checkpointer: new MemorySaver(),
       model,
       classify: async () => ({ jailbreaking: true }),
@@ -125,6 +127,7 @@ describe('createCoachAgent (progress middleware ordering: AC1, I/O matrix happy/
     const model = fakeModel().respond(new AIMessage('a flagged reply'));
     const agent = createCoachAgent({
       env: { OPENROUTER_API_KEY: 'test-key', MISTRAL_API_KEY: 'test-key' },
+      db: {} as never,
       checkpointer: new MemorySaver(),
       model,
       // Flags only the assistant's output (afterModel), not the human input
@@ -153,6 +156,7 @@ describe('createCoachAgent (progress middleware ordering: AC1, I/O matrix happy/
     const model = fakeModel().respond(new AIMessage('Sure, happy to help!'));
     const agent = createCoachAgent({
       env: { OPENROUTER_API_KEY: 'test-key', MISTRAL_API_KEY: 'test-key' },
+      db: {} as never,
       checkpointer: new MemorySaver(),
       model,
       classify: async () => ({}),
