@@ -13,6 +13,7 @@ Prove the whole stack works together end to end, as thinly as possible, before a
 - Story 1.3: Core Agent Loop with Moderation & Observability
 - Story 1.4: Internationalization Foundation & Bilingual Replies
 - Story 1.5: Agent Progress Display & Markdown Rendering
+- Story 1.6: Glass Style & Contrast Re-verification
 
 ## Requirements & Constraints
 
@@ -25,6 +26,7 @@ Prove the whole stack works together end to end, as thinly as possible, before a
 - A LangSmith trace is recorded for every agent interaction (observability baseline).
 - Web/API security baseline applies to every route from this epic forward: parameterized DB access, security headers, same-origin CORS, rate limiting, request/message size limits, CSRF defense, and log hygiene (no raw user message text in any log).
 - README must exist with at least a basic project description and setup skeleton, to be appended to by every later epic.
+- Story 1.6 requirement: the glass style (UX-DR3) that Story 1.1 was accepted without must actually be applied, matching `layout-preview.html`, with contrast (UX-DR4) re-verified on the real translucent surfaces and the measured values recorded in that story's report.
 - This epic introduces external credentials in two stories: Story 1.2 adds the Google OAuth client id/secret and the session secret; Story 1.3 adds the model provider key(s), the Mistral Moderation key, and the LangSmith key/project. Each is a placeholder in `.env.example` plus a named check in `src/config/env.ts`; each story's report must list exactly which keys the user needs to fill in.
 
 ## Technical Decisions

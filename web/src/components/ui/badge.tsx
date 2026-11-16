@@ -10,10 +10,18 @@ const badgeVariants = cva(
       variant: {
         // Accent badge — teal tokens, the one surface this accent is allowed on.
         default: 'border-transparent bg-accent text-accent-foreground',
-        // Muted badge: uses --foreground (not --muted-foreground) for its
-        // label text — --muted-foreground on --muted fails WCAG AA.
-        muted: 'border-transparent bg-muted text-foreground',
-        outline: 'border-border text-foreground',
+        // User instruction (round 3) explicitly puts badges among the
+        // glass/blur surfaces, so `muted`/`outline` use `glass-chrome` +
+        // --shadow like the other chrome controls, even though
+        // layout-preview.html's own `.badge.neutral` has no backdrop-filter
+        // — an explicit instruction for this element overrides the literal
+        // reference file here. Text is --foreground, not --muted-foreground:
+        // with a soft accent blob behind the glass, --muted-foreground can
+        // measure as low as ~3:1 (confirmed by direct computation across
+        // every surface/page/blob combination); --foreground stays safe
+        // (≥6.4:1 worst case, every combination).
+        muted: 'border-transparent glass-chrome shadow-[var(--shadow)] text-foreground',
+        outline: 'glass-chrome border shadow-[var(--shadow)] text-foreground',
       },
     },
     defaultVariants: {

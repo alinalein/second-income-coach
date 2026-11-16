@@ -1,4 +1,5 @@
 @import 'tailwindcss';
+@import 'shadcn-glass-ui/styles.css';
 
 /* Class-based dark mode (explicit toggle, never OS preference) — Tailwind v4's
    documented pattern for swapping `prefers-color-scheme` for a manual class. */
@@ -24,6 +25,26 @@
   --accent-foreground: #0f766e;
 
   --radius: 0.75rem;
+
+  /* Glass chrome (spec-1-6, UX-DR3) — exact tokens from
+     _bmad-output/planning-artifacts/layout-preview.html, the chosen design
+     reference. The page needs the gradient behind it: a flat page color
+     makes the blur read as plain grey instead of glass.
+     --glass-bg: alpha 0.68, NOT the reference's literal 0.55 — at 0.55,
+     --muted-foreground text sitting directly on a bare `.glass` surface
+     (e.g. CardDescription) measures 4.46:1 against the gradient's darker
+     stop (--page-b), below the 4.5:1 floor. Raised just enough to clear
+     it with a real (non-rounding) margin while staying below
+     --glass-bg-strong's 0.72, preserving the weak/strong tier order. */
+  --page-a: #eef1f0;
+  --page-b: #e7ebe9;
+  --glass-bg: rgba(255, 255, 255, 0.68);
+  --glass-bg-strong: rgba(255, 255, 255, 0.72);
+  --glass-border: rgba(20, 30, 26, 0.1);
+  --muted-bg: rgba(20, 30, 26, 0.06);
+  --shadow: 0 8px 30px rgba(20, 40, 30, 0.1);
+  --blob: #14b8a6;
+  --blob-opacity: 0.22;
 }
 
 .dark {
@@ -38,6 +59,18 @@
   --primary-foreground: #121316;
   --accent: #134e4a;
   --accent-foreground: #5eead4;
+
+  /* Dark glass tokens match the reference exactly — no contrast adjustment
+     needed (worst-case measured margin is still >5:1; see story report). */
+  --page-a: #111214;
+  --page-b: #17181b;
+  --glass-bg: rgba(255, 255, 255, 0.06);
+  --glass-bg-strong: rgba(255, 255, 255, 0.1);
+  --glass-border: rgba(255, 255, 255, 0.1);
+  --muted-bg: rgba(255, 255, 255, 0.08);
+  --shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
+  --blob: #14b8a6;
+  --blob-opacity: 0.3;
 }
 
 @theme inline {
@@ -62,11 +95,166 @@
   --radius-xl: calc(var(--radius) + 4px);
 }
 
+/* CRITICAL: re-assert the `--color-*` bridge, unlayered.
+   `shadcn-glass-ui/styles.css` ships its OWN `@layer theme{:root,:host{...}}`
+   block defining the exact same Tailwind-conventional variable names
+   (`--color-foreground`, `--color-background`, `--color-primary`, etc.),
+   each as `oklch(from var(--foreground-base) l c h)` — and `--foreground-base`
+   and every other `--*-base` it reads are themselves only ever defined
+   under `[data-theme=glass/light/aurora]`, an attribute this app never
+   sets. Confirmed directly in the compiled build output: the `@theme
+   inline` block above never survives — only the library's version of
+   each `--color-*` variable is present in the final CSS. The practical
+   effect: every `--color-*` was an invalid reference to nothing, which
+   for the inherited `color` property computes to black (CSS's initial
+   value) — this, not a .dark-class bug, is why dark-mode text rendered
+   black instead of light, and why every background/border/text color
+   utility across both themes was wrong. A plain, unlayered `:root` rule always
+   outranks a layered one regardless of source order (same mechanism
+   already used for `header`/native-input below), so this reliably wins
+   regardless of how the library's own declarations are merged or
+   minified. Only needs to be set once at `:root` — each reference like
+   `var(--foreground)` still re-resolves live under `.dark`. */
+:root {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-input: var(--border);
+  --color-ring: var(--primary);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+}
+
 @layer base {
   * {
     @apply border-border;
   }
   body {
-    @apply bg-background text-foreground;
+    @apply text-foreground;
+    /* The glass blur needs something with tonal variation behind it — a
+       flat page color reads as plain grey once blurred. Matches
+       layout-preview.html's body background exactly (both themes). */
+    background: radial-gradient(circle at 20% 10%, var(--page-a), var(--page-b) 70%);
+    min-height: 100vh;
   }
+}
+
+/* Soft accent blobs (spec-1-6, round 3) — exact size/blur/colour/opacity
+   values from layout-preview.html's `.blob`/`.blob.b1`/`.blob.b2`/`.blob.b3`.
+   "The glass blur is only visible with them" (user instruction) — a flat
+   or barely-two-tone gradient alone reads as grey; these give the blur
+   something colourful to pick up.
+   No new DOM elements: App.tsx may only have the two already-approved
+   className edits, so these are `html`/`body` pseudo-elements instead of
+   the reference's literal `<div class="blob">` siblings — same visual
+   result, no component touched. One deliberate, documented deviation: the
+   reference uses `z-index:0` because its real `.wrap` content wrapper
+   carries an explicit `z-index:1` to stay above the blobs; nothing here
+   can add that same `z-index:1` to the app's actual content without
+   exceeding the edit budget, so these use `z-index:-1` instead — under
+   the CSS stacking rules, a negative z-index always paints behind normal
+   (non-positioned) content, achieving the identical "blobs behind
+   everything" result without touching any component. Every size/position/
+   blur/colour/opacity value below is taken directly from the reference;
+   z-index is the only numeric value not sourced from it, for the reason
+   above. */
+html::before,
+html::after,
+body::before {
+  content: '';
+  position: fixed;
+  border-radius: 50%;
+  background: var(--blob);
+  opacity: var(--blob-opacity);
+  filter: blur(70px);
+  z-index: -1;
+  pointer-events: none;
+}
+html::before {
+  width: 360px;
+  height: 360px;
+  top: -80px;
+  left: 10%;
+}
+html::after {
+  width: 360px;
+  height: 360px;
+  bottom: -100px;
+  right: 8%;
+}
+body::before {
+  width: 240px;
+  height: 240px;
+  top: 40%;
+  left: 60%;
+}
+
+/* Glass chrome (spec-1-6, UX-DR3) — exact look from layout-preview.html.
+   Two tiers: `glass-panel` (weaker, --glass-bg) for panel-level surfaces
+   (cards), `glass-chrome` (--glass-bg-strong) for smaller chrome controls
+   (header, buttons, badges, native inputs/selects/textareas) that need a
+   bit more definition. Primary/accent fills stay opaque — their pinned
+   contrast ratios (stack.md) must not shift. Defined via `@utility` (not
+   `@layer components`) so `@apply` can use them below (Tailwind v4
+   requirement). NAMED `glass-panel`/`glass-chrome`, NOT `glass`/
+   `glass-strong`: the imported `shadcn-glass-ui/styles.css` ships its own
+   unlayered, bare `.glass{}` rule (hardcoded near-invisible `#ffffff0d`
+   background) that would silently win the cascade over a same-named
+   layered utility regardless of source order — confirmed directly in the
+   compiled output. A different class name sidesteps the collision
+   entirely. (`--muted-bg`, defined above, is kept as a transcribed
+   reference token for a future component — e.g. a progress track or stat
+   chip — even though nothing currently consumes it; no utility wraps it
+   since the one past consumer, the badge `muted` variant, now uses
+   `glass-chrome` per this round's explicit instruction.) */
+@utility glass-panel {
+  background-color: var(--glass-bg);
+  border-color: var(--glass-border);
+  -webkit-backdrop-filter: blur(14px) saturate(150%);
+  backdrop-filter: blur(14px) saturate(150%);
+}
+
+@utility glass-chrome {
+  background-color: var(--glass-bg-strong);
+  border-color: var(--glass-border);
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
+  backdrop-filter: blur(16px) saturate(150%);
+}
+
+header {
+  @apply glass-chrome shadow-[var(--shadow)];
+}
+
+/* Covers every common text-entry input type plus untyped inputs (HTML
+   defaults an <input> with no type to text) — layout-preview.html's own
+   selector only lists `type=text`, but a future text-like field (email,
+   search, tel, number, password) should get the same look without needing
+   its own follow-up pass. */
+input:not([type]),
+input[type='text'],
+input[type='email'],
+input[type='search'],
+input[type='tel'],
+input[type='number'],
+input[type='password'],
+textarea,
+select {
+  @apply glass-chrome border rounded-md;
+}
+
+/* Same reasoning as `CardDescription` (card.tsx): placeholder text sits on
+   a glass-chrome surface, so it uses --foreground, not the browser
+   default placeholder grey a `placeholder:text-muted-foreground` inline
+   class (e.g. ChatThread.tsx's input) would otherwise apply — unlayered,
+   so it wins over that inline utility without editing the file it's in. */
+input::placeholder,
+textarea::placeholder {
+  color: var(--foreground);
+  opacity: 1;
 }

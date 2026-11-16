@@ -128,7 +128,7 @@ export function App() {
 
   if (authStatus.state !== 'authenticated') {
     return (
-      <div className="min-h-screen bg-background text-foreground">
+      <div className="min-h-screen text-foreground">
         <header className="border-b border-border">
           <div className="mx-auto flex max-w-3xl items-center justify-between px-6 py-4">
             <span className="text-sm font-semibold tracking-tight">{t('app.title')}</span>
@@ -143,7 +143,7 @@ export function App() {
   }
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
+    <div className="min-h-screen text-foreground">
       <header className="border-b border-border">
         <div className="mx-auto flex max-w-3xl items-center justify-between px-6 py-4">
           <span className="text-sm font-semibold tracking-tight">{t('app.title')}</span>
