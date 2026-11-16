@@ -1,11 +1,12 @@
 import * as React from 'react';
 import { useTranslation } from 'react-i18next';
-import { authSessionSchema, type AuthUser } from '@app/shared';
+import { authSessionSchema, getIntakeResponseSchema, type AuthUser } from '@app/shared';
 import { Button } from './components/ui/button';
 import { Badge } from './components/ui/badge';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from './components/ui/card';
 import { ThemeToggle } from './theme/theme-toggle';
 import { ChatThread } from './chat/ChatThread';
+import { IntakeForm } from './features/intake/IntakeForm';
 
 type AuthStatus =
   | { state: 'checking' }
@@ -95,6 +96,59 @@ function SignInCard({ showError }: { showError: boolean }) {
   );
 }
 
+/**
+ * AC1/AC5: whether the signed-in user has an `intake` row yet, read once via
+ * the plain `GET /api/intake` (Boundary: no `get_intake` agent tool). `null`
+ * means "still checking" (or signed out); resets to `null` when `enabled`
+ * goes false so a later sign-in re-checks instead of reusing a stale value.
+ */
+function useHasIntake(enabled: boolean): [boolean | null, (value: boolean) => void] {
+  const [hasIntake, setHasIntake] = React.useState<boolean | null>(null);
+
+  React.useEffect(() => {
+    if (!enabled) {
+      setHasIntake(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    fetch('/api/intake', { credentials: 'include' })
+      .then(async (res) => {
+        if (cancelled) return;
+        if (!res.ok) {
+          // Same safe default as "no intake yet" — without this, a failed
+          // response leaves `hasIntake` null forever and the authenticated
+          // view is stuck on the loading placeholder with no retry.
+          setHasIntake(false);
+          return;
+        }
+        const body: unknown = await res.json();
+        const result = getIntakeResponseSchema.safeParse(body);
+        if (result.success) setHasIntake(result.data.intake !== null);
+      })
+      .catch(() => {
+        if (!cancelled) setHasIntake(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [enabled]);
+
+  return [hasIntake, setHasIntake];
+}
+
+/** Code Map: "small revisit link once one [an intake row] does [exist]". */
+function RevisitIntakeLink({ onClick }: { onClick: () => void }) {
+  const { t } = useTranslation('intake');
+  return (
+    <Button type="button" variant="ghost" size="sm" onClick={onClick}>
+      {t('revisitLink')}
+    </Button>
+  );
+}
+
 function SignOutButton({ onSignedOut }: { onSignedOut: () => void }) {
   const { t } = useTranslation('common');
   const [pending, setPending] = React.useState(false);
@@ -118,8 +172,17 @@ function SignOutButton({ onSignedOut }: { onSignedOut: () => void }) {
 
 export function App() {
   const { t } = useTranslation('common');
+  const { t: tIntake } = useTranslation('intake');
   const [authStatus, refreshAuthStatus] = useAuthStatus();
   const hasAuthError = useAuthError();
+  const [hasIntake, setHasIntake] = useHasIntake(authStatus.state === 'authenticated');
+  // AC1/AC5: defaults to showing the intake form until a row is known to
+  // exist; a revisit link lets an already-intake'd user come back to it.
+  const [showIntakeForm, setShowIntakeForm] = React.useState(true);
+
+  React.useEffect(() => {
+    if (hasIntake !== null) setShowIntakeForm(!hasIntake);
+  }, [hasIntake]);
 
   if (authStatus.state !== 'authenticated') {
     return (
@@ -150,7 +213,23 @@ export function App() {
       </header>
 
       <main className="mx-auto flex max-w-3xl flex-col gap-6 px-6 py-10">
-        <ChatThread />
+        {hasIntake === null ? (
+          <p className="text-sm text-muted-foreground">{tIntake('loading')}</p>
+        ) : showIntakeForm ? (
+          <IntakeForm
+            onSaved={() => {
+              setHasIntake(true);
+              setShowIntakeForm(false);
+            }}
+          />
+        ) : (
+          <>
+            <ChatThread />
+            <div>
+              <RevisitIntakeLink onClick={() => setShowIntakeForm(true)} />
+            </div>
+          </>
+        )}
       </main>
     </div>
   );

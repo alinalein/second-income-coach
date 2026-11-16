@@ -37,6 +37,9 @@ describe('createCoachAgent (hook integration: systemPrompt middleware wiring)', 
       checkpointer: new MemorySaver(),
       model,
       classify: async () => ({}),
+      // Story 2.1: `submit_intake`'s db handle is now the caller's own —
+      // this test never exercises that tool, so a fake is enough.
+      db: {} as never,
     });
 
     await agent.invoke(

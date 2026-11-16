@@ -1,0 +1,47 @@
+{
+  "title": "Erzähl uns von dir",
+  "description": "Ein paar kurze Fragen, damit dein Coach Ideen auf dich zuschneiden kann.",
+  "loading": "Wird geladen…",
+  "submitButton": "Speichern und weiter",
+  "savingButton": "Wird gespeichert…",
+  "revisitLink": "Deine Angaben überprüfen",
+  "skillsInterests": {
+    "label": "Fähigkeiten und Interessen",
+    "placeholder": "Worin bist du gut, oder was interessiert dich?"
+  },
+  "weeklyTimeAvailability": {
+    "label": "Wöchentlich verfügbare Zeit",
+    "options": {
+      "under_5h": "Unter 5 Stunden",
+      "5_to_10h": "5 bis 10 Stunden",
+      "10_to_20h": "10 bis 20 Stunden",
+      "20h_plus": "20+ Stunden"
+    }
+  },
+  "startingBudgetRange": {
+    "label": "Startbudget",
+    "options": {
+      "under_100": "Unter 100 €",
+      "100_to_500": "100 bis 500 €",
+      "500_to_2000": "500 bis 2.000 €",
+      "2000_plus": "2.000 €+"
+    }
+  },
+  "riskTolerance": {
+    "label": "Risikobereitschaft",
+    "options": {
+      "low": "Niedrig — ich bevorzuge sichere, stetige Ansätze",
+      "medium": "Mittel — ich komme mit etwas Unsicherheit klar",
+      "high": "Hoch — ich bin mit größeren Wetten vertraut"
+    }
+  },
+  "stoppedBeforeText": {
+    "label": "Was hat dich bisher aufgehalten?",
+    "placeholder": "Erzähl uns, was dir in der Vergangenheit im Weg stand, falls etwas."
+  },
+  "error": {
+    "required": "Dieses Feld ist erforderlich.",
+    "tooLong": "Bitte bleibe unter 1000 Zeichen.",
+    "submitFailed": "Beim Speichern deiner Angaben ist etwas schiefgelaufen. Bitte versuche es gleich noch einmal."
+  }
+}

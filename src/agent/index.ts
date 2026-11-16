@@ -3,9 +3,11 @@ import { END, MessagesAnnotation, START, StateGraph } from '@langchain/langgraph
 import type { BaseCheckpointSaver } from '@langchain/langgraph-checkpoint';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import type { Env } from '../config/env.js';
+import type { createDb } from '../db/client.js';
 import { createChatModel } from './model.js';
 import { createModerationMiddleware, type ClassifyText } from './moderation.js';
 import { applyModelNodeResilience } from './resilience.js';
+import { createSubmitIntakeTool } from '../tools/plain/submit_intake.js';
 
 /**
  * AD-20 (deferred): the fixed personality tones a `user_settings.personality`
@@ -70,6 +72,10 @@ export interface CreateCoachAgentDeps {
   model?: BaseChatModel;
   /** Test-only seam: a fake moderation classifier instead of a real Mistral call. */
   classify?: ClassifyText;
+  /** The shared db handle `submit_intake` persists through — `api/index.ts`
+   * already builds one `createDb(env)` pool for `AppDeps`; this reuses that
+   * same instance rather than opening a second pool. */
+  db: ReturnType<typeof createDb>['db'];
 }
 
 /**
@@ -82,12 +88,12 @@ export interface CreateCoachAgentDeps {
  * this graph's single `"model"` node — `createAgent` compiles its own graph
  * internally with no seam to call `setNodeDefaults` on before that happens,
  * so the one retry/timeout policy for the model call (AD-7) is applied at
- * this outer level instead, around the whole (currently tool-less) agent
- * turn. The Postgres checkpoint lives on this outer graph only; the inner
+ * this outer level instead, around the whole agent turn. The Postgres
+ * checkpoint lives on this outer graph only; the inner
  * `createAgent` instance is stateless and re-invoked with the full message
  * history on every turn.
  */
-export function createCoachAgent({ env, checkpointer, model, classify }: CreateCoachAgentDeps) {
+export function createCoachAgent({ env, checkpointer, model, classify, db }: CreateCoachAgentDeps) {
   const chatModel = model ?? createChatModel(env);
   const moderation = createModerationMiddleware(env, { classify });
   const systemPrompt = dynamicSystemPromptMiddleware(buildSystemPrompt);
@@ -95,6 +101,7 @@ export function createCoachAgent({ env, checkpointer, model, classify }: CreateC
   const reactAgent = createAgent({
     model: chatModel,
     middleware: [moderation, systemPrompt],
+    tools: [createSubmitIntakeTool(db)],
   });
 
   const graph = new StateGraph(MessagesAnnotation).addNode('model', async (state, runtime) => {

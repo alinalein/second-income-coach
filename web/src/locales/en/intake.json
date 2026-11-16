@@ -1,0 +1,47 @@
+{
+  "title": "Tell us about yourself",
+  "description": "A few quick questions so your coach can tailor ideas to you.",
+  "loading": "Loading…",
+  "submitButton": "Save and continue",
+  "savingButton": "Saving…",
+  "revisitLink": "Review your intake answers",
+  "skillsInterests": {
+    "label": "Skills and interests",
+    "placeholder": "What are you good at, or curious about?"
+  },
+  "weeklyTimeAvailability": {
+    "label": "Weekly time availability",
+    "options": {
+      "under_5h": "Under 5 hours",
+      "5_to_10h": "5 to 10 hours",
+      "10_to_20h": "10 to 20 hours",
+      "20h_plus": "20+ hours"
+    }
+  },
+  "startingBudgetRange": {
+    "label": "Starting budget",
+    "options": {
+      "under_100": "Under €100",
+      "100_to_500": "€100 to €500",
+      "500_to_2000": "€500 to €2,000",
+      "2000_plus": "€2,000+"
+    }
+  },
+  "riskTolerance": {
+    "label": "Risk tolerance",
+    "options": {
+      "low": "Low — I prefer safe, steady approaches",
+      "medium": "Medium — I can handle some uncertainty",
+      "high": "High — I'm comfortable with bigger bets"
+    }
+  },
+  "stoppedBeforeText": {
+    "label": "What's stopped you before?",
+    "placeholder": "Tell us what's gotten in the way in the past, if anything."
+  },
+  "error": {
+    "required": "This field is required.",
+    "tooLong": "Please keep this under 1000 characters.",
+    "submitFailed": "Something went wrong saving your answers. Please try again in a moment."
+  }
+}
