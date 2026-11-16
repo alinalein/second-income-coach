@@ -548,6 +548,42 @@ So that I have more options without re-entering my intake.
 **When** generated
 **Then** it follows the same rules as the original batch (rationale citing >=3 intake fields, structured time/cost/risk, grounded baseline rate via `web_search`)
 
+### Story 2.5: Opportunity Discovery & Growth Path
+
+As a user,
+I want ideas based on what is actually in demand right now, with a path for how each can grow,
+So that the suggestions are current and worth acting on, not generic.
+
+**Acceptance Criteria:**
+
+**Given** a generate request (first batch or "more ideas")
+**When** `generate_ideas` runs
+**Then** before writing ideas it runs a discovery search with `web_search` (still used only by `generate_ideas`, AD-5) for current trends, niches and demand signals relevant to the intake's skills and interests, and the results are moderation-screened before they are cached or used (AD-7/AD-11)
+
+**Given** each idea
+**When** displayed
+**Then** it shows a demand/trend evidence note with its source URL, in addition to the baseline-rate citation (AD-6), directly on the card; the evidence is persisted on the idea's record and is never invented - an idea without sourced evidence is retried, not shown
+
+**Given** a batch of 5
+**When** validated
+**Then** its evidence comes from at least 3 distinct source domains, and the discovery step is not limited to freelance rate pages
+
+**Given** each idea
+**When** displayed
+**Then** it shows a short translated "how this can grow" note (reply language, FR15/AD-25); where the user's time, budget and risk limits allow it, the batch includes ideas with a higher earning ceiling
+
+**Given** any idea
+**When** checked
+**Then** it still never exceeds the user's stated time, budget or risk level
+
+**Given** the new fields
+**When** saved
+**Then** they are validated against the shared Zod schema first (AD-4/AD-16) and a validation failure is never silently saved; adding them needs a column or JSON field on `ideas`, no new table
+
+**Given** the discovery step
+**When** it runs
+**Then** it reuses the same `web_search` provider key (no new external service, no new variable), uses the AD-7 cache, and keeps generation inside the ideas path's own timeout with the progress feedback from Story 2.2
+
 ## Epic 3: Plan Creation & Activation
 
 Users turn a chosen idea into a concrete, timed plan and explicitly confirm it before it goes live; they can later switch to a different bookmarked idea's plan without losing progress.
