@@ -107,5 +107,5 @@ In a live class demo, intake through tailored idea generation through an initial
 
 ## Open Questions
 
-- CAP-7's `mistral-large-4` registry entry uses a provisional id (`mistralai/mistral-large-4-0`) the user flagged as unverified - it must be checked against whichever actual provider/router serves this model, and its pricing re-confirmed against that provider/router specifically, before this entry ships. Not yet resolved.
+- Resolved: `mistral-large-4` was removed from the CAP-7 registry (too slow: it repeatedly hit the 15 s fallback timeout), so its provisional-id question no longer applies. The registry holds three selectable models (`gpt-6-luna` default, `gemini-3.8-flash`, `claude-haiku-4.5`).
 

@@ -29,7 +29,7 @@ TypeScript-only. No Python eval packages (Ragas is Python-only and excluded enti
 
 ## Per-model run
 
-The full suite runs at least once against each of the 4 model registry entries (see `stack.md`) and the eval-only `anthropic/claude-sonnet-5.5` (not in the registry, never in the settings dropdown), so tool-call accuracy is comparable model-to-model, not just validated against whichever one happens to be selected during development. Triggered on demand via `npm run eval` - never wired into CI to run on every commit.
+The full suite runs at least once against each of the 3 model registry entries (see `stack.md`) and the eval-only `anthropic/claude-sonnet-5.5` (not in the registry, never in the settings dropdown), so tool-call accuracy is comparable model-to-model, not just validated against whichever one happens to be selected during development. Triggered on demand via `npm run eval` - never wired into CI to run on every commit.
 
 ## Report
 

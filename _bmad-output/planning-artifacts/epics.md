@@ -55,7 +55,7 @@ FR19: Agent responses in the chat render basic Markdown (headings, lists, bold t
 
 ### Additional NonFunctional Requirements
 
-NFR7: Eval tooling is TypeScript-only (`agentevals` + Vitest + LangSmith) - no Python eval packages. A trajectory suite (15-25 cases) plus deterministic unit and guardrail tests run against all 4 model-registry entries plus the eval-only model `anthropic/claude-sonnet-5.5` (never user-selectable), with a report script producing a linked markdown/HTML report (tool-call accuracy, constraint-test results, model x accuracy table, run date).
+NFR7: Eval tooling is TypeScript-only (`agentevals` + Vitest + LangSmith) - no Python eval packages. A trajectory suite (15-25 cases) plus deterministic unit and guardrail tests run against all 3 model-registry entries plus the eval-only model `anthropic/claude-sonnet-5.5` (never user-selectable), with a report script producing a linked markdown/HTML report (tool-call accuracy, constraint-test results, model x accuracy table, run date).
 
 NFR8: Chat topology is one discovery thread per user plus one thread per plan - never a single thread blending pre-plan discovery with plan-specific work.
 
@@ -838,7 +838,7 @@ So that I can tune the experience without needing a developer to change code.
 
 **Given** the registry's contents
 **When** seeded
-**Then** it holds exactly four user-selectable chat entries, all routed via OpenRouter: `openai/gpt-6-luna` (default), `google/gemini-3.8-flash`, `mistralai/mistral-large-4-0` and `anthropic/claude-haiku-4.5`; no other model is selectable (not the eval-only `anthropic/claude-sonnet-5.5`, not the `deepseek/deepseek-v4.1-flash` judge, not the moderation or transcription models)
+**Then** it holds exactly three user-selectable chat entries, all routed via OpenRouter: `openai/gpt-6-luna` (default), `google/gemini-3.8-flash` and `anthropic/claude-haiku-4.5` (`mistralai/mistral-large-4-0` was removed: too slow, it repeatedly hit the fallback timeout); no other model is selectable (not the eval-only `anthropic/claude-sonnet-5.5`, not the `deepseek/deepseek-v4.1-flash` judge, not the moderation or transcription models)
 
 **Given** the registry's pricing data
 **When** displayed anywhere in the app
@@ -1065,7 +1065,7 @@ So that model choice isn't just a guess.
 **Then** they check tool arguments via `toolArgsMatchMode` (not only tool names) and run fully deterministically - no judge model is involved in these
 
 **Given** `createTrajectoryLLMAsJudge` quality cases only
-**When** judging any of the 5 evaluated models' trajectories (the 4 registry entries plus the eval-only model)
+**When** judging any of the 4 evaluated models' trajectories (the 3 registry entries plus the eval-only model)
 **Then** they use two fixed judge models, `google/gemini-3.8-flash` and `deepseek/deepseek-v4.1-flash`, each pinned by exact id in config; `deepseek/deepseek-v4.1-flash` is a judge only and never appears in the user-facing model list, while `google/gemini-3.8-flash` is also a user-selectable registry entry (a user's selection never affects which models judge)
 
 **Given** the judge models
@@ -1076,9 +1076,9 @@ So that model choice isn't just a guess.
 **When** scored
 **Then** an explicit 80% tool-call-accuracy target applies **per model** (not an aggregate average) as a single tunable constant, and the report always shows the actual measured number per model, even below 80% - never suppressed or rounded up
 
-**Given** the 4 model-registry entries (AD-20) and the eval-only model `anthropic/claude-sonnet-5.5`
+**Given** the 3 model-registry entries (AD-20) and the eval-only model `anthropic/claude-sonnet-5.5`
 **When** the suite runs
-**Then** it runs at least once against each of the five, not just whichever model is active during development
+**Then** it runs at least once against each of the four, not just whichever model is active during development
 
 **Given** `anthropic/claude-sonnet-5.5`
 **When** configured
@@ -1228,7 +1228,7 @@ So that I can assess the work fairly without having to hunt through the codebase
 
 **Given** the finished build
 **When** the "Known Weaknesses & Improvement Suggestions" section is written
-**Then** it honestly lists real limitations (e.g. CAP-4's best-effort v1 scope, voice v1's transcript-review step vs. deferred speech-to-speech, lazy-only missed-check-in detection with no proactive notifications, Mistral Moderation 2's adoption still pending the user's own eval-set testing, `google/gemini-3.8-flash` serving as both an eval judge and a selectable registry entry, and the `mistral-large-4` id/pricing still unverified) and what would improve each
+**Then** it honestly lists real limitations (e.g. CAP-4's best-effort v1 scope, voice v1's transcript-review step vs. deferred speech-to-speech, lazy-only missed-check-in detection with no proactive notifications, Mistral Moderation 2's adoption still pending the user's own eval-set testing, and `google/gemini-3.8-flash` serving as both an eval judge and a selectable registry entry) and what would improve each
 
 **Given** the course's grading criteria (Agent Purpose, Core Functionality, User Interface, Technical Implementation, Documentation)
 **When** the traceability table is written

@@ -90,9 +90,8 @@ Entries verified by the user via web as of 2026-11-14:
 | `gpt-6-luna` | openai | $0.10 | $0.50 | 2026-11-14 | Above 272K input tokens: $0.20 / $0.75 (optional `long_context_tier` field). OpenAI's own id for this model is `gpt-6-luna`. |
 | `claude-haiku-4.5` | anthropic | **to verify** | **to verify** | - | OpenRouter id `anthropic/claude-haiku-4.5`. Price not yet recorded: look it up on the actual router before shipping and set `price_as_of` then. |
 | `gemini-3.8-flash` | google | $0.75 | $3.75 | 2026-11-14 | Rising to $1.50 / $7.50 from 2027-01-01. Output price includes thinking tokens. Also an eval judge (see `evals.md`); selecting it in settings never affects judging. |
-| `mistral-large-4` | mistral | $1.36 | $4.18 | 2026-11-14 | **Unverified:** the OpenRouter id is `mistralai/mistral-large-4-0` and must be checked against whichever actual provider/router serves this model before shipping — a router can be priced higher than the model's own direct API, and price must always match the provider/router actually in use. |
 
-The registry holds exactly these four user-selectable chat entries (default: `gpt-6-luna`), all routed via OpenRouter. **Eval-only, not in the registry and never user-selectable:** `anthropic/claude-sonnet-5.5` ($2.00 / $10.00 per 1M, as of 2026-11-14; used only by on-demand evals as a fifth compared model) and the judge `deepseek/deepseek-v4.1-flash` (judge only; price to verify when configured).
+The registry holds exactly these three user-selectable chat entries (default: `gpt-6-luna`), all routed via OpenRouter. `mistralai/mistral-large-4-0` ($1.36 / $4.18) was removed (too slow: it repeatedly hit the 15 s fallback timeout). **Eval-only, not in the registry and never user-selectable:** `anthropic/claude-sonnet-5.5` ($2.00 / $10.00 per 1M, as of 2026-11-14; used only by on-demand evals as a fourth compared model) and the judge `deepseek/deepseek-v4.1-flash` (judge only; price to verify when configured).
 
 `set_personality`/`set_model`/`set_ui_language`/`set_currency` are plain-code tools (pure Postgres writes to a dedicated `user_settings` table) — selecting a personality, model, UI language, or currency is never itself an LLM decision, and all four are only ever invoked via the settings UI's API calls, never autonomously by the agent. If the selected provider's key is missing or a call fails, the system falls back to the default model with a neutral notice rather than a hard error. `set_ui_language` defaults to English; `set_currency` defaults to EUR.
 
@@ -110,7 +109,7 @@ One LangGraph thread per plan (AD-18 refined), plus a separate discovery chat th
 
 ## Evals & quality report
 
-See `evals.md` — TypeScript-only tooling (`agentevals` + Vitest + LangSmith), deterministic unit/guardrail tests, a 15-25 case trajectory suite run against all 4 model registry entries plus the eval-only `anthropic/claude-sonnet-5.5`, and a report script.
+See `evals.md` — TypeScript-only tooling (`agentevals` + Vitest + LangSmith), deterministic unit/guardrail tests, a 15-25 case trajectory suite run against all 3 model registry entries plus the eval-only `anthropic/claude-sonnet-5.5`, and a report script.
 
 ## Moderation (mandatory)
 
