@@ -55,7 +55,7 @@ FR19: Agent responses in the chat render basic Markdown (headings, lists, bold t
 
 ### Additional NonFunctional Requirements
 
-NFR7: Eval tooling is TypeScript-only (`agentevals` + Vitest + LangSmith) - no Python eval packages. A trajectory suite (15-25 cases) plus deterministic unit and guardrail tests run against all 4 model-registry entries, with a report script producing a linked markdown/HTML report (tool-call accuracy, constraint-test results, model x accuracy table, run date).
+NFR7: Eval tooling is TypeScript-only (`agentevals` + Vitest + LangSmith) - no Python eval packages. A trajectory suite (15-25 cases) plus deterministic unit and guardrail tests run against all 3 model-registry entries plus the eval-only model `anthropic/claude-sonnet-5.5` (never user-selectable), with a report script producing a linked markdown/HTML report (tool-call accuracy, constraint-test results, model x accuracy table, run date).
 
 NFR8: Chat topology is one discovery thread per user plus one thread per plan - never a single thread blending pre-plan discovery with plan-specific work.
 
@@ -391,6 +391,30 @@ So that a longer turn doesn't feel like a frozen screen, and longer answers stay
 **Given** any text shown in the chat message list - user messages, agent answers (including Markdown-rendered ones), and system notices (the jailbreak-rejection message, the error fallback, the unsafe-response fallback)
 **When** it is rendered
 **Then** all of it uses the same font size, taken from one shared style value in `ChatMessage` - not set per message type; Markdown structure (headings, bold, lists) is distinguished by weight and spacing, never by a different font size
+
+### Story 1.6: Glass Style & Contrast Re-verification
+
+As a user,
+I want the frosted-glass look the design specifies,
+So that the app matches UX-DR3 and Story 1.1's acceptance criterion, which was accepted without it.
+
+**Acceptance Criteria:**
+
+**Given** the web app
+**When** built
+**Then** `shadcn-glass-ui` is a dependency again and its glass style is applied through the shared components (cards, buttons, inputs/selects/textareas, chat bubbles, header) with the pinned teal tokens from `stack.md` - defined once, never per screen
+
+**Given** any text in light and dark mode on the glass surfaces
+**When** checked
+**Then** contrast is at least 4.5:1 (UX-DR4), re-verified with the translucent surfaces, and the measured values are in the story report
+
+**Given** the glass pass
+**When** complete
+**Then** it is visual only: no change to behaviour, ARIA, i18n keys or existing tests, and the intake, chat, ideas and settings screens all render with it
+
+**Given** any later review or cleanup
+**When** it flags `shadcn-glass-ui` or its style import as unused
+**Then** it stays (UX-DR3); removal needs the user's approval
 
 ## Epic 2: Tailored Idea Discovery
 
@@ -836,6 +860,10 @@ So that I can tune the experience without needing a developer to change code.
 **When** `set_model` is called
 **Then** it is a plain deterministic Postgres write (AD-4/AD-20) - not an LLM decision - and subsequent turns are answered by the newly selected model
 
+**Given** the registry's contents
+**When** seeded
+**Then** it holds exactly three user-selectable chat entries, all routed via OpenRouter: `openai/gpt-6-luna` (default), `google/gemini-3.8-flash` and `anthropic/claude-haiku-4.5` (`mistralai/mistral-large-4-0` was removed: too slow, it repeatedly hit the fallback timeout); no other model is selectable (not the eval-only `anthropic/claude-sonnet-5.5`, not the `deepseek/deepseek-v4.1-flash` judge, not the moderation or transcription models)
+
 **Given** the registry's pricing data
 **When** displayed anywhere in the app
 **Then** it is read from the registry, never a hardcoded value in application code
@@ -1061,20 +1089,24 @@ So that model choice isn't just a guess.
 **Then** they check tool arguments via `toolArgsMatchMode` (not only tool names) and run fully deterministically - no judge model is involved in these
 
 **Given** `createTrajectoryLLMAsJudge` quality cases only
-**When** judging any of the 4 registry models' trajectories
-**Then** they always use one fixed judge model, `gpt-6-sol` (OpenAI, pinned by exact id in config, verified current and priced at $2/$10 per 1M), never one of the 4 registry entries, and never exposed in the user-facing model list
+**When** judging any of the 4 evaluated models' trajectories (the 3 registry entries plus the eval-only model)
+**Then** they use two fixed judge models, `google/gemini-3.8-flash` and `deepseek/deepseek-v4.1-flash`, each pinned by exact id in config; `deepseek/deepseek-v4.1-flash` is a judge only and never appears in the user-facing model list, while `google/gemini-3.8-flash` is also a user-selectable registry entry (a user's selection never affects which models judge)
 
-**Given** the judge model
+**Given** the judge models
 **When** disclosed in the report (Story 6.3)
-**Then** it is noted as a known limitation that the judge shares a provider (OpenAI) with one evaluated registry model (`gpt-6-luna`)
+**Then** it is noted as a known limitation that `google/gemini-3.8-flash` is both a judge and an evaluated registry entry (a judge scoring its own model's trajectories), and the report states which judge scored which model
 
 **Given** the suite's trajectory-accuracy results
 **When** scored
 **Then** an explicit 80% tool-call-accuracy target applies **per model** (not an aggregate average) as a single tunable constant, and the report always shows the actual measured number per model, even below 80% - never suppressed or rounded up
 
-**Given** the 4 model-registry entries (AD-20)
+**Given** the 3 model-registry entries (AD-20) and the eval-only model `anthropic/claude-sonnet-5.5`
 **When** the suite runs
-**Then** it runs at least once against each of them, not just whichever model is active during development
+**Then** it runs at least once against each of the four, not just whichever model is active during development
+
+**Given** `anthropic/claude-sonnet-5.5`
+**When** configured
+**Then** it exists only in the eval configuration, is not in the user-selectable model registry, never appears in the settings dropdown, and is used only by on-demand evals
 
 **Given** the suite
 **When** triggered
@@ -1102,7 +1134,7 @@ So that I don't have to re-run anything myself to see the evidence.
 
 **Given** the report's content
 **When** written
-**Then** it also includes known limitations (cross-referencing Epic 7's Story 7.4, plus the judge-model/`gpt-6-luna` shared-provider note from Story 6.2) and the eval run's own estimated cost (using the CAP-8 token/cost mechanism against the actual calls the eval run itself made)
+**Then** it also includes known limitations (cross-referencing Epic 7's Story 7.4, plus the judge/registry-overlap note (`google/gemini-3.8-flash` as both judge and registry entry) from Story 6.2) and the eval run's own estimated cost (using the CAP-8 token/cost mechanism against the actual calls the eval run itself made)
 
 **Given** the generated report
 **When** published
@@ -1110,7 +1142,7 @@ So that I don't have to re-run anything myself to see the evidence.
 
 **Given** the same report run
 **When** the script completes
-**Then** it also emits a machine-readable JSON summary with the same facts (per-model accuracy, safety pass/fail, run date, judge model, run cost, limitations) - this is the source the public Quality & Decisions page (Story 7.5) reads, so that page's content is generated, not hand-copied
+**Then** it also emits a machine-readable JSON summary with the same facts (per-model accuracy, safety pass/fail, run date, judge models, run cost, limitations) - this is the source the public Quality & Decisions page (Story 7.5) reads, so that page's content is generated, not hand-copied
 
 ## Epic 7: Documentation & Deployment Handoff
 
@@ -1220,7 +1252,7 @@ So that I can assess the work fairly without having to hunt through the codebase
 
 **Given** the finished build
 **When** the "Known Weaknesses & Improvement Suggestions" section is written
-**Then** it honestly lists real limitations (e.g. CAP-4's best-effort v1 scope, voice v1's transcript-review step vs. deferred speech-to-speech, lazy-only missed-check-in detection with no proactive notifications, Mistral Moderation 2's adoption still pending the user's own eval-set testing, the eval judge sharing a provider with `gpt-6-luna`, and the `mistral-large-4` id/pricing still unverified) and what would improve each
+**Then** it honestly lists real limitations (e.g. CAP-4's best-effort v1 scope, voice v1's transcript-review step vs. deferred speech-to-speech, lazy-only missed-check-in detection with no proactive notifications, Mistral Moderation 2's adoption still pending the user's own eval-set testing, and `google/gemini-3.8-flash` serving as both an eval judge and a selectable registry entry) and what would improve each
 
 **Given** the course's grading criteria (Agent Purpose, Core Functionality, User Interface, Technical Implementation, Documentation)
 **When** the traceability table is written
@@ -1248,7 +1280,7 @@ So that I can see this evidence directly, generated from what already exists, wi
 
 **Given** the Evaluation Results section
 **When** rendered
-**Then** it reads the JSON summary Story 6.3's report script emits (tool-call accuracy per model, safety pass/fail against the 100% bar, run date, judge model, run cost, limitations) - not a hand-copied snapshot
+**Then** it reads the JSON summary Story 6.3's report script emits (tool-call accuracy per model, safety pass/fail against the 100% bar, run date, judge models, run cost, limitations) - not a hand-copied snapshot
 
 **Given** the Key Decisions section
 **When** rendered
