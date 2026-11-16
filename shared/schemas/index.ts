@@ -102,3 +102,12 @@ export const MODEL_FAILURE_MESSAGE =
   "Something went wrong on our end and I couldn't generate a response. Please try again in a moment.";
 
 export * from './intake.js';
+
+/**
+ * Story 1.5: the turn-scoped SSE progress/result wire contract. Re-exported
+ * at the END of this file (not the top) — `progress.ts` imports
+ * `chatMessageSchema` back from this module, and this file's own
+ * `chatMessageSchema` export must already be initialized by the time that
+ * circular import is resolved.
+ */
+export * from './progress.js';

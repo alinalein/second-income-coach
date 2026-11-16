@@ -4,8 +4,9 @@ import { HumanMessage, type BaseMessage } from '@langchain/core/messages';
 import {
   chatHistoryResponseSchema,
   chatMessageSchema,
+  progressEventSchema,
+  resultEventSchema,
   sendMessageRequestSchema,
-  sendMessageResponseSchema,
   type ChatMessage,
 } from '@app/shared';
 import type { Env } from '../../config/env.js';
@@ -61,7 +62,9 @@ export function createChatRouter({ env, agent }: ChatRouterDeps) {
     const parseResult = sendMessageRequestSchema.safeParse(req.body);
     if (!parseResult.success) {
       // I/O matrix: "Over-length message" -> "Rejected at the schema
-      // boundary (4xx)" / "Never silently truncated".
+      // boundary (4xx)" / "Never silently truncated". Rejected before any SSE
+      // headers are written, so this still round-trips as a normal 4xx JSON
+      // response, not a stream.
       res.status(400).json({ error: 'Bad request' });
       return;
     }
@@ -75,9 +78,99 @@ export function createChatRouter({ env, agent }: ChatRouterDeps) {
     const modelFailureMessage =
       detectReplyLanguage(parseResult.data.content) === 'de' ? MODEL_FAILURE_MESSAGE_DE : MODEL_FAILURE_MESSAGE;
 
+    // AC6: "progress events for one turn ... arrive over one turn-scoped SSE
+    // connection". Code Map: write SSE headers, then stream `'custom'`-mode
+    // chunks (progress events only, never partial answer text — AD-19) as
+    // `event: progress` frames, and close with one `event: result` frame.
+    // `X-Accel-Buffering: no` is a reverse-proxy-buffering opt-out (nginx and
+    // similar) — harmless on proxies that ignore it.
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+
+    // Design Notes: "Guarding res.write/res.end against a mid-turn client
+    // disconnect" — the connection stays open for the whole turn, long enough
+    // for a tab close/navigation to land mid-stream. A write to an
+    // already-ended/destroyed response doesn't necessarily throw into a
+    // surrounding try/catch, so every write goes through this guard instead
+    // of a bare `res.write`/`res.end` call.
+    function safeWrite(chunk: string): void {
+      if (res.writableEnded) return;
+      try {
+        res.write(chunk);
+      } catch (error) {
+        console.warn('[chat] SSE write failed (client likely disconnected):', { threadId, error: (error as Error)?.message });
+      }
+    }
+
+    // Guards its own body (not just the write) so either call site -- the
+    // happy path or the catch block below -- can never leave the connection
+    // open indefinitely, the one guarantee this whole feature must keep.
+    function writeResultEvent(message: ChatMessage): void {
+      try {
+        const event = resultEventSchema.parse({ type: 'result', message });
+        safeWrite(`event: result\ndata: ${JSON.stringify(event)}\n\n`);
+      } catch (error) {
+        console.error('[chat] failed to build/write the terminal result event:', { threadId, error: (error as Error)?.message });
+      }
+      if (!res.writableEnded) {
+        try {
+          res.end();
+        } catch {
+          // Already-closed connection — nothing left to do.
+        }
+      }
+    }
+
+    // Design Notes: "No early termination of agent.stream()'s iteration on
+    // client disconnect" -- stops consuming/writing once the client is gone;
+    // does not claim to abort the underlying model/moderation call already
+    // in flight, only to stop wasted local iteration and no-op writes.
+    let clientDisconnected = false;
+    req.on('close', () => {
+      clientDisconnected = true;
+    });
+
     try {
-      const result = await agent.invoke({ messages: [userMessage] }, { configurable: { thread_id: threadId } });
-      const lastMessage = result.messages[result.messages.length - 1];
+      // Design Notes: "Why streamMode: ['custom', 'values'], not 'custom' +
+      // a separate agent.getState(...) read" — a separate getState() call
+      // after the stream ends reads the *thread's* current state, which can
+      // race a concurrent request on the same thread_id. Requesting 'values'
+      // alongside 'custom' on this same stream() call instead yields this
+      // invocation's own state after each superstep as `['values', payload]`
+      // tuples, scoped to only this call.
+      const stream = await agent.stream(
+        { messages: [userMessage] },
+        { configurable: { thread_id: threadId }, streamMode: ['custom', 'values'] },
+      );
+
+      let lastValuesMessages: BaseMessage[] | undefined;
+
+      for await (const [mode, payload] of stream as AsyncIterable<[string, unknown]>) {
+        if (clientDisconnected) break; // triggers the loop's own iterator.return()
+
+        if (mode === 'custom') {
+          // Only forward chunks that actually match the progress wire
+          // contract — defensive against any other custom-stream writer that
+          // might ever be added — never a raw/unvalidated passthrough.
+          const parsed = progressEventSchema.safeParse(payload);
+          if (parsed.success) {
+            safeWrite(`event: progress\ndata: ${JSON.stringify(parsed.data)}\n\n`);
+          }
+        } else if (mode === 'values') {
+          lastValuesMessages = (payload as { messages?: BaseMessage[] })?.messages;
+        }
+      }
+
+      // AC4: the final answer is only released after `afterModel` moderation
+      // has resolved — `lastValuesMessages` is this invocation's own final
+      // state (the last superstep the stream emitted before completing), not
+      // a separate thread-wide read, so no concurrent request can race it.
+      const messages = lastValuesMessages ?? [];
+      const lastMessage = messages[messages.length - 1];
       const reply = lastMessage ? toChatMessage(lastMessage) : undefined;
 
       if (!reply) {
@@ -85,40 +178,36 @@ export function createChatRouter({ env, agent }: ChatRouterDeps) {
         // (no messages, or a last message with no renderable text/type) —
         // log it the same way the catch branch below logs a thrown failure,
         // so this fallback path isn't silent (thread id + count only).
-        console.error('[chat] agent produced no usable reply:', { threadId, messageCount: result.messages.length });
+        console.error('[chat] agent produced no usable reply:', { threadId, messageCount: messages.length });
       }
 
-      res.json(
-        sendMessageResponseSchema.parse({
-          message:
-            reply ??
-            chatMessageSchema.parse({
-              id: randomUUID(),
-              role: 'assistant',
-              kind: 'error',
-              content: modelFailureMessage,
-              createdAt: new Date().toISOString(),
-            }),
-        }),
-      );
-    } catch (error) {
-      // Boundary: "No log destination ... ever contains raw user message
-      // text" — only the thread id is logged, never `parseResult.data.content`.
-      console.error('[chat] agent invocation failed:', { threadId, error: (error as Error)?.message });
-
-      // I/O matrix: "Model call exhausts retries" -> "User sees the fixed
-      // generic error message" / "App keeps running, no crash". Returned as
-      // a normal, schema-conformant reply (not a 5xx) so the frontend renders
-      // it the same way as any other reply, just with `kind: 'error'`.
-      res.json(
-        sendMessageResponseSchema.parse({
-          message: chatMessageSchema.parse({
+      writeResultEvent(
+        reply ??
+          chatMessageSchema.parse({
             id: randomUUID(),
             role: 'assistant',
             kind: 'error',
             content: modelFailureMessage,
             createdAt: new Date().toISOString(),
           }),
+      );
+    } catch (error) {
+      // Boundary: "No log destination ... ever contains raw user message
+      // text" — only the thread id is logged, never `parseResult.data.content`.
+      console.error('[chat] agent invocation failed:', { threadId, error: (error as Error)?.message });
+
+      // I/O matrix: "Model call exhausts retries" -> "stream ends with
+      // `result` (kind 'error', fixed EN/DE fallback) ... stream still ends
+      // cleanly (no crash)". Written as the terminal SSE event, not a JSON
+      // body — the stream is already open by the time any failure can occur
+      // here.
+      writeResultEvent(
+        chatMessageSchema.parse({
+          id: randomUUID(),
+          role: 'assistant',
+          kind: 'error',
+          content: modelFailureMessage,
+          createdAt: new Date().toISOString(),
         }),
       );
     }

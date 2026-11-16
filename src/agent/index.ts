@@ -6,6 +6,7 @@ import type { Env } from '../config/env.js';
 import type { createDb } from '../db/client.js';
 import { createChatModel } from './model.js';
 import { createModerationMiddleware, type ClassifyText } from './moderation.js';
+import { createProgressMiddleware } from './progress.js';
 import { applyModelNodeResilience } from './resilience.js';
 import { createSubmitIntakeTool } from '../tools/plain/submit_intake.js';
 
@@ -95,12 +96,16 @@ export interface CreateCoachAgentDeps {
  */
 export function createCoachAgent({ env, checkpointer, model, classify, db }: CreateCoachAgentDeps) {
   const chatModel = model ?? createChatModel(env);
+  const progress = createProgressMiddleware();
   const moderation = createModerationMiddleware(env, { classify });
   const systemPrompt = dynamicSystemPromptMiddleware(buildSystemPrompt);
 
+  // Story 1.5 Design Notes: `progress` goes first so its `beforeModel` always
+  // fires, even when `moderation`'s own `beforeModel` jumps straight to
+  // `end` on a jailbreak reject.
   const reactAgent = createAgent({
     model: chatModel,
-    middleware: [moderation, systemPrompt],
+    middleware: [progress, moderation, systemPrompt],
     tools: [createSubmitIntakeTool(db)],
   });
 
