@@ -596,6 +596,40 @@ So that the suggestions are current and worth acting on, not generic.
 **When** it runs
 **Then** it reuses the same `web_search` provider key (no new external service, no new variable), uses the AD-7 cache, and keeps generation inside the ideas path's own timeout with the progress feedback from Story 2.2
 
+### Story 2.6: Faster Idea Generation (optional)
+
+As a user,
+I want idea generation to finish noticeably faster,
+So that the first-use wait is short without lowering the quality of the ideas.
+
+**Scheduling:** optional for the live demo on 2026-11-20; built only if time remains after every required story, and it never blocks the demo.
+
+**Acceptance Criteria:**
+
+**Given** the current generation path
+**When** this story starts
+**Then** one real run is instrumented first and the time per step (query planning, each search, moderation, the writing call, validation, DB write) is reported before anything is changed
+
+**Given** the measured steps
+**When** latency is reduced
+**Then** only waiting is removed: no fewer searches, no fewer results per search, no weaker moderation, no weaker validation or source rules, no fewer retries for transient errors
+
+**Given** the query-planning step
+**When** it is sped up
+**Then** options such as a small fast helper model (internal, never in the user-selectable registry) or reusing moderated, cached search results are evaluated against the measurement, and the chosen one is documented with its before/after timing
+
+**Given** any speed-up that reuses cached results
+**When** a request runs
+**Then** results are never shared across users, a changed intake invalidates them, and every reused result has already passed moderation (AD-7/AD-11)
+
+**Given** a typical successful run
+**When** measured before and after
+**Then** the report shows both numbers honestly, with a target of about 25 s for a normal run, and a run that misses the target is reported as such, not tuned by raising timeouts
+
+**Given** the speed-up
+**When** done
+**Then** the story's report lists the quality checks (Story 2.2 and 2.5 ACs) that still pass unchanged
+
 ## Epic 3: Plan Creation & Activation
 
 Users turn a chosen idea into a concrete, timed plan and explicitly confirm it before it goes live; they can later switch to a different bookmarked idea's plan without losing progress.
