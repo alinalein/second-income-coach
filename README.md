@@ -137,6 +137,25 @@ Every tool the agent can invoke, split by the same boundary the architecture enf
 
 `web_search` is the only MCP integration in the system — there's no ready-made MCP server for the actual domain logic (idea matching, plan generation, check-in/accountability, income math), so all of that stays custom code. Search results pass through moderation (`wrapToolCall`) before they're cached or re-enter model context, so a cache hit can never bypass that check.
 
+## How idea generation works
+
+The steps the agent takes to turn a user's intake into 5 income ideas:
+
+```mermaid
+flowchart TD
+    A[1. Read the user's intake<br/>skills, interests, time, budget, risk, what stopped them] --> B[2. Discovery search<br/>what is actually selling or in demand for these skills and interests:<br/>trends, niches, platforms, demand signals]
+    B --> C[3. Safety-check the discovery results]
+    C --> D[4. Search the web for real income rates<br/>for the opportunities found]
+    D --> E[5. Safety-check the rate results]
+    E --> F[6. Write 5 ideas built from the findings and the intake<br/>each with rationale, time, cost, risk, how it can grow,<br/>demand evidence + income rate, both with sources]
+    F --> G{7. Check the ideas<br/>fit time, budget and risk?<br/>evidence for each?<br/>enough variety?}
+    G -- no --> F
+    G -- yes --> H[8. Save the ideas]
+    H --> I[9. Show 5 idea cards<br/>evidence and rate with sources on each card]
+```
+
+An idea that fails the check is rewritten, never saved as it is. Steps 2 and 3 and the "how it can grow" and demand-evidence parts of step 6 are Story 2.5; until it is built, the agent starts at step 4.
+
 ## Project status
 
 Planning is complete and reviewed (spec → architecture → 3-reviewer gate → epics). Implementation hasn't started yet — see [`_bmad-output/implementation-artifacts/sprint-status.yaml`](_bmad-output/implementation-artifacts/sprint-status.yaml) for the 7-epic/28-story breakdown and current status of each.
