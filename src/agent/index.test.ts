@@ -40,6 +40,9 @@ describe('createCoachAgent (hook integration: systemPrompt middleware wiring)', 
       // Story 2.1: `submit_intake`'s db handle is now the caller's own —
       // this test never exercises that tool, so a fake is enough.
       db: {} as never,
+      // Story 2.2: `generate_ideas`'s web_search tool — this test never
+      // exercises that tool either.
+      webSearchTool: {} as never,
     });
 
     await agent.invoke(

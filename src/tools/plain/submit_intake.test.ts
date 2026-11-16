@@ -4,7 +4,7 @@ import { eq } from 'drizzle-orm';
 import type { SubmitIntakeToolArgs } from '@app/shared';
 import { createDb } from '../../db/client.js';
 import { users, intake } from '../../db/schema/index.js';
-import { buildDiscoveryThreadId } from '../../agent/index.js';
+import { buildDiscoveryThreadId, buildIntakeTriggerThreadId } from '../../agent/index.js';
 import {
   deriveUserIdFromThreadId,
   handleSubmitIntake,
@@ -30,6 +30,9 @@ function intakeArgs(overrides: Partial<SubmitIntakeToolArgs> = {}): SubmitIntake
 describe('deriveUserIdFromThreadId (AD-18/Boundary: userId derivation)', () => {
   it.each([
     ['discovery:user-123', 'user-123'],
+    // Story 2.2 follow-up fix round 3, fix 1: `intake.ts` now invokes the
+    // agent on this internal-only thread, never `discovery:`.
+    ['intake-trigger:user-123', 'user-123'],
     ['discovery:', undefined],
     ['plan:abc', undefined],
     [undefined, undefined],
@@ -37,13 +40,17 @@ describe('deriveUserIdFromThreadId (AD-18/Boundary: userId derivation)', () => {
     expect(deriveUserIdFromThreadId(threadId)).toBe(expected);
   });
 
-  // Pins the round-trip with `buildDiscoveryThreadId` (`src/agent/index.ts`)
-  // directly: `deriveUserIdFromThreadId` is a hand-duplicated inverse of that
-  // function (Code Map), so a future change to the thread-id format should
-  // fail this test rather than silently breaking every intake submission.
-  it('round-trips with buildDiscoveryThreadId', () => {
+  // Pins the round-trip with `buildDiscoveryThreadId`/`buildIntakeTriggerThreadId`
+  // (`src/agent/index.ts`) directly: `deriveUserIdFromThreadId` is a
+  // hand-duplicated inverse of those functions (Code Map), so a future
+  // change to either thread-id format should fail this test rather than
+  // silently breaking every intake submission.
+  it.each([
+    ['buildDiscoveryThreadId', buildDiscoveryThreadId],
+    ['buildIntakeTriggerThreadId', buildIntakeTriggerThreadId],
+  ] as const)('round-trips with %s', (_name, buildThreadId) => {
     const userId = randomUUID();
-    expect(deriveUserIdFromThreadId(buildDiscoveryThreadId(userId))).toBe(userId);
+    expect(deriveUserIdFromThreadId(buildThreadId(userId))).toBe(userId);
   });
 });
 

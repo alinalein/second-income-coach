@@ -107,6 +107,7 @@ describe('App (AC: authenticated view renders)', () => {
         ),
         '/api/intake': () => new Response(JSON.stringify({ intake: existingIntakeRecord() }), { status: 200 }),
         '/api/chat/messages': new Response(JSON.stringify({ messages: [] }), { status: 200 }),
+        '/api/ideas': () => new Response(JSON.stringify({ ideas: [], currency: 'EUR' }), { status: 200 }),
       }),
     );
 
@@ -160,6 +161,9 @@ describe('App (Story 2.1: intake gates chat)', () => {
         if (url.includes('/api/chat/messages')) {
           return Promise.resolve(new Response(JSON.stringify({ messages: [] }), { status: 200 }));
         }
+        if (url.includes('/api/ideas')) {
+          return Promise.resolve(new Response(JSON.stringify({ ideas: [], currency: 'EUR' }), { status: 200 }));
+        }
         throw new Error(`Unmocked fetch: ${url}`);
       }),
     );
@@ -185,6 +189,7 @@ describe('App (Story 2.1: intake gates chat)', () => {
         '/api/auth/session': authSessionResponse(),
         '/api/intake': () => new Response(JSON.stringify({ intake: existingIntakeRecord() }), { status: 200 }),
         '/api/chat/messages': new Response(JSON.stringify({ messages: [] }), { status: 200 }),
+        '/api/ideas': () => new Response(JSON.stringify({ ideas: [], currency: 'EUR' }), { status: 200 }),
       }),
     );
 

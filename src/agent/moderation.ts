@@ -59,7 +59,14 @@ export type ModerationCategories = Record<string, boolean>;
  * that returns controlled categories without a network call. */
 export type ClassifyText = (text: string) => Promise<ModerationCategories>;
 
-function defaultClassify(env: Pick<Env, 'MISTRAL_API_KEY'>): ClassifyText {
+/**
+ * Exported (Story 2.2 Code Map: "reuse exported `ClassifyText`/
+ * `defaultClassify(env)`") so `src/agent/moderation-web-search.ts`'s
+ * `wrapToolCall` hook can reuse this exact Mistral Moderation 2 call
+ * instead of re-implementing a second one — a one-word, additive, non-
+ * behavior-changing export, not a change to this file's own logic.
+ */
+export function defaultClassify(env: Pick<Env, 'MISTRAL_API_KEY'>): ClassifyText {
   const client = new Mistral({ apiKey: env.MISTRAL_API_KEY });
   return async (text: string) => {
     const response = await client.classifiers.moderate({ model: MODERATION_MODEL_NAME, inputs: text });

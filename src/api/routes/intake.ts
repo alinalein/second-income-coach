@@ -9,8 +9,8 @@ import {
 import type { Env } from '../../config/env.js';
 import type { createDb } from '../../db/client.js';
 import type { CoachAgent } from '../../agent/index.js';
-import { buildDiscoveryThreadId } from '../../agent/index.js';
-import { getIntakeByUserId } from '../../tools/plain/submit_intake.js';
+import { buildIntakeTriggerThreadId } from '../../agent/index.js';
+import { getIntakeByUserId, upsertIntake } from '../../tools/plain/submit_intake.js';
 import { createStrictRateLimiter } from '../middleware/rateLimit.js';
 
 export interface IntakeRouterDeps {
@@ -20,13 +20,19 @@ export interface IntakeRouterDeps {
 }
 
 /**
- * Builds the human message the discovery thread sees for an intake
- * submission (Boundary: "Intake free text reaches `submit_intake` only via
+ * Builds the human message the agent sees for an intake submission
+ * (Boundary: "Intake free text reaches `submit_intake` only via
  * `agent.invoke()` ... never call the persistence logic directly from the
  * HTTP route"). Instructs the agent to call `submit_intake` with exactly
  * these values — it still has to classify `failurePattern` itself
  * (AD-4) — while routing `stoppedBeforeText`/`skillsInterests` through the
  * same moderation hooks (NFR4/AD-11) every other user message goes through.
+ *
+ * Story 2.2 follow-up fix round 3, fix 1: this now runs on the
+ * internal-only `intake-trigger:` thread (below), never the user-visible
+ * discovery thread — previously it ran there, so this message and the
+ * model's reply to it were persisted into, and rendered from, the user's
+ * real chat history.
  */
 /** Wraps a free-text field's raw value in a simple delimiter so it can't
  * blend into the surrounding instruction text it's spliced into below — the
@@ -84,7 +90,9 @@ export function createIntakeRouter({ env, db, agent }: IntakeRouterDeps) {
     }
 
     const userId = req.session.userId!;
-    const threadId = buildDiscoveryThreadId(userId);
+    // Story 2.2 follow-up fix round 3, fix 1: internal-only thread, never
+    // the user's visible discovery thread.
+    const threadId = buildIntakeTriggerThreadId(userId);
 
     try {
       // Read the row's current state *before* invoking the agent, so the
@@ -94,6 +102,23 @@ export function createIntakeRouter({ env, db, agent }: IntakeRouterDeps) {
       // which must generic-error even when an existing row is left
       // untouched, not silently report it as this submission's result.
       const before = await getIntakeByUserId(db, userId);
+
+      // Round 10 (open item, user-approved): `failurePattern` is only ever
+      // re-derived from `stoppedBeforeText` (the agent classifies it from
+      // that one field, never the others) — an unchanged `stoppedBeforeText`
+      // means there is nothing left for a model to decide, so this skips the
+      // agent/model call entirely and upserts directly, reusing the stored
+      // classification. Boundary/scope, stated plainly: this is the one
+      // field that gates the fast path, exactly as specified — a changed
+      // `skillsInterests` alone also takes it, and is *not* re-moderated by
+      // this path (moderation only runs as part of the full agent turn
+      // below). First-time submission (`before` undefined) always takes the
+      // full path, since there's no stored classification to reuse yet.
+      if (before && before.stoppedBeforeText === parseResult.data.stoppedBeforeText) {
+        const after = await upsertIntake(db, userId, { ...parseResult.data, failurePattern: before.failurePattern });
+        res.json(submitIntakeResponseSchema.parse({ intake: after }));
+        return;
+      }
 
       await agent.invoke(
         { messages: [new HumanMessage(buildIntakeAgentMessage(parseResult.data))] },

@@ -60,12 +60,21 @@ export async function getIntakeByUserId(db: Db, userId: string): Promise<IntakeR
  * function via `config.configurable.thread_id` (Boundary: "`userId` is
  * derived server-side from the session-rooted thread id — never trusted as
  * a model-supplied tool argument").
+ *
+ * Story 2.2 follow-up fix round 3, fix 1: `submit_intake` is now invoked on
+ * the internal-only `intake-trigger:` thread (`buildIntakeTriggerThreadId`,
+ * `src/agent/index.ts`), never the user-visible `discovery:` thread — both
+ * prefixes are accepted (same precedent as `generate_ideas.ts`'s own
+ * `deriveUserIdFromThreadId`) so this keeps working regardless of which
+ * kind invokes it.
  */
-const DISCOVERY_THREAD_PREFIX = 'discovery:';
+const KNOWN_THREAD_PREFIXES = ['discovery:', 'intake-trigger:'];
 
 export function deriveUserIdFromThreadId(threadId: string | undefined): string | undefined {
-  if (!threadId || !threadId.startsWith(DISCOVERY_THREAD_PREFIX)) return undefined;
-  const userId = threadId.slice(DISCOVERY_THREAD_PREFIX.length);
+  if (!threadId) return undefined;
+  const prefix = KNOWN_THREAD_PREFIXES.find((candidate) => threadId.startsWith(candidate));
+  if (!prefix) return undefined;
+  const userId = threadId.slice(prefix.length);
   return userId.length > 0 ? userId : undefined;
 }
 

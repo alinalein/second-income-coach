@@ -20,6 +20,6 @@
     "resolveJsonModule": true,
     "verbatimModuleSyntax": true
   },
-  "include": ["schemas/**/*.ts"],
+  "include": ["schemas/**/*.ts", "money.ts"],
   "exclude": ["**/*.test.ts", "dist", "node_modules"]
 }

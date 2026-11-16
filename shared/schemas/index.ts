@@ -102,3 +102,5 @@ export const MODEL_FAILURE_MESSAGE =
   "Something went wrong on our end and I couldn't generate a response. Please try again in a moment.";
 
 export * from './intake.js';
+export * from './ideas.js';
+export * from '../money.js';

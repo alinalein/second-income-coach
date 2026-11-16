@@ -156,13 +156,17 @@ describe('createIntakeRouter POST /', () => {
   // `after` check this route does: an existing row that's left untouched
   // must generic-error too, not be silently reported as this submission's
   // result (the exact scenario `updatedAt`-comparison guards against).
+  // `stoppedBeforeText` must differ from the existing row's (round 10's
+  // instant-save fast path below takes over otherwise) — this test is
+  // specifically exercising the *full agent path*'s failure handling.
   it('returns a generic error and leaves an existing row unchanged when the agent turn never calls submit_intake', async () => {
     const userId = await createTestUser();
     try {
       const existing = await upsertIntake(db, userId, toolArgs());
       const agent = fakeAgent({ invoke: vi.fn().mockResolvedValue({ messages: [] }) });
+      const changedStoppedBefore = { ...validBody(), stoppedBeforeText: 'A different reason than before.' };
 
-      const res = await request(buildTestApp(agent, userId)).post('/api/intake').send(validBody());
+      const res = await request(buildTestApp(agent, userId)).post('/api/intake').send(changedStoppedBefore);
 
       expect(res.status).toBe(502);
       const [row] = await db.select().from(intake).where(eq(intake.userId, userId));
@@ -192,9 +196,39 @@ describe('createIntakeRouter POST /', () => {
       expect(res.status).toBe(200);
       expect(res.body.intake).toMatchObject(validBody());
       expect(res.body.intake.failurePattern).toBe('overwhelm');
+      // Story 2.2 follow-up fix round 3, fix 1: the trigger runs on the
+      // internal-only `intake-trigger:` thread, never the user-visible
+      // `discovery:` one — this is what keeps it out of
+      // GET /api/chat/messages.
       expect(agent.invoke).toHaveBeenCalledWith(expect.anything(), {
-        configurable: { thread_id: `discovery:${userId}` },
+        configurable: { thread_id: `intake-trigger:${userId}` },
       });
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+
+  // Story 2.2 round 10 (open item, user-approved): `failurePattern` is only
+  // ever re-derived from `stoppedBeforeText` — an unchanged value means
+  // there's nothing for a model to decide, so this is an instant save, no
+  // agent/model call at all. A changed weeklyTimeAvailability is still
+  // persisted; the stored failurePattern is reused, not re-classified.
+  it('saves instantly, without invoking the agent, when stoppedBeforeText is unchanged', async () => {
+    const userId = await createTestUser();
+    try {
+      await upsertIntake(db, userId, toolArgs({ failurePattern: 'life_disruption' }));
+      const agent = fakeAgent();
+
+      const res = await request(buildTestApp(agent, userId))
+        .post('/api/intake')
+        .send({ ...validBody(), weeklyTimeAvailability: '20h_plus' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.intake.weeklyTimeAvailability).toBe('20h_plus');
+      // Reused from the stored row, never re-classified — the fake agent
+      // (which would otherwise need to supply it) is never even invoked.
+      expect(res.body.intake.failurePattern).toBe('life_disruption');
+      expect(agent.invoke).not.toHaveBeenCalled();
     } finally {
       await cleanUp(userId);
     }

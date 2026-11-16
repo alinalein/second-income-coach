@@ -31,11 +31,16 @@ describe('loadEnv (I/O matrix: fresh checkout, missing env)', () => {
     LANGSMITH_PROJECT: 'test-project',
   };
 
+  const requiredStory22Vars = {
+    TAVILY_API_KEY: 'tavily-key',
+  };
+
   it('applies defaults and succeeds when only the required vars are present', () => {
     const env = loadEnv({
       DATABASE_URL: 'postgres://user:pass@localhost:5432/db',
       ...requiredStory12Vars,
       ...requiredStory13Vars,
+      ...requiredStory22Vars,
     });
 
     expect(env.PORT).toBe(3000);
@@ -86,6 +91,22 @@ describe('loadEnv (I/O matrix: fresh checkout, missing env)', () => {
       expect(issues).toContain('LANGSMITH_TRACING');
       expect(issues).toContain('LANGSMITH_API_KEY');
       expect(issues).toContain('LANGSMITH_PROJECT');
+    }
+  });
+
+  // Story 2.2 (CLAUDE.md external-service rule / Boundary: "TAVILY_API_KEY
+  // is required at startup — no degraded mode exists for this capability").
+  it('throws EnvValidationError naming TAVILY_API_KEY when missing', () => {
+    try {
+      loadEnv({
+        DATABASE_URL: 'postgres://user:pass@localhost:5432/db',
+        ...requiredStory12Vars,
+        ...requiredStory13Vars,
+      });
+      throw new Error('expected loadEnv to throw');
+    } catch (error) {
+      expect(error).toBeInstanceOf(EnvValidationError);
+      expect((error as EnvValidationError).issues.join('\n')).toContain('TAVILY_API_KEY');
     }
   });
 });

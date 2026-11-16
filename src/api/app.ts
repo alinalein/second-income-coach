@@ -14,12 +14,18 @@ import { createHealthRouter } from './routes/health.js';
 import { createAuthRouter } from './routes/auth.js';
 import { createChatRouter } from './routes/chat.js';
 import { createIntakeRouter } from './routes/intake.js';
+import { createIdeasRouter } from './routes/ideas.js';
 
 export interface AppDeps {
   env: Env;
   db: ReturnType<typeof createDb>['db'];
   pool: Pool;
   agent: CoachAgent;
+  /** Story 2.2 follow-up fix 1: a second compiled agent, identical to
+   * `agent` except for a longer outer-node timeout (AD-7) — used only by
+   * the ideas route below, since `generate_ideas` routinely runs longer
+   * than the chat/intake budget. */
+  ideasAgent: CoachAgent;
 }
 
 /**
@@ -34,7 +40,7 @@ export interface AppDeps {
  * Built as a factory (not a top-level `listen()`) so tests can construct the
  * app against injected deps without binding a real port or a real database.
  */
-export function createApp({ env, db, pool, agent }: AppDeps) {
+export function createApp({ env, db, pool, agent, ideasAgent }: AppDeps) {
   const app = express();
 
   // Behind a reverse proxy (Cloud Run, or any future load balancer), trust the
@@ -87,6 +93,10 @@ export function createApp({ env, db, pool, agent }: AppDeps) {
   // Story 2.1: structured intake, same auth-gated/post-chat mounting as the
   // chat router above.
   app.use('/api/intake', createIntakeRouter({ env, db, agent }));
+
+  // Story 2.2: tailored idea generation, same auth-gated mounting. Uses
+  // `ideasAgent` (longer node timeout, follow-up fix 1), not `agent`.
+  app.use('/api/ideas', createIdeasRouter({ env, db, agent: ideasAgent }));
 
   // Centralized error handler. Oversized bodies and malformed JSON surface
   // here as errors from the body parser — this is what keeps the process

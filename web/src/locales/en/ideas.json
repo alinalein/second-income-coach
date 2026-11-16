@@ -1,0 +1,62 @@
+{
+  "title": "Your tailored income ideas",
+  "loading": "Loading…",
+  "empty": "You don't have any ideas yet — let's generate your first 5.",
+  "generateButton": "Generate my 5 ideas",
+  "generateNewButton": "Generate new ideas",
+  "generatingButton": "Generating…",
+  "generatingStatus": "Generating your ideas…",
+  "generatingHint": "This can take a few seconds.",
+  "error": {
+    "loadFailed": "We couldn't load your ideas. Please reload the page.",
+    "generateFailed": "Generating your ideas failed or timed out. Please try again."
+  },
+  "card": {
+    "weeklyTimeLabel": "Weekly time",
+    "startupCostLabel": "Startup cost",
+    "riskLevelLabel": "Risk level",
+    "baselineRateLabel": "Baseline rate",
+    "monthlyPotentialLabel": "Max. potential per month (at full time budget)",
+    "estimateBadge": "estimate",
+    "vendorSourceLabel": "source: tool vendor",
+    "unverifiedLabel": "unverified",
+    "rateUnit": {
+      "hour": "per hour",
+      "project": "per project",
+      "month": "per month"
+    },
+    "sourceTrustTier": {
+      "tier_1": "official statistics",
+      "tier_2": "pay-data provider",
+      "tier_3": "independent source",
+      "tier_4": "unverified source"
+    }
+  },
+  "weeklyTimeAvailability": {
+    "under_5h": "Under 5 hours",
+    "5_to_10h": "5 to 10 hours",
+    "10_to_20h": "10 to 20 hours",
+    "20h_plus": "20+ hours"
+  },
+  "riskTolerance": {
+    "low": "Low",
+    "medium": "Medium",
+    "high": "High"
+  },
+  "citedIntakeFields": {
+    "skillsInterests": "Your skills & interests",
+    "weeklyTimeAvailability": "Your weekly time",
+    "startingBudgetRange": "Your starting budget",
+    "riskTolerance": "Your risk comfort",
+    "stoppedBeforeText": "What's stopped you before",
+    "failurePattern": "Your failure pattern"
+  },
+  "ideaType": {
+    "service": "Service",
+    "digital_product": "Digital product",
+    "content": "Content",
+    "resale_arbitrage": "Resale / arbitrage",
+    "teaching_coaching": "Teaching / coaching",
+    "other": "Other"
+  }
+}

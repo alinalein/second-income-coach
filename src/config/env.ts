@@ -63,6 +63,10 @@ const envSchema = z.object({
   }),
   LANGSMITH_API_KEY: z.string().min(1, 'LANGSMITH_API_KEY is required (see .env.example)'),
   LANGSMITH_PROJECT: z.string().min(1, 'LANGSMITH_PROJECT is required (see .env.example)'),
+  // Story 2.2: the `web_search` MCP tool's provider (Tavily). No degraded
+  // mode exists for this capability (Boundary) — unlike AD-20's optional
+  // registry providers, this is required at startup like every other key.
+  TAVILY_API_KEY: z.string().min(1, 'TAVILY_API_KEY is required (see .env.example)'),
 });
 
 export type Env = z.infer<typeof envSchema>;

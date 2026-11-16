@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { ThemeToggle } from './theme/theme-toggle';
 import { ChatThread } from './chat/ChatThread';
 import { IntakeForm } from './features/intake/IntakeForm';
+import { IdeasPanel } from './features/ideas/IdeasPanel';
 
 type AuthStatus =
   | { state: 'checking' }
@@ -212,21 +213,30 @@ export function App() {
         </div>
       </header>
 
-      <main className="mx-auto flex max-w-3xl flex-col gap-6 px-6 py-10">
+      {/* Story 2.2 follow-up fix 4: `<main>` itself is wide enough for
+       * `IdeasPanel`'s 3-column card grid; the intake form and chat thread
+       * (which should stay the original narrow reading width) get their own
+       * `max-w-3xl` wrapper instead of inheriting one from `<main>`. */}
+      <main className="mx-auto flex max-w-6xl flex-col gap-6 px-6 py-10">
         {hasIntake === null ? (
-          <p className="text-sm text-muted-foreground">{tIntake('loading')}</p>
+          <p className="mx-auto w-full max-w-3xl text-sm text-muted-foreground">{tIntake('loading')}</p>
         ) : showIntakeForm ? (
-          <IntakeForm
-            onSaved={() => {
-              setHasIntake(true);
-              setShowIntakeForm(false);
-            }}
-          />
+          <div className="mx-auto w-full max-w-3xl">
+            <IntakeForm
+              onSaved={() => {
+                setHasIntake(true);
+                setShowIntakeForm(false);
+              }}
+            />
+          </div>
         ) : (
           <>
-            <ChatThread />
-            <div>
-              <RevisitIntakeLink onClick={() => setShowIntakeForm(true)} />
+            <IdeasPanel />
+            <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
+              <ChatThread />
+              <div>
+                <RevisitIntakeLink onClick={() => setShowIntakeForm(true)} />
+              </div>
             </div>
           </>
         )}
