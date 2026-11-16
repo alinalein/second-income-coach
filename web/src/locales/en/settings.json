@@ -19,6 +19,13 @@
     "priceLabel": "${{input}}/${{output}} per 1M tokens (in/out)",
     "fallbackNotice": "If your selected model becomes unavailable, we'll automatically use the default model instead and let you know in chat."
   },
+  "uiLanguage": {
+    "label": "Language",
+    "options": {
+      "English": "English",
+      "German": "Deutsch"
+    }
+  },
   "saved": "Saved.",
   "error": "Something went wrong saving your settings. Please try again."
 }

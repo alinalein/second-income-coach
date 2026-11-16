@@ -12,7 +12,9 @@ const CONFIGURED_ENV: SettingsRouterDeps['env'] = { OPENROUTER_API_KEY: 'key', M
  * `getUserSettings` to resolve — no real Postgres needed, since this story
  * introduces no new DB constraint to verify (CLAUDE.md: a real-Postgres
  * integration test is reserved for those). */
-function fakeDb(row: { personality: string; model: string | null } | undefined): SettingsRouterDeps['db'] {
+function fakeDb(
+  row: { personality: string; model: string | null; uiLanguage?: string } | undefined,
+): SettingsRouterDeps['db'] {
   return {
     select: () => ({
       from: () => ({
@@ -42,13 +44,14 @@ function buildTestApp(db: SettingsRouterDeps['db'], userId = 'user-1') {
 // erroring" / settings "surfaced through an actual settings screen".
 describe('createSettingsRouter GET /', () => {
   it('resolves a stale stored model id to the default and lists registry-sourced selectable models, excluding moderation', async () => {
-    const app = buildTestApp(fakeDb({ personality: 'terse', model: 'not-a-real-model' }));
+    const app = buildTestApp(fakeDb({ personality: 'terse', model: 'not-a-real-model', uiLanguage: 'German' }));
 
     const res = await request(app).get('/api/settings');
 
     expect(res.status).toBe(200);
     expect(res.body.personality).toBe('terse');
     expect(res.body.model).toBe(DEFAULT_MODEL_ID);
+    expect(res.body.uiLanguage).toBe('German');
 
     const ids = res.body.selectableModels.map((entry: { id: string }) => entry.id);
     expect(ids).toEqual(
@@ -71,6 +74,17 @@ describe('createSettingsRouter GET /', () => {
       priceAsOf: expect.any(String),
     });
   });
+
+  // AC2: "a first-time visit with no stored preference -> defaults to
+  // English" — never browser-detected (AD-20).
+  it('defaults uiLanguage to English when the user has no settings row', async () => {
+    const app = buildTestApp(fakeDb(undefined));
+
+    const res = await request(app).get('/api/settings');
+
+    expect(res.status).toBe(200);
+    expect(res.body.uiLanguage).toBe('English');
+  });
 });
 
 // AC: validation boundary — a malformed body never reaches the plain write.
@@ -79,6 +93,17 @@ describe('createSettingsRouter POST /personality', () => {
     const app = buildTestApp(fakeDb({ personality: 'friendly', model: null }));
 
     const res = await request(app).post('/api/settings/personality').send({ personality: 'sarcastic' });
+
+    expect(res.status).toBe(400);
+  });
+});
+
+// AC1/validation boundary — a malformed body never reaches the plain write.
+describe('createSettingsRouter POST /ui-language', () => {
+  it('rejects an invalid UI language value with 400', async () => {
+    const app = buildTestApp(fakeDb({ personality: 'friendly', model: null }));
+
+    const res = await request(app).post('/api/settings/ui-language').send({ uiLanguage: 'French' });
 
     expect(res.status).toBe(400);
   });

@@ -12,11 +12,15 @@ function renderApp() {
 }
 
 function mockFetch(responses: Record<string, Response | Promise<Response>>) {
-  return vi.fn((input: RequestInfo | URL) => {
+  return vi.fn(async (input: RequestInfo | URL) => {
     const url = typeof input === 'string' ? input : input.toString();
     const match = Object.keys(responses).find((key) => url.includes(key));
     if (!match) throw new Error(`Unmocked fetch: ${url}`);
-    return Promise.resolve(responses[match]);
+    // `SettingsPage` and `useAppliedUiLanguage` both fetch `/api/settings` —
+    // clone so each caller gets its own readable body instead of the second
+    // `.json()` call throwing on an already-consumed stream.
+    const response = await responses[match]!;
+    return response.clone();
   });
 }
 
@@ -66,7 +70,7 @@ describe('App (AC: authenticated view renders)', () => {
         ),
         '/api/chat/messages': new Response(JSON.stringify({ messages: [] }), { status: 200 }),
         '/api/settings': new Response(
-          JSON.stringify({ personality: 'friendly', model: 'openai/gpt-6-luna', selectableModels: [] }),
+          JSON.stringify({ personality: 'friendly', model: 'openai/gpt-6-luna', selectableModels: [], uiLanguage: 'English' }),
           { status: 200 },
         ),
       }),

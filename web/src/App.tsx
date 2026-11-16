@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { ThemeToggle } from './theme/theme-toggle';
 import { ChatThread } from './chat/ChatThread';
 import { SettingsPage } from './features/settings/SettingsPage';
+import { useAppliedUiLanguage } from './features/settings/useAppliedUiLanguage';
 
 type AuthStatus =
   | { state: 'checking' }
@@ -121,6 +122,9 @@ export function App() {
   const { t } = useTranslation('common');
   const [authStatus, refreshAuthStatus] = useAuthStatus();
   const hasAuthError = useAuthError();
+  // AC: "it is applied when the app loads for a signed-in user" — only once
+  // a session is confirmed, never speculatively while still signed out.
+  useAppliedUiLanguage(authStatus.state === 'authenticated');
 
   if (authStatus.state !== 'authenticated') {
     return (

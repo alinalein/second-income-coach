@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, cleanup, fireEvent } from '@testing-library/react';
 import { SettingsPage } from './SettingsPage';
+import i18n from '../../i18n';
 
 function mockFetch(responses: Record<string, Response | (() => Response)>, onPost?: (url: string, body: unknown) => void) {
   return vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
@@ -16,6 +17,7 @@ function mockFetch(responses: Record<string, Response | (() => Response)>, onPos
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  void i18n.changeLanguage('en');
 });
 
 // AC: "settings persist per user in the user_settings table ... surfaced
@@ -34,6 +36,7 @@ describe('SettingsPage (AC: real settings screen)', () => {
             selectableModels: [
               { id: 'openai/gpt-6-luna', displayName: 'GPT-6 Luna', pricePerMillionInputTokens: 2.5, pricePerMillionOutputTokens: 10, priceAsOf: '2026-11-01' },
             ],
+            uiLanguage: 'English',
           }),
           { status: 200 },
         ),
@@ -55,7 +58,7 @@ describe('SettingsPage (AC: real settings screen)', () => {
       mockFetch(
         {
           '/api/settings': new Response(
-            JSON.stringify({ personality: 'friendly', model: 'openai/gpt-6-luna', selectableModels: [] }),
+            JSON.stringify({ personality: 'friendly', model: 'openai/gpt-6-luna', selectableModels: [], uiLanguage: 'English' }),
             { status: 200 },
           ),
           '/api/settings/personality': new Response(null, { status: 204 }),
@@ -75,5 +78,39 @@ describe('SettingsPage (AC: real settings screen)', () => {
 
     await waitFor(() => expect(posted?.url).toContain('/api/settings/personality'));
     expect(posted?.body).toEqual({ personality: 'formal' });
+  });
+
+  // AC1: "the user picks German or English -> set_ui_language persists the
+  // choice ... and the whole UI switches immediately" — both the immediate
+  // `i18n` switch and the POST happen off one select change.
+  it('switches the active i18n language immediately and POSTs the choice to /api/settings/ui-language', async () => {
+    let posted: { url: string; body: unknown } | undefined;
+
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(
+        {
+          '/api/settings': new Response(
+            JSON.stringify({ personality: 'friendly', model: 'openai/gpt-6-luna', selectableModels: [], uiLanguage: 'English' }),
+            { status: 200 },
+          ),
+          '/api/settings/ui-language': new Response(null, { status: 204 }),
+        },
+        (url, body) => {
+          posted = { url, body };
+        },
+      ),
+    );
+
+    render(<SettingsPage />);
+
+    const uiLanguageSelect = (await screen.findByLabelText(/language/i)) as HTMLSelectElement;
+    await waitFor(() => expect(uiLanguageSelect.value).toBe('English'));
+
+    fireEvent.change(uiLanguageSelect, { target: { value: 'German' } });
+
+    expect(i18n.language).toBe('de');
+    await waitFor(() => expect(posted?.url).toContain('/api/settings/ui-language'));
+    expect(posted?.body).toEqual({ uiLanguage: 'German' });
   });
 });

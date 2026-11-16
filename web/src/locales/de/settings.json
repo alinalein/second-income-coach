@@ -19,6 +19,13 @@
     "priceLabel": "{{input}} $/{{output}} $ pro 1 Mio. Token (ein/aus)",
     "fallbackNotice": "Falls dein ausgewähltes Modell nicht verfügbar ist, verwenden wir automatisch das Standardmodell und informieren dich im Chat darüber."
   },
+  "uiLanguage": {
+    "label": "Sprache",
+    "options": {
+      "English": "English",
+      "German": "Deutsch"
+    }
+  },
   "saved": "Gespeichert.",
   "error": "Beim Speichern deiner Einstellungen ist etwas schiefgelaufen. Bitte versuche es erneut."
 }
