@@ -392,6 +392,30 @@ So that a longer turn doesn't feel like a frozen screen, and longer answers stay
 **When** it is rendered
 **Then** all of it uses the same font size, taken from one shared style value in `ChatMessage` - not set per message type; Markdown structure (headings, bold, lists) is distinguished by weight and spacing, never by a different font size
 
+### Story 1.6: Glass Style & Contrast Re-verification
+
+As a user,
+I want the frosted-glass look the design specifies,
+So that the app matches UX-DR3 and Story 1.1's acceptance criterion, which was accepted without it.
+
+**Acceptance Criteria:**
+
+**Given** the web app
+**When** built
+**Then** `shadcn-glass-ui` is a dependency again and its glass style is applied through the shared components (cards, buttons, inputs/selects/textareas, chat bubbles, header) with the pinned teal tokens from `stack.md` - defined once, never per screen
+
+**Given** any text in light and dark mode on the glass surfaces
+**When** checked
+**Then** contrast is at least 4.5:1 (UX-DR4), re-verified with the translucent surfaces, and the measured values are in the story report
+
+**Given** the glass pass
+**When** complete
+**Then** it is visual only: no change to behaviour, ARIA, i18n keys or existing tests, and the intake, chat, ideas and settings screens all render with it
+
+**Given** any later review or cleanup
+**When** it flags `shadcn-glass-ui` or its style import as unused
+**Then** it stays (UX-DR3); removal needs the user's approval
+
 ## Epic 2: Tailored Idea Discovery
 
 Users complete an intake and receive 5 second-income ideas matched to their own skills, time, budget, and risk tolerance - not a generic list - and can curate that list by bookmarking or rejecting ideas.
