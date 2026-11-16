@@ -194,7 +194,13 @@ export function createIdeasRouter({ env, db, agent }: IdeasRouterDeps) {
         return;
       }
 
-      res.json(ideasResponseSchema.parse({ ideas: after, currency }));
+      // Bug fix: this response replaces the client's entire `ideas` list
+      // (Round 13), so it must apply the same AC3/AC5 "never show a
+      // rejected idea" filter `GET /` applies above — without it, a
+      // previously-rejected idea (never deleted, only status-changed)
+      // reappeared on every "Generate new ideas" click.
+      const visibleAfter = after.filter((idea) => idea.status !== 'rejected');
+      res.json(ideasResponseSchema.parse({ ideas: visibleAfter, currency }));
     } catch (error) {
       console.error('[ideas] generation failed:', { userId, error: (error as Error)?.message });
       if (!res.headersSent) res.status(502).json({ error: 'Ideas could not be generated' });

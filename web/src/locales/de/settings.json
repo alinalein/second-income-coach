@@ -1,6 +1,5 @@
 {
   "title": "Einstellungen",
-  "description": "Lege fest, wie der Coach mit dir spricht und welches Modell antwortet.",
   "personality": {
     "label": "Persönlichkeit",
     "options": {

@@ -95,12 +95,46 @@ function applyOptimisticIdeaStatus(current: IdeaResponse[], ideaId: string, stat
       // A rejected idea is never resurrected by someone else being selected
       // — in practice unreachable client-side (a rejected idea is already
       // removed from this array the moment it's rejected), kept only as a
-      // defensive mirror of the server's own rule.
-      if (idea.status === 'rejected') return idea;
+      // defensive mirror of the server's own rule. An already-`bookmarked`
+      // idea is left as the exact same object too (user-reported bug fix:
+      // re-selecting after switching away and back previously still "swept"
+      // every already-bookmarked sibling, flickering their buttons for a
+      // write that changed nothing).
+      if (idea.status === 'rejected' || idea.status === 'bookmarked') return idea;
       return { ...idea, status: 'bookmarked' };
     });
   }
   return current.map((idea) => (idea.id === ideaId ? { ...idea, status } : idea));
+}
+
+/** Which ids a given status change actually *changes* — `selected` sweeps
+ * every other idea that isn't already `rejected` or already `bookmarked`
+ * (an already-`bookmarked` sibling has nothing to change, so it's excluded:
+ * user-reported bug fix, see `applyOptimisticIdeaStatus`); `bookmarked`/
+ * `rejected` only ever touch the one target id. Used to scope both the
+ * pending-disabled set and the failure-revert to exactly what this one
+ * action changes, so a second, unrelated card's own in-flight action is
+ * never disabled or reverted by this one, and an unaffected sibling's
+ * buttons never flicker for a no-op write. */
+function affectedIdeaIds(current: IdeaResponse[], ideaId: string, status: SettableStatus): string[] {
+  if (status !== 'selected') return [ideaId];
+  return current
+    .filter((idea) => idea.id === ideaId || (idea.status !== 'rejected' && idea.status !== 'bookmarked'))
+    .map((idea) => idea.id);
+}
+
+/** The inverse of `applyOptimisticIdeaStatus`, scoped to exactly the ids a
+ * `priorById` snapshot covers: restores each one to its prior value in
+ * place, and re-inserts any that were optimistically removed (a `rejected`
+ * action), re-sorted by `createdAt` to match the server's own ordering. Ids
+ * not in `priorById` (a different, still-in-flight or since-completed
+ * action) are left untouched. */
+function revertOptimisticIdeaStatus(current: IdeaResponse[], priorById: Map<string, IdeaResponse>): IdeaResponse[] {
+  const presentIds = new Set(current.map((idea) => idea.id));
+  const restored = current.map((idea) => priorById.get(idea.id) ?? idea);
+  const reinserted = [...priorById.values()].filter((idea) => !presentIds.has(idea.id));
+  if (reinserted.length === 0) return restored;
+  return [...restored, ...reinserted].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
 
 /** Fix1: a neutral, fixed-height placeholder shown while the first `GET
@@ -319,7 +353,12 @@ function IdeaCard({
   const startupCost = convertMoney(idea.startupCost, currency);
   const monthlyPotential = computeMonthlyPotential(idea);
   const monthlyPotentialConverted = monthlyPotential ? convertMoney(monthlyPotential, currency) : undefined;
-  const monthlyPotentialSubLabel = t('card.monthlyPotentialSubLabel');
+  // Bug fix: an explicit `defaultValue` guarantees this resolves to an
+  // empty string for English (never the raw key path rendered as literal
+  // text) regardless of i18next's `returnEmptyString` config — the
+  // intentionally-empty `en/ideas.json` value alone isn't a safe enough
+  // guard on its own.
+  const monthlyPotentialSubLabel = t('card.monthlyPotentialSubLabel', { defaultValue: '' });
   const estimateLabel = t('card.estimateBadge');
   // Story 2.3 Fix2: the baseline-rate row's "estimate" badge now lives in
   // the label cell (below), not beside `BaselineRateDisplay`'s value — this
@@ -337,8 +376,9 @@ function IdeaCard({
   return (
     <Card className="grid h-full row-span-5 grid-cols-1 [grid-template-rows:subgrid]">
       {/* Row 1: status badge (Story 2.3 AC2, only once the idea has left
-       * `suggested`) + title + idea type. */}
-      <CardHeader className="gap-1.5 pb-2">
+       * `suggested`) + title + idea type. User-requested: a bit more
+       * compact top-to-bottom than the base `CardHeader`'s default `p-6`. */}
+      <CardHeader className="gap-1 pt-4 pb-1.5">
         {idea.status !== 'suggested' ? (
           <Badge variant={idea.status === 'selected' ? 'default' : 'muted'} className="w-fit">
             {t(`status.${idea.status}`)}
@@ -353,7 +393,7 @@ function IdeaCard({
       {/* Row 2: rationale, as a real list — why it fits / first step /
        * optional caveat (Boundary: AC still requires this directly on the
        * card, in both languages, never behind an expansion). */}
-      <CardContent className="pt-0 pb-2">
+      <CardContent className="pt-0 pb-1.5">
         <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
           {rationaleLines.map((line, index) => (
             // Index-keyed is fine here: this list is never reordered,
@@ -365,7 +405,7 @@ function IdeaCard({
       </CardContent>
 
       {/* Row 3: cited intake fields. */}
-      <CardContent className="flex flex-wrap content-start gap-1.5 pt-0 pb-2">
+      <CardContent className="flex flex-wrap content-start gap-1 pt-0 pb-1.5">
         {idea.citedIntakeFields.map((field) => (
           <Badge key={field} variant="outline">
             {t(`citedIntakeFields.${field}`)}
@@ -378,7 +418,7 @@ function IdeaCard({
        * x-position regardless of label length/language — the per-row
        * `<div>` wrapper itself is unchanged (Design Notes: existing tests
        * locate a row via `closest('div')` on the label text). */}
-      <CardContent className="flex flex-col content-start gap-2 pt-0 pb-2 text-sm">
+      <CardContent className="flex flex-col content-start gap-1.5 pt-0 pb-1.5 text-sm">
         <div className="flex items-center justify-between gap-3">
           <span className={labelClassName}>{t('card.weeklyTimeLabel')}</span>
           <span>{t(`weeklyTimeAvailability.${idea.weeklyTimeCommitment}`)}</span>
@@ -436,7 +476,7 @@ function IdeaCard({
        * simplification, not a requirement removal. `baselineRateQuote`
        * itself is untouched server-side — still required and verified
        * (AD-4's quote-matches-search-results check), just not displayed. */}
-      <CardFooter className="flex flex-col items-stretch gap-1 pt-0">
+      <CardFooter className="flex flex-col items-stretch gap-1 pt-0 pb-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <Citation citation={idea.baselineRateCitation} />
           <span className="flex shrink-0 items-center gap-1.5">
@@ -501,12 +541,15 @@ export function IdeasPanel() {
   const [currency, setCurrency] = React.useState<CurrencyCode>('EUR');
   const [phase, setPhase] = React.useState<Phase>('loading');
   const [progress, setProgress] = React.useState(0);
-  // Story 2.3: `pendingIdeaId` disables that one card's 3 actions while its
-  // own request is in flight; `statusUpdateFailed` is independent of
-  // `phase` (a status-change failure never replaces the load/generate error
-  // messaging — the ideas grid itself stays exactly as it was, snapshot-
-  // reverted, right next to this notice).
-  const [pendingIdeaId, setPendingIdeaId] = React.useState<string | null>(null);
+  // Story 2.3 (user-reported bug fix): `pendingIdeaIds` disables only the
+  // card(s) a given action actually touches (the target, plus any siblings
+  // a `selected` sweep demotes) while that request is in flight — not every
+  // card in the grid, which previously made every card's buttons flash on
+  // any click regardless of which one was pressed. `statusUpdateFailed` is
+  // independent of `phase` (a status-change failure never replaces the
+  // load/generate error messaging — the ideas grid itself stays exactly as
+  // it was, revert-scoped to this one action, right next to this notice).
+  const [pendingIdeaIds, setPendingIdeaIds] = React.useState<ReadonlySet<string>>(new Set());
   const [statusUpdateFailed, setStatusUpdateFailed] = React.useState(false);
 
   const isMountedRef = React.useRef(true);
@@ -552,16 +595,27 @@ export function IdeasPanel() {
    * AC1/AC2/AC3/AC5/Fix: optimistic local update mirroring the server's own
    * select/demote/reject-removal rules (`applyOptimisticIdeaStatus`), so
    * every card's status/badge/primary-button reacts instantly — then a
-   * snapshot-based revert plus `error.statusUpdateFailed` if the real
-   * `POST /api/ideas/:id/status` call fails or the response isn't ok. Never
-   * calls `set_idea_status`'s persistence logic directly (Boundary) — only
-   * ever this one HTTP call.
+   * revert (scoped to exactly the ids this one action touched, via
+   * `affectedIdeaIds`/`revertOptimisticIdeaStatus`) plus
+   * `error.statusUpdateFailed` if the real `POST /api/ideas/:id/status`
+   * call fails or the response isn't ok. A second, unrelated card's own
+   * concurrent action is neither disabled nor reverted by this one — each
+   * uses its own `priorById` snapshot captured from `ideas` at its own call
+   * time. Never calls `set_idea_status`'s persistence logic directly
+   * (Boundary) — only ever this one HTTP call.
    */
   const handleSetIdeaStatus = React.useCallback(
     (ideaId: string, status: SettableStatus) => {
       setStatusUpdateFailed(false);
-      setPendingIdeaId(ideaId);
-      const snapshot = ideas;
+
+      const affectedIds = affectedIdeaIds(ideas, ideaId, status);
+      const priorById = new Map(ideas.filter((idea) => affectedIds.includes(idea.id)).map((idea) => [idea.id, idea]));
+
+      setPendingIdeaIds((prev) => {
+        const next = new Set(prev);
+        affectedIds.forEach((id) => next.add(id));
+        return next;
+      });
       setIdeas((current) => applyOptimisticIdeaStatus(current, ideaId, status));
 
       fetch(`/api/ideas/${ideaId}/status`, {
@@ -572,18 +626,24 @@ export function IdeasPanel() {
       })
         .then((res) => {
           if (!res.ok && isMountedRef.current) {
-            setIdeas(snapshot);
+            setIdeas((current) => revertOptimisticIdeaStatus(current, priorById));
             setStatusUpdateFailed(true);
           }
         })
         .catch(() => {
           if (isMountedRef.current) {
-            setIdeas(snapshot);
+            setIdeas((current) => revertOptimisticIdeaStatus(current, priorById));
             setStatusUpdateFailed(true);
           }
         })
         .finally(() => {
-          if (isMountedRef.current) setPendingIdeaId(null);
+          if (isMountedRef.current) {
+            setPendingIdeaIds((prev) => {
+              const next = new Set(prev);
+              affectedIds.forEach((id) => next.delete(id));
+              return next;
+            });
+          }
         });
     },
     [ideas],
@@ -684,13 +744,11 @@ export function IdeasPanel() {
                 currency={currency}
                 locale={locale}
                 onSetStatus={handleSetIdeaStatus}
-                // Every card's 3 actions disable while *any* status request
-                // is in flight, not just the clicked card's own — a second
-                // concurrent request could race the first's transaction
-                // (lock-order-inversion deadlock risk) and its failure-
-                // revert could stomp a change the first request already
-                // applied.
-                pending={pendingIdeaId !== null}
+                // Only the card(s) this specific action touches disable —
+                // the target, plus any siblings a `selected` sweep demotes
+                // (those are genuinely changing too). An unrelated card's
+                // own action is unaffected.
+                pending={pendingIdeaIds.has(idea.id)}
               />
             ))}
           </div>

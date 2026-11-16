@@ -169,6 +169,38 @@ describe('createIdeasRouter POST /generate', () => {
     }
   });
 
+  // Bug fix (user-reported): this response replaces the client's entire
+  // `ideas` list, so a previously-rejected idea (persisted, never deleted —
+  // epics.md's own "kept, not repeated" rule for bookmarked/rejected ideas
+  // across a regenerate) must stay excluded here exactly like it is from
+  // `GET /`, never reappearing just because a new batch was generated.
+  it('excludes a previously-rejected idea from the regenerated response, keeping a bookmarked one', async () => {
+    const userId = await createTestUser();
+    try {
+      const ids = await insertFiveIdeas(userId);
+      await db.update(ideas).set({ status: 'rejected' }).where(eq(ideas.id, ids[0]!));
+      await db.update(ideas).set({ status: 'bookmarked' }).where(eq(ideas.id, ids[1]!));
+
+      const agent = fakeAgent({
+        invoke: vi.fn().mockImplementation(async () => {
+          await db.delete(ideas).where(and(eq(ideas.userId, userId), eq(ideas.status, 'suggested')));
+          await insertFiveIdeas(userId);
+          return { messages: [] };
+        }),
+      });
+
+      const res = await request(buildTestApp(agent, userId)).post('/api/ideas/generate');
+
+      expect(res.status).toBe(200);
+      const returnedIds = res.body.ideas.map((idea: { id: string }) => idea.id);
+      expect(returnedIds).not.toContain(ids[0]); // rejected — stays hidden
+      expect(returnedIds).toContain(ids[1]); // bookmarked — stays visible
+      expect(res.body.ideas).toHaveLength(6); // 1 kept bookmarked + 5 new suggested
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+
   // I/O matrix: "No intake row" / "Agent doesn't call the tool" -> generic
   // error, zero rows ever reported as success — same before/after guard as
   // `intake.ts`'s POST /, adapted to a row-count check.
@@ -213,6 +245,31 @@ describe('createIdeasRouter POST /:id/status', () => {
       expect(statusById.get(ids[2]!)).toBe('rejected'); // preserved, not resurrected
       expect(statusById.get(ids[3]!)).toBe('bookmarked');
       expect(statusById.get(ids[4]!)).toBe('bookmarked');
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+
+  // User-reported bug fix: selecting an idea must not rewrite a sibling
+  // that's already `bookmarked` — only a genuine status change touches a
+  // row (and bumps its `updatedAt`). Re-selecting after switching away and
+  // back previously re-swept every already-bookmarked sibling on every
+  // call, which is what made their buttons visibly flicker client-side.
+  it('does not rewrite (or touch the updatedAt of) a sibling that is already bookmarked when selecting again', async () => {
+    const userId = await createTestUser();
+    try {
+      const ids = await insertFiveIdeas(userId);
+      const app = buildTestApp(fakeAgent(), userId);
+
+      await request(app).post(`/api/ideas/${ids[0]}/status`).send({ status: 'selected' }); // first select: sweeps 1-4 to bookmarked
+      const [beforeSibling] = await db.select({ updatedAt: ideas.updatedAt }).from(ideas).where(eq(ideas.id, ids[1]!));
+
+      await request(app).post(`/api/ideas/${ids[0]}/status`).send({ status: 'bookmarked' }); // switch away
+      const res = await request(app).post(`/api/ideas/${ids[0]}/status`).send({ status: 'selected' }); // select again
+      expect(res.status).toBe(204);
+
+      const [afterSibling] = await db.select({ updatedAt: ideas.updatedAt }).from(ideas).where(eq(ideas.id, ids[1]!));
+      expect(afterSibling!.updatedAt.getTime()).toBe(beforeSibling!.updatedAt.getTime());
     } finally {
       await cleanUp(userId);
     }

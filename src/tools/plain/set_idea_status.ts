@@ -70,10 +70,13 @@ export async function setIdeaStatus(db: Db, userId: string, ideaId: string, stat
     await tx.update(ideas).set({ status: parsedStatus, updatedAt: new Date() }).where(eq(ideas.id, ideaId));
 
     if (parsedStatus === 'selected') {
+      // User-reported bug fix: exclude an already-`bookmarked` sibling too
+      // (not just `rejected`) — it has nothing to change, so skipping it
+      // avoids a no-op write that bumps `updatedAt` for no real reason.
       await tx
         .update(ideas)
         .set({ status: 'bookmarked', updatedAt: new Date() })
-        .where(and(eq(ideas.userId, userId), ne(ideas.id, ideaId), ne(ideas.status, 'rejected')));
+        .where(and(eq(ideas.userId, userId), ne(ideas.id, ideaId), ne(ideas.status, 'rejected'), ne(ideas.status, 'bookmarked')));
     }
   });
 }

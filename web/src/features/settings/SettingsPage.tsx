@@ -11,7 +11,7 @@ import {
   type UiLanguage,
   type CurrencyCode,
 } from '@app/shared';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 
@@ -151,7 +151,6 @@ export function SettingsPage({ onCurrencyChange }: { onCurrencyChange?: () => vo
     <Card>
       <CardHeader>
         <CardTitle>{t('title')}</CardTitle>
-        <CardDescription>{t('description')}</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         <div className="flex flex-col gap-1.5">

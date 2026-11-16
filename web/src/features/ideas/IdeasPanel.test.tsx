@@ -94,6 +94,9 @@ describe('IdeasPanel (regression: startupCost/baselineRate rendered under the co
     const monthlyPotentialRow = (await screen.findByText(/Max\. potential per month/)).closest('div');
     expect(monthlyPotentialRow).toHaveTextContent(monthlyPotentialText);
     expect(monthlyPotentialRow).toHaveTextContent('estimate');
+    // Bug fix (user-reported): English's intentionally-empty sub-label must
+    // never render as the literal, untranslated key path.
+    expect(monthlyPotentialRow).not.toHaveTextContent('card.monthlyPotentialSubLabel');
 
     // Story 2.2 follow-up fix round 3, fix 2a: a URL citation renders as a
     // link — visible text is just the hostname, href/title carry the full
@@ -378,6 +381,46 @@ describe('IdeasPanel (status actions disable panel-wide while a request is in fl
 
     resolveStatusFetch(new Response(null, { status: 204 }));
     await waitFor(() => expect(selectButtons[1]).not.toBeDisabled());
+  });
+
+  // User-reported bug fix: selecting an idea must not disable (and so must
+  // not visibly flicker) a sibling that's already `bookmarked` — it has
+  // nothing to change, so it was never genuinely part of this request.
+  it('never disables an already-bookmarked sibling while selecting a different idea', async () => {
+    const ideaA: IdeaResponse = { ...fakeIdea(), id: 'idea-1', status: 'suggested' };
+    const ideaB: IdeaResponse = { ...fakeIdea(), id: 'idea-2', status: 'bookmarked' };
+
+    let resolveStatusFetch!: (value: Response) => void;
+    const pendingStatusResponse = new Promise<Response>((resolve) => {
+      resolveStatusFetch = resolve;
+    });
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (init?.method === 'POST' && url.includes('/status')) return pendingStatusResponse;
+        if (url.includes('/api/ideas')) {
+          return Promise.resolve(new Response(JSON.stringify({ ideas: [ideaA, ideaB], currency: 'EUR' }), { status: 200 }));
+        }
+        throw new Error(`Unmocked fetch: ${url}`);
+      }),
+    );
+
+    render(<IdeasPanel />);
+    // Every card renders all 3 actions, so both cards have their own
+    // "Select"/"Bookmark" button — index by render order (ideaA, then
+    // ideaB) to target each card's own.
+    const selectButtonA = (await screen.findAllByRole('button', { name: 'Select' }))[0]!;
+    const bookmarkButtonB = (await screen.findAllByRole('button', { name: 'Bookmark' }))[1]!;
+
+    fireEvent.click(selectButtonA);
+
+    expect(selectButtonA).toBeDisabled(); // the target of this action
+    expect(bookmarkButtonB).not.toBeDisabled(); // already bookmarked — nothing to change, never pending
+
+    resolveStatusFetch(new Response(null, { status: 204 }));
+    await waitFor(() => expect(selectButtonA).not.toBeDisabled());
   });
 });
 
