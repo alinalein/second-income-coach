@@ -580,6 +580,14 @@ So that the suggestions are current and worth acting on, not generic.
 **When** checked
 **Then** it still never exceeds the user's stated time, budget or risk level
 
+**Given** the user's country
+**When** ideas are generated
+**Then** the intake form gains a country field (extending Story 2.1's form and `intake` table), and baseline rates and demand evidence come from sources for that country when available; a source for another region is labeled on the card (e.g. "US data") and a figure in another currency region is never presented as a local rate
+
+**Given** a baseline rate or demand evidence
+**When** shown for an idea
+**Then** its source describes the same activity or occupation as the idea (checked deterministically against the quoted passage), otherwise the card shows it as unverified; login-walled salary sites that mask figures by region are never used as a source
+
 **Given** the new fields
 **When** saved
 **Then** they are validated against the shared Zod schema first (AD-4/AD-16) and a validation failure is never silently saved; adding them needs a column or JSON field on `ideas`, no new table
