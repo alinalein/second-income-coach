@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm';
 import { Router } from 'express';
+import { z } from 'zod';
 import { HumanMessage, type BaseMessage } from '@langchain/core/messages';
 import { ideasResponseSchema, currencyCodeSchema, type CurrencyCode } from '@app/shared';
 import type { Env } from '../../config/env.js';
@@ -8,8 +9,14 @@ import type { CoachAgent } from '../../agent/index.js';
 import { buildDiscoveryThreadId, buildIdeasTriggerThreadId } from '../../agent/index.js';
 import { detectReplyLanguage } from '../../agent/language.js';
 import { getIdeasByUserId } from '../../tools/llm/generate_ideas.js';
+import { setIdeaStatus, IdeaNotFoundError, settableIdeaStatusSchema } from '../../tools/plain/set_idea_status.js';
 import { userSettings } from '../../db/schema/index.js';
 import { createStrictRateLimiter } from '../middleware/rateLimit.js';
+
+/** AC1/AC3: the body `POST /:id/status` accepts — just the new status; the
+ * target idea comes from the `:id` route param, validated separately as a
+ * UUID below. */
+const setIdeaStatusRequestSchema = z.object({ status: settableIdeaStatusSchema });
 
 export interface IdeasRouterDeps {
   env: Pick<Env, 'RATE_LIMIT_WINDOW_MS'>;
@@ -92,9 +99,43 @@ export function createIdeasRouter({ env, db, agent }: IdeasRouterDeps) {
 
     try {
       const [records, currency] = await Promise.all([getIdeasByUserId(db, userId), getUserCurrency(db, userId)]);
-      res.json(ideasResponseSchema.parse({ ideas: records, currency }));
+      // AC3/AC5: a rejected idea is persisted (status change only, never a
+      // delete) but never shown again — filtered here in the route, not in
+      // `getIdeasByUserId` itself (that stays the one untouched plain read
+      // `POST /generate`'s own before/after id-set check also relies on).
+      const visibleRecords = records.filter((idea) => idea.status !== 'rejected');
+      res.json(ideasResponseSchema.parse({ ideas: visibleRecords, currency }));
     } catch (error) {
       console.error('[ideas] read failed:', { userId, error: (error as Error)?.message });
+      res.status(503).json({ error: 'Service unavailable' });
+    }
+  });
+
+  // AC1/AC2/AC3/AC4/AC5: the one plain, deterministic status-change route —
+  // `setIdeaStatus` is never agent-registered (AD-4). `:id` is validated as
+  // a UUID and the body against `settableIdeaStatusSchema`; either failure
+  // is a 400 with no row changes. An unknown-or-foreign idea id is a 404
+  // (`IdeaNotFoundError`); any other failure (e.g. a lost DB connection) is
+  // a 503, same vocabulary as `GET /` above.
+  router.post('/:id/status', async (req, res) => {
+    const userId = req.session.userId!;
+
+    const idParseResult = z.uuid().safeParse(req.params.id);
+    const bodyParseResult = setIdeaStatusRequestSchema.safeParse(req.body);
+    if (!idParseResult.success || !bodyParseResult.success) {
+      res.status(400).json({ error: 'Bad request' });
+      return;
+    }
+
+    try {
+      await setIdeaStatus(db, userId, idParseResult.data, bodyParseResult.data.status);
+      res.status(204).end();
+    } catch (error) {
+      if (error instanceof IdeaNotFoundError) {
+        res.status(404).json({ error: 'Idea not found' });
+        return;
+      }
+      console.error('[ideas] status update failed:', { userId, error: (error as Error)?.message });
       res.status(503).json({ error: 'Service unavailable' });
     }
   });

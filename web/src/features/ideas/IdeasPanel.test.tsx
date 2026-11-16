@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, cleanup, fireEvent, within } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent, within, waitFor } from '@testing-library/react';
 import { convertMoney, formatMoney, EUR_USD_RATE, type IdeaResponse } from '@app/shared';
 import { IdeasPanel } from './IdeasPanel';
+import i18n from '../../i18n';
 
 function mockFetch(responses: Record<string, Response | (() => Response)>) {
   return vi.fn((input: RequestInfo | URL) => {
@@ -41,6 +42,7 @@ function fakeIdea(): IdeaResponse {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  void i18n.changeLanguage('en');
 });
 
 // Every other IdeasPanel-touching test mocks /api/ideas with an empty ideas
@@ -75,6 +77,11 @@ describe('IdeasPanel (regression: startupCost/baselineRate rendered under the co
     expect(baselineRateRow).toHaveTextContent(baselineRateText);
     expect(baselineRateRow).not.toHaveTextContent(startupCostText);
     expect(baselineRateRow).toHaveTextContent('estimate'); // USD -> EUR: a genuine conversion
+    // Story 2.3 Fix2: the amount and the compact rate-unit suffix are glued
+    // together with no space (English's hourly suffix is "/h") — the same
+    // compact shape Fix2's own German test exercises, pinned here for
+    // English too.
+    expect(baselineRateRow).toHaveTextContent(`${baselineRateText}/h`);
 
     // Story 2.2 follow-up fix round 2, fix 2 (amended round 4, fix 4d):
     // "potential per month" = weeklyTimeCommitment bucket's own upper bound
@@ -196,5 +203,245 @@ describe('IdeasPanel (round 13: a failed regenerate shows the generate-failure m
     // The failed regenerate never replaced state — the original idea (and
     // the retry button) are still on screen, no reload needed to see them.
     expect(screen.getByText(idea.title)).toBeInTheDocument();
+  });
+});
+
+// Story 2.3 AC2: Select/Bookmark/Reject render directly on every card (never
+// behind a menu), with a status badge once the idea has left `suggested`,
+// and the action matching the card's current status renders as primary.
+describe('IdeasPanel (AC2: status badge + action buttons on the card)', () => {
+  it.each([
+    { status: 'suggested' as const, primaryName: null as string | null },
+    { status: 'selected' as const, primaryName: 'Select' },
+    { status: 'bookmarked' as const, primaryName: 'Bookmark' },
+  ])('status "$status": all 3 actions render, with $primaryName as the primary one', async ({ status, primaryName }) => {
+    const idea: IdeaResponse = { ...fakeIdea(), status };
+    vi.stubGlobal(
+      'fetch',
+      mockFetch({ '/api/ideas': () => new Response(JSON.stringify({ ideas: [idea], currency: 'EUR' }), { status: 200 }) }),
+    );
+
+    render(<IdeasPanel />);
+
+    const buttons: Record<string, HTMLElement> = {
+      Select: await screen.findByRole('button', { name: 'Select' }),
+      Bookmark: screen.getByRole('button', { name: 'Bookmark' }),
+      Reject: screen.getByRole('button', { name: 'Reject' }),
+    };
+    for (const [name, button] of Object.entries(buttons)) {
+      expect(button.className.includes('bg-primary')).toBe(name === primaryName);
+    }
+
+    if (status === 'suggested') {
+      expect(screen.queryByText('selected')).not.toBeInTheDocument();
+      expect(screen.queryByText('bookmarked')).not.toBeInTheDocument();
+    } else {
+      expect(await screen.findByText(status)).toBeInTheDocument();
+    }
+  });
+});
+
+// Story 2.3 AC1/AC2: clicking an action updates the card's own status
+// immediately (optimistic — never waits on the response) and sends the new
+// status to the server.
+describe('IdeasPanel (AC1/AC2: optimistic status update)', () => {
+  it('shows the new status badge immediately and POSTs the new status', async () => {
+    const idea: IdeaResponse = { ...fakeIdea(), status: 'suggested' };
+    const fetchMock = mockFetch({
+      '/api/ideas/idea-1/status': () => new Response(null, { status: 204 }),
+      '/api/ideas': () => new Response(JSON.stringify({ ideas: [idea], currency: 'EUR' }), { status: 200 }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<IdeasPanel />);
+    const selectButton = await screen.findByRole('button', { name: 'Select' });
+    fireEvent.click(selectButton);
+
+    expect(await screen.findByText('selected')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/ideas/idea-1/status',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ status: 'selected' }) }),
+    );
+  });
+});
+
+// Story 2.3 AC2: clicking Bookmark directly on a `suggested` idea — not as a
+// side effect of selecting a *different* idea (already covered by the
+// optimistic-update test above) — marks that one idea `bookmarked` with no
+// demote sweep involved.
+describe('IdeasPanel (AC2: direct Bookmark on a suggested idea)', () => {
+  it('marks the idea bookmarked and makes Bookmark the primary action', async () => {
+    const idea: IdeaResponse = { ...fakeIdea(), status: 'suggested' };
+    vi.stubGlobal(
+      'fetch',
+      mockFetch({
+        '/api/ideas/idea-1/status': () => new Response(null, { status: 204 }),
+        '/api/ideas': () => new Response(JSON.stringify({ ideas: [idea], currency: 'EUR' }), { status: 200 }),
+      }),
+    );
+
+    render(<IdeasPanel />);
+    const bookmarkButton = await screen.findByRole('button', { name: 'Bookmark' });
+    fireEvent.click(bookmarkButton);
+
+    expect(await screen.findByText('bookmarked')).toBeInTheDocument();
+    expect(bookmarkButton.className).toContain('bg-primary');
+  });
+});
+
+// Story 2.3 AC3/AC5 (client side): a failed status-change request reverts
+// the optimistic change via the pre-change snapshot and surfaces
+// `error.statusUpdateFailed` — the card's prior state (and the rejected
+// idea's own continued visibility) is never left looking "persisted" when
+// it wasn't. Covers both ways the request can fail: a non-ok response, and
+// `fetch` itself throwing (e.g. a network failure).
+describe('IdeasPanel (revert-on-failure)', () => {
+  it.each([
+    {
+      label: 'a non-ok response',
+      // Real `fetch` behavior: a non-ok HTTP response still *resolves*
+      // the promise — `handleSetIdeaStatus`'s own `!res.ok` branch.
+      statusCall: () => Promise.resolve(new Response(JSON.stringify({ error: 'Idea not found' }), { status: 404 })),
+    },
+    {
+      label: 'fetch itself throwing (network failure)',
+      // Real `fetch` behavior: a network failure *rejects* the promise
+      // (it never throws synchronously) — the `.catch` branch.
+      statusCall: () => Promise.reject(new Error('network error')),
+    },
+  ])('reverts a rejected idea back into view and shows the status-update error for $label', async ({ statusCall }) => {
+    const idea: IdeaResponse = { ...fakeIdea(), status: 'bookmarked' };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url.includes('/status')) return statusCall();
+        if (url.includes('/api/ideas')) {
+          return Promise.resolve(new Response(JSON.stringify({ ideas: [idea], currency: 'EUR' }), { status: 200 }));
+        }
+        throw new Error(`Unmocked fetch: ${url}`);
+      }),
+    );
+
+    render(<IdeasPanel />);
+    const rejectButton = await screen.findByRole('button', { name: 'Reject' });
+    fireEvent.click(rejectButton);
+
+    // Optimistic: the card disappears the instant Reject is clicked, before
+    // the (failing) response has resolved.
+    expect(screen.queryByText(idea.title)).not.toBeInTheDocument();
+
+    // Reverted once the request fails — the card is back, and the failure
+    // is surfaced.
+    expect(await screen.findByText(idea.title)).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent("That didn't save. Please try again.");
+  });
+});
+
+// Reviewer fix: every card's 3 actions must disable while *any* status
+// request is in flight, not just the clicked card's own — otherwise a
+// second concurrent request could race the first's transaction (lock-order-
+// inversion deadlock risk) and its failure-revert could stomp a change the
+// first request already applied.
+describe('IdeasPanel (status actions disable panel-wide while a request is in flight)', () => {
+  it("disables a different card's own buttons while the first card's request is pending", async () => {
+    const ideaA: IdeaResponse = { ...fakeIdea(), id: 'idea-1', status: 'suggested' };
+    const ideaB: IdeaResponse = { ...fakeIdea(), id: 'idea-2', status: 'suggested' };
+
+    let resolveStatusFetch!: (value: Response) => void;
+    const pendingStatusResponse = new Promise<Response>((resolve) => {
+      resolveStatusFetch = resolve;
+    });
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (init?.method === 'POST' && url.includes('/status')) return pendingStatusResponse;
+        if (url.includes('/api/ideas')) {
+          return Promise.resolve(new Response(JSON.stringify({ ideas: [ideaA, ideaB], currency: 'EUR' }), { status: 200 }));
+        }
+        throw new Error(`Unmocked fetch: ${url}`);
+      }),
+    );
+
+    render(<IdeasPanel />);
+    const selectButtons = await screen.findAllByRole('button', { name: 'Select' });
+    expect(selectButtons).toHaveLength(2);
+
+    fireEvent.click(selectButtons[0]!);
+
+    // Both cards' buttons are disabled, not just the clicked (ideaA) card's
+    // own — ideaB's are a different card entirely.
+    expect(selectButtons[0]).toBeDisabled();
+    expect(selectButtons[1]).toBeDisabled();
+
+    resolveStatusFetch(new Response(null, { status: 204 }));
+    await waitFor(() => expect(selectButtons[1]).not.toBeDisabled());
+  });
+});
+
+// Story 2.3 Fix1: a fixed-height neutral skeleton while the first GET
+// /api/ideas is pending — never the "no ideas yet" empty-state text, which
+// only belongs to the genuinely-idle-and-empty case.
+describe('IdeasPanel (Fix1: loading skeleton, never the empty state)', () => {
+  it('announces loading via role="status" and shows a skeleton, not the empty-state text', async () => {
+    let resolveFetch!: (value: Response) => void;
+    const pending = new Promise<Response>((resolve) => {
+      resolveFetch = resolve;
+    });
+    vi.stubGlobal('fetch', vi.fn(() => pending));
+
+    render(<IdeasPanel />);
+
+    expect(screen.queryByText("You don't have any ideas yet — let's generate your first 5.")).not.toBeInTheDocument();
+    // Reviewer fix: the wrapper is `role="status"` with a visually-hidden
+    // `t('loading')` text, so a screen reader still gets the same
+    // announcement the old plain-text line gave it — the pulsing boxes
+    // themselves stay decorative/`aria-hidden`.
+    const statusRegion = screen.getByRole('status');
+    expect(within(statusRegion).getByText('Loading…')).toBeInTheDocument();
+    expect(document.querySelector('.animate-pulse')).not.toBeNull();
+
+    resolveFetch(new Response(JSON.stringify({ ideas: [], currency: 'EUR' }), { status: 200 }));
+    expect(await screen.findByText("You don't have any ideas yet — let's generate your first 5.")).toBeInTheDocument();
+  });
+});
+
+// Story 2.3 Fix2: the compact "<amount> <suffix>" rate line (no space, no
+// side badge — the estimate badge moved under the label), and the
+// shortened German weekly-time/monthly-potential labels with the budget
+// caveat as separate small text. Fixed-width label columns stay the same
+// class in both languages.
+describe('IdeasPanel (Fix2: German compact rate + shortened labels)', () => {
+  it('renders "<amount> €/Std." and the shortened labels with the caveat as separate text', async () => {
+    void i18n.changeLanguage('de');
+    const idea: IdeaResponse = {
+      ...fakeIdea(),
+      baselineRateLow: { amountMinorUnits: 2334, currencyCode: 'EUR' },
+      baselineRateHigh: { amountMinorUnits: 2334, currencyCode: 'EUR' },
+      rateUnit: 'hour',
+    };
+    vi.stubGlobal(
+      'fetch',
+      mockFetch({ '/api/ideas': () => new Response(JSON.stringify({ ideas: [idea], currency: 'EUR' }), { status: 200 }) }),
+    );
+
+    render(<IdeasPanel />);
+
+    const baselineRateLabel = await screen.findByText('Referenzsatz');
+    const baselineRateRow = baselineRateLabel.closest('div');
+    expect(baselineRateRow).toHaveTextContent('23,34 €/Std.');
+    // Same-currency (EUR -> EUR): never marked an estimate.
+    expect(baselineRateRow).not.toHaveTextContent('Schätzung');
+    // The fixed-width class lives on the label cell (the text's own parent
+    // span), same as every other row's label — not on the bare text node.
+    expect(baselineRateLabel.parentElement?.className).toContain('w-36');
+
+    expect(screen.getByText('Zeit pro Woche')).toBeInTheDocument();
+    const monthlyPotentialLabel = await screen.findByText('Max. pro Monat');
+    const monthlyPotentialRow = monthlyPotentialLabel.closest('div');
+    expect(screen.getByText('(bei vollem Zeitbudget)')).toBeInTheDocument();
+    expect(monthlyPotentialRow).toHaveTextContent('Schätzung');
   });
 });

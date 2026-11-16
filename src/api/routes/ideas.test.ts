@@ -57,30 +57,36 @@ function buildTestApp(agent: FakeAgent, userId: string) {
   return app;
 }
 
-async function insertFiveIdeas(userId: string) {
-  await db.insert(ideas).values(
-    Array.from({ length: 5 }, (_, i) => ({
-      userId,
-      status: 'suggested',
-      title: `Idea ${i + 1}`,
-      rationale: 'Fits the handful of hours you have free each week.\nStart by listing your skills on one platform.',
-      citedIntakeFields: ['weeklyTimeAvailability', 'riskTolerance', 'startingBudgetRange'],
-      ideaType: 'service',
-      weeklyTimeCommitment: '5_to_10h',
-      startupCostAmountMinorUnits: 0,
-      startupCostCurrency: 'EUR',
-      riskLevel: 'low',
-      baselineRateQuote: 'Workers in this field earn $25.00 an hour on average.',
-      baselineRateLowAmountMinorUnits: 2500,
-      baselineRateHighAmountMinorUnits: 2500,
-      isVendorSource: false,
-      rateUnit: 'hour',
-      baselineRateCurrency: 'EUR',
-      baselineRateCitation: 'https://example.com/rates',
-      sourceTrustTier: 'tier_3',
-      isRateUnverified: false,
-    })),
-  );
+/** Returns the 5 inserted rows' ids, in insertion order — Story 2.3's
+ * status tests need to target a specific idea by id. */
+async function insertFiveIdeas(userId: string): Promise<string[]> {
+  const rows = await db
+    .insert(ideas)
+    .values(
+      Array.from({ length: 5 }, (_, i) => ({
+        userId,
+        status: 'suggested',
+        title: `Idea ${i + 1}`,
+        rationale: 'Fits the handful of hours you have free each week.\nStart by listing your skills on one platform.',
+        citedIntakeFields: ['weeklyTimeAvailability', 'riskTolerance', 'startingBudgetRange'],
+        ideaType: 'service',
+        weeklyTimeCommitment: '5_to_10h',
+        startupCostAmountMinorUnits: 0,
+        startupCostCurrency: 'EUR',
+        riskLevel: 'low',
+        baselineRateQuote: 'Workers in this field earn $25.00 an hour on average.',
+        baselineRateLowAmountMinorUnits: 2500,
+        baselineRateHighAmountMinorUnits: 2500,
+        isVendorSource: false,
+        rateUnit: 'hour',
+        baselineRateCurrency: 'EUR',
+        baselineRateCitation: 'https://example.com/rates',
+        sourceTrustTier: 'tier_3',
+        isRateUnverified: false,
+      })),
+    )
+    .returning({ id: ideas.id });
+  return rows.map((row) => row.id);
 }
 
 describe('createIdeasRouter GET /', () => {
@@ -177,6 +183,135 @@ describe('createIdeasRouter POST /generate', () => {
       expect(res.body).toEqual({ error: expect.any(String) });
       const rows = await db.select().from(ideas).where(eq(ideas.userId, userId));
       expect(rows).toHaveLength(0);
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+});
+
+describe('createIdeasRouter POST /:id/status', () => {
+  // AC1: selecting one idea marks it `selected`, every *other* idea owned
+  // by the same user that isn't already `rejected` defaults to `bookmarked`,
+  // and an idea already `rejected` is never resurrected by someone else
+  // being selected (real-Postgres integration test, per CLAUDE.md's own
+  // "one active plan per user"-style precedent for this transaction).
+  it('selects the target idea, demotes the other non-rejected ideas to bookmarked, and preserves an existing reject', async () => {
+    const userId = await createTestUser();
+    try {
+      const ids = await insertFiveIdeas(userId);
+      await db.update(ideas).set({ status: 'rejected' }).where(eq(ideas.id, ids[2]!));
+
+      const res = await request(buildTestApp(fakeAgent(), userId))
+        .post(`/api/ideas/${ids[0]}/status`)
+        .send({ status: 'selected' });
+
+      expect(res.status).toBe(204);
+      const rows = await db.select({ id: ideas.id, status: ideas.status }).from(ideas).where(eq(ideas.userId, userId));
+      const statusById = new Map(rows.map((row) => [row.id, row.status]));
+      expect(statusById.get(ids[0]!)).toBe('selected');
+      expect(statusById.get(ids[1]!)).toBe('bookmarked');
+      expect(statusById.get(ids[2]!)).toBe('rejected'); // preserved, not resurrected
+      expect(statusById.get(ids[3]!)).toBe('bookmarked');
+      expect(statusById.get(ids[4]!)).toBe('bookmarked');
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+
+  // AC3/AC5: rejecting a bookmarked idea hides it from this and every later
+  // `GET /` response — persisted server-side (a status change, not a
+  // delete), not just removed from client-side state.
+  it('rejecting an idea hides it from GET / immediately and after a later reload-style GET', async () => {
+    const userId = await createTestUser();
+    try {
+      const ids = await insertFiveIdeas(userId);
+      const app = buildTestApp(fakeAgent(), userId);
+
+      const rejectRes = await request(app).post(`/api/ideas/${ids[1]}/status`).send({ status: 'rejected' });
+      expect(rejectRes.status).toBe(204);
+
+      const firstGet = await request(app).get('/api/ideas');
+      expect(firstGet.body.ideas).toHaveLength(4);
+      expect(firstGet.body.ideas.map((idea: { id: string }) => idea.id)).not.toContain(ids[1]);
+
+      // A second, independent GET ("reload") proves this is a persisted DB
+      // status, not something only removed from an in-memory response.
+      const secondGet = await request(app).get('/api/ideas');
+      expect(secondGet.body.ideas.map((idea: { id: string }) => idea.id)).not.toContain(ids[1]);
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+
+  // I/O matrix: "Unknown or foreign idea id" -> 404, no row changes —
+  // `IdeaNotFoundError` is the same failure branch for either cause.
+  it.each([
+    { label: 'an id that does not exist', pickTargetId: () => randomUUID() },
+    { label: 'an id owned by a different user', pickTargetId: (otherIds: string[]) => otherIds[0]! },
+  ])('returns 404 and makes no row changes for $label', async ({ pickTargetId }) => {
+    const userId = await createTestUser();
+    const otherUserId = await createTestUser();
+    try {
+      await insertFiveIdeas(userId);
+      const otherIds = await insertFiveIdeas(otherUserId);
+      const targetId = pickTargetId(otherIds);
+
+      const res = await request(buildTestApp(fakeAgent(), userId)).post(`/api/ideas/${targetId}/status`).send({ status: 'selected' });
+
+      expect(res.status).toBe(404);
+      expect(res.body).toEqual({ error: expect.any(String) });
+      const ownRows = await db.select({ status: ideas.status }).from(ideas).where(eq(ideas.userId, userId));
+      expect(ownRows.every((row) => row.status === 'suggested')).toBe(true);
+    } finally {
+      await cleanUp(userId);
+      await cleanUp(otherUserId);
+    }
+  });
+
+  // A rejected idea is never resurrected — including by a direct request
+  // targeting its own id (not just as a side effect of selecting a
+  // different idea, already covered above).
+  it('returns 404 and makes no row changes when directly re-targeting an already-rejected idea with a non-reject status', async () => {
+    const userId = await createTestUser();
+    try {
+      const ids = await insertFiveIdeas(userId);
+      await db.update(ideas).set({ status: 'rejected' }).where(eq(ideas.id, ids[0]!));
+
+      const res = await request(buildTestApp(fakeAgent(), userId)).post(`/api/ideas/${ids[0]}/status`).send({ status: 'selected' });
+
+      expect(res.status).toBe(404);
+      expect(res.body).toEqual({ error: expect.any(String) });
+      const rows = await db.select({ id: ideas.id, status: ideas.status }).from(ideas).where(eq(ideas.userId, userId));
+      expect(rows.find((row) => row.id === ids[0])?.status).toBe('rejected');
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+
+  // I/O matrix: "Invalid status value" -> 400, no row changes — garbage
+  // body and a malformed id are both input-validation failures rejected
+  // before `setIdeaStatus` ever runs.
+  it.each([
+    {
+      label: 'an invalid status value',
+      send: (app: ReturnType<typeof buildTestApp>, id: string) => request(app).post(`/api/ideas/${id}/status`).send({ status: 'suggested' }),
+    },
+    {
+      label: 'a non-UUID id',
+      send: (app: ReturnType<typeof buildTestApp>) => request(app).post('/api/ideas/not-a-uuid/status').send({ status: 'selected' }),
+    },
+  ])('returns 400 and makes no row changes for $label', async ({ send }) => {
+    const userId = await createTestUser();
+    try {
+      const ids = await insertFiveIdeas(userId);
+      const app = buildTestApp(fakeAgent(), userId);
+
+      const res = await send(app, ids[0]!);
+
+      expect(res.status).toBe(400);
+      expect(res.body).toEqual({ error: expect.any(String) });
+      const rows = await db.select({ status: ideas.status }).from(ideas).where(eq(ideas.userId, userId));
+      expect(rows.every((row) => row.status === 'suggested')).toBe(true);
     } finally {
       await cleanUp(userId);
     }

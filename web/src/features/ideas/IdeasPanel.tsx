@@ -6,6 +6,7 @@ import {
   convertMoney,
   formatMoney,
   type IdeaResponse,
+  type IdeaStatus,
   type CurrencyCode,
   type WeeklyTimeAvailability,
   type Money,
@@ -66,6 +67,63 @@ const GENERATE_TIMEOUT_MS = 190_000;
  * sets the phase for the operation that actually failed, so the message is
  * always correct regardless of what was on screen already. */
 type Phase = 'loading' | 'idle' | 'generating' | 'load-error' | 'generate-error';
+
+/** Story 2.3 AC1/AC2/AC3: the 3 statuses a card's own 3 actions can set —
+ * `suggested` is the initial value only, never something the user picks
+ * directly. Derived from `@app/shared`'s own `IdeaStatus` (not a separate
+ * hand-written literal union) so it can never drift from that shared enum;
+ * mirrors `src/tools/plain/set_idea_status.ts`'s own local
+ * `settableIdeaStatusSchema` (intentionally not shared, per Boundary), which
+ * enumerates the same 3 values by hand on the server side. */
+type SettableStatus = Exclude<IdeaStatus, 'suggested'>;
+
+/**
+ * Story 2.3 AC1: mirrors `setIdeaStatus`'s own server-side transaction rules
+ * exactly, so the optimistic update never has to be reconciled against a
+ * response body (the route returns `204 No Content` on success) — a
+ * `rejected` idea disappears immediately (same as a reload, since `GET /`
+ * excludes it), a `selected` idea demotes every other non-`rejected` idea to
+ * `bookmarked`, and `bookmarked` only ever touches the one target row.
+ */
+function applyOptimisticIdeaStatus(current: IdeaResponse[], ideaId: string, status: SettableStatus): IdeaResponse[] {
+  if (status === 'rejected') {
+    return current.filter((idea) => idea.id !== ideaId);
+  }
+  if (status === 'selected') {
+    return current.map((idea) => {
+      if (idea.id === ideaId) return { ...idea, status: 'selected' };
+      // A rejected idea is never resurrected by someone else being selected
+      // — in practice unreachable client-side (a rejected idea is already
+      // removed from this array the moment it's rejected), kept only as a
+      // defensive mirror of the server's own rule.
+      if (idea.status === 'rejected') return idea;
+      return { ...idea, status: 'bookmarked' };
+    });
+  }
+  return current.map((idea) => (idea.id === ideaId ? { ...idea, status } : idea));
+}
+
+/** Fix1: a neutral, fixed-height placeholder shown while the first `GET
+ * /api/ideas` is in flight — replaces the old plain loading text, which
+ * (mutually exclusive with the "no ideas yet" empty state in the code, but
+ * not always fast enough to avoid a ~0.2s flash of it) let that empty-state
+ * text show through for an instant on first load. Reserves real height (not
+ * guessed against the real card grid — just enough to avoid a layout jump)
+ * regardless of how long the request takes. The pulsing placeholder boxes
+ * are decorative (`aria-hidden`), but the wrapper itself is `role="status"`
+ * + `aria-live="polite"` with a visually-hidden (`sr-only`) `t('loading')`
+ * text, so a screen-reader user still gets the same announcement the old
+ * plain-text line gave them. */
+function IdeasSkeleton({ loadingLabel }: { loadingLabel: string }) {
+  return (
+    <div role="status" aria-live="polite" className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      <span className="sr-only">{loadingLabel}</span>
+      {[0, 1, 2].map((index) => (
+        <div key={index} aria-hidden="true" className="h-64 animate-pulse rounded-lg bg-muted" />
+      ))}
+    </div>
+  );
+}
 
 /** AD-24/AD-27: "locale and currency are independent axes" — the active
  * i18n language ('en'/'de') maps to the locale `Intl.NumberFormat` needs.
@@ -136,39 +194,40 @@ function AmountWithEstimateBadge({
 }
 
 /**
- * Story 2.2 follow-up fix round 4, fix 4(c)/(d): a single number for the
- * common non-vendor case ("€25.00 per hour"); a low-high range plus a
- * "source: tool vendor" badge when `isVendorSource` is true (the one case
- * the rate is allowed to be a range at all — `shared/schemas/ideas.ts`'s
- * cross-field refine already guarantees low===high otherwise). The rate
- * unit always renders next to the amount, translated.
+ * Story 2.3 Fix2 (compact-rate layout, same shape in both languages — see
+ * Design Notes): the rate unit renders as a short suffix glued directly to
+ * the formatted amount with no space (`card.rateUnitSuffix.<unit>` — e.g.
+ * `"23,34 €"` + `"/Std."` -> `"23,34 €/Std."`, `"€23.34"` + `"/h"` ->
+ * `"€23.34/h"`), not the old verbose translated unit word with a space. The
+ * "estimate" badge no longer renders beside the value here — it moved to
+ * the label cell (`IdeaCard`'s baseline-rate row) so the value stays a
+ * single compact line; the vendor-source badge stays beside the value,
+ * since it's about *this amount specifically* being a range, not a
+ * currency-conversion caveat shared by the whole row.
  */
 function BaselineRateDisplay({
   idea,
   currency,
   locale,
-  estimateLabel,
   vendorSourceLabel,
 }: {
   idea: IdeaResponse;
   currency: CurrencyCode;
   locale: string;
-  estimateLabel: string;
   vendorSourceLabel: string;
 }) {
   const { t } = useTranslation('ideas');
   const low = convertMoney(idea.baselineRateLow, currency);
   const high = convertMoney(idea.baselineRateHigh, currency);
-  const unitLabel = t(`card.rateUnit.${idea.rateUnit}`);
-  const isEstimate = low.isEstimate || high.isEstimate;
+  const suffix = t(`card.rateUnitSuffix.${idea.rateUnit}`);
 
   return (
     <span className="flex flex-wrap items-center justify-end gap-2 text-right">
       <span>
-        {idea.isVendorSource ? `${formatMoney(low, locale)}–${formatMoney(high, locale)}` : formatMoney(low, locale)}{' '}
-        {unitLabel}
+        {idea.isVendorSource
+          ? `${formatMoney(low, locale)}–${formatMoney(high, locale)}${suffix}`
+          : `${formatMoney(low, locale)}${suffix}`}
       </span>
-      {isEstimate ? <Badge variant="muted">{estimateLabel}</Badge> : null}
       {idea.isVendorSource ? <Badge variant="outline">{vendorSourceLabel}</Badge> : null}
     </span>
   );
@@ -243,21 +302,48 @@ function Citation({ citation }: { citation: string }) {
  * — never the raw field id — so the reader can see which answers shaped
  * the idea without the rationale prose having to spell them out.
  */
-function IdeaCard({ idea, currency, locale }: { idea: IdeaResponse; currency: CurrencyCode; locale: string }) {
+function IdeaCard({
+  idea,
+  currency,
+  locale,
+  onSetStatus,
+  pending,
+}: {
+  idea: IdeaResponse;
+  currency: CurrencyCode;
+  locale: string;
+  onSetStatus: (ideaId: string, status: SettableStatus) => void;
+  pending: boolean;
+}) {
   const { t } = useTranslation('ideas');
   const startupCost = convertMoney(idea.startupCost, currency);
   const monthlyPotential = computeMonthlyPotential(idea);
   const monthlyPotentialConverted = monthlyPotential ? convertMoney(monthlyPotential, currency) : undefined;
+  const monthlyPotentialSubLabel = t('card.monthlyPotentialSubLabel');
   const estimateLabel = t('card.estimateBadge');
+  // Story 2.3 Fix2: the baseline-rate row's "estimate" badge now lives in
+  // the label cell (below), not beside `BaselineRateDisplay`'s value — this
+  // is the one place that decides whether it shows at all.
+  const baselineRateIsEstimate =
+    convertMoney(idea.baselineRateLow, currency).isEstimate || convertMoney(idea.baselineRateHigh, currency).isEstimate;
   // Fix round 4, fix 3: 2-3 bullet lines, newline-separated within the one
   // rationale string (shared/schemas/ideas.ts's rationaleSchema enforces
   // the shape) — split for a real <ul>/<li> list, never raw \n in prose.
   const rationaleLines = idea.rationale.split('\n');
+  // Story 2.3 AC2: shared fixed-width label column so values start at a
+  // consistent x-position regardless of label length/language (Code Map).
+  const labelClassName = 'w-36 shrink-0 text-muted-foreground';
 
   return (
     <Card className="grid h-full row-span-5 grid-cols-1 [grid-template-rows:subgrid]">
-      {/* Row 1: title + idea type. */}
+      {/* Row 1: status badge (Story 2.3 AC2, only once the idea has left
+       * `suggested`) + title + idea type. */}
       <CardHeader className="gap-1.5 pb-2">
+        {idea.status !== 'suggested' ? (
+          <Badge variant={idea.status === 'selected' ? 'default' : 'muted'} className="w-fit">
+            {t(`status.${idea.status}`)}
+          </Badge>
+        ) : null}
         <CardTitle>{idea.title}</CardTitle>
         <Badge variant="muted" className="w-fit">
           {t(`ideaType.${idea.ideaType}`)}
@@ -287,36 +373,47 @@ function IdeaCard({ idea, currency, locale }: { idea: IdeaResponse; currency: Cu
         ))}
       </CardContent>
 
-      {/* Row 4: structured stats. */}
+      {/* Row 4: structured stats. Story 2.3 AC2: every label cell shares
+       * `labelClassName`'s fixed width so values start at a consistent
+       * x-position regardless of label length/language — the per-row
+       * `<div>` wrapper itself is unchanged (Design Notes: existing tests
+       * locate a row via `closest('div')` on the label text). */}
       <CardContent className="flex flex-col content-start gap-2 pt-0 pb-2 text-sm">
         <div className="flex items-center justify-between gap-3">
-          <span className="text-muted-foreground">{t('card.weeklyTimeLabel')}</span>
+          <span className={labelClassName}>{t('card.weeklyTimeLabel')}</span>
           <span>{t(`weeklyTimeAvailability.${idea.weeklyTimeCommitment}`)}</span>
         </div>
         <div className="flex items-center justify-between gap-3">
-          <span className="text-muted-foreground">{t('card.startupCostLabel')}</span>
+          <span className={labelClassName}>{t('card.startupCostLabel')}</span>
           <AmountWithEstimateBadge money={startupCost} locale={locale} estimateLabel={estimateLabel} />
         </div>
         <div className="flex items-center justify-between gap-3">
-          <span className="text-muted-foreground">{t('card.riskLevelLabel')}</span>
+          <span className={labelClassName}>{t('card.riskLevelLabel')}</span>
           <span>{t(`riskTolerance.${idea.riskLevel}`)}</span>
         </div>
-        <div className="flex items-center justify-between gap-3">
-          <span className="text-muted-foreground">{t('card.baselineRateLabel')}</span>
-          <BaselineRateDisplay
-            idea={idea}
-            currency={currency}
-            locale={locale}
-            estimateLabel={estimateLabel}
-            vendorSourceLabel={t('card.vendorSourceLabel')}
-          />
+        {/* Story 2.3 Fix2: the "estimate" badge moved from beside the value
+         * into this label cell (stacked below the label text) — the value
+         * cell (`BaselineRateDisplay`) is now just the compact
+         * amount+suffix, plus the vendor badge when applicable. */}
+        <div className="flex items-start justify-between gap-3">
+          <span className={`flex flex-col gap-0.5 ${labelClassName}`}>
+            <span>{t('card.baselineRateLabel')}</span>
+            {baselineRateIsEstimate ? <Badge variant="muted">{estimateLabel}</Badge> : null}
+          </span>
+          <BaselineRateDisplay idea={idea} currency={currency} locale={locale} vendorSourceLabel={t('card.vendorSourceLabel')} />
         </div>
         {/* Fix round 4, fix 4(d): only shown for hourly rates — a per-project
          * or per-month rate can't be meaningfully multiplied by a weekly-
-         * hours cap. */}
+         * hours cap. Story 2.3 Fix2: the budget caveat is now separate small
+         * text under the (shortened, German) label rather than part of the
+         * label's own sentence; `monthlyPotentialSubLabel` is `""` for
+         * English, so nothing extra renders there. */}
         {monthlyPotentialConverted ? (
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-muted-foreground">{t('card.monthlyPotentialLabel')}</span>
+          <div className="flex items-start justify-between gap-3">
+            <span className={`flex flex-col gap-0.5 ${labelClassName}`}>
+              <span>{t('card.monthlyPotentialLabel')}</span>
+              {monthlyPotentialSubLabel ? <span className="text-xs">{monthlyPotentialSubLabel}</span> : null}
+            </span>
             {/* Always labeled "estimate" — this figure is an estimate by its
              * nature (a maximum-at-full-time-use projection), not only when
              * a currency conversion happens to occur. */}
@@ -347,6 +444,44 @@ function IdeaCard({ idea, currency, locale }: { idea: IdeaResponse; currency: Cu
             {idea.isRateUnverified ? <Badge variant="muted">{t('card.unverifiedLabel')}</Badge> : null}
           </span>
         </div>
+        {/* Story 2.3 AC2: Select/Bookmark/Reject directly on every card,
+         * never behind a menu — a second block stacked below the citation
+         * row (`CardFooter` is already `flex flex-col`, so this doesn't need
+         * its own subgrid track). The action matching the card's current
+         * status renders as the primary (`default`) button; the others are
+         * `outline`. None is primary while still `suggested`. */}
+        <div className="flex gap-2 pt-1">
+          <Button
+            type="button"
+            size="sm"
+            variant={idea.status === 'selected' ? 'default' : 'outline'}
+            className="flex-1"
+            disabled={pending}
+            onClick={() => onSetStatus(idea.id, 'selected')}
+          >
+            {t('actions.select')}
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant={idea.status === 'bookmarked' ? 'default' : 'outline'}
+            className="flex-1"
+            disabled={pending}
+            onClick={() => onSetStatus(idea.id, 'bookmarked')}
+          >
+            {t('actions.bookmark')}
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant={idea.status === 'rejected' ? 'default' : 'outline'}
+            className="flex-1"
+            disabled={pending}
+            onClick={() => onSetStatus(idea.id, 'rejected')}
+          >
+            {t('actions.reject')}
+          </Button>
+        </div>
       </CardFooter>
     </Card>
   );
@@ -366,6 +501,13 @@ export function IdeasPanel() {
   const [currency, setCurrency] = React.useState<CurrencyCode>('EUR');
   const [phase, setPhase] = React.useState<Phase>('loading');
   const [progress, setProgress] = React.useState(0);
+  // Story 2.3: `pendingIdeaId` disables that one card's 3 actions while its
+  // own request is in flight; `statusUpdateFailed` is independent of
+  // `phase` (a status-change failure never replaces the load/generate error
+  // messaging — the ideas grid itself stays exactly as it was, snapshot-
+  // reverted, right next to this notice).
+  const [pendingIdeaId, setPendingIdeaId] = React.useState<string | null>(null);
+  const [statusUpdateFailed, setStatusUpdateFailed] = React.useState(false);
 
   const isMountedRef = React.useRef(true);
   React.useEffect(() => {
@@ -405,6 +547,47 @@ export function IdeasPanel() {
       cancelled = true;
     };
   }, []);
+
+  /**
+   * AC1/AC2/AC3/AC5/Fix: optimistic local update mirroring the server's own
+   * select/demote/reject-removal rules (`applyOptimisticIdeaStatus`), so
+   * every card's status/badge/primary-button reacts instantly — then a
+   * snapshot-based revert plus `error.statusUpdateFailed` if the real
+   * `POST /api/ideas/:id/status` call fails or the response isn't ok. Never
+   * calls `set_idea_status`'s persistence logic directly (Boundary) — only
+   * ever this one HTTP call.
+   */
+  const handleSetIdeaStatus = React.useCallback(
+    (ideaId: string, status: SettableStatus) => {
+      setStatusUpdateFailed(false);
+      setPendingIdeaId(ideaId);
+      const snapshot = ideas;
+      setIdeas((current) => applyOptimisticIdeaStatus(current, ideaId, status));
+
+      fetch(`/api/ideas/${ideaId}/status`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status }),
+      })
+        .then((res) => {
+          if (!res.ok && isMountedRef.current) {
+            setIdeas(snapshot);
+            setStatusUpdateFailed(true);
+          }
+        })
+        .catch(() => {
+          if (isMountedRef.current) {
+            setIdeas(snapshot);
+            setStatusUpdateFailed(true);
+          }
+        })
+        .finally(() => {
+          if (isMountedRef.current) setPendingIdeaId(null);
+        });
+    },
+    [ideas],
+  );
 
   const handleGenerate = React.useCallback(() => {
     setPhase('generating');
@@ -460,7 +643,9 @@ export function IdeasPanel() {
         <CardTitle>{t('title')}</CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
-        {phase === 'loading' ? <p className="text-sm text-muted-foreground">{t('loading')}</p> : null}
+        {/* Fix1: a fixed-height neutral skeleton, never the "no ideas yet"
+         * text, while the first `GET /api/ideas` is pending. */}
+        {phase === 'loading' ? <IdeasSkeleton loadingLabel={t('loading')} /> : null}
         {/* Round 13 (user-requested): which message shows now depends on
          * which request actually failed, never on `ideas.length` — the old
          * logic showed "couldn't load" for a failed *regenerate* whenever
@@ -478,6 +663,13 @@ export function IdeasPanel() {
             {t('error.generateFailed')}
           </Badge>
         ) : null}
+        {/* Story 2.3: independent of `phase` — a failed status change never
+         * overrides the load/generate messaging above, and vice versa. */}
+        {statusUpdateFailed ? (
+          <Badge variant="muted" role="alert">
+            {t('error.statusUpdateFailed')}
+          </Badge>
+        ) : null}
         {/* Round 13: only when genuinely idle and empty — not alongside an
          * error message, which already explains the state. */}
         {phase === 'idle' && ideas.length === 0 ? (
@@ -486,7 +678,20 @@ export function IdeasPanel() {
         {ideas.length > 0 ? (
           <div className="grid grid-cols-1 items-stretch gap-4 sm:grid-cols-2 lg:grid-cols-3 [grid-auto-rows:auto_auto_auto_auto_auto]">
             {ideas.map((idea) => (
-              <IdeaCard key={idea.id} idea={idea} currency={currency} locale={locale} />
+              <IdeaCard
+                key={idea.id}
+                idea={idea}
+                currency={currency}
+                locale={locale}
+                onSetStatus={handleSetIdeaStatus}
+                // Every card's 3 actions disable while *any* status request
+                // is in flight, not just the clicked card's own — a second
+                // concurrent request could race the first's transaction
+                // (lock-order-inversion deadlock risk) and its failure-
+                // revert could stomp a change the first request already
+                // applied.
+                pending={pendingIdeaId !== null}
+              />
             ))}
           </div>
         ) : null}

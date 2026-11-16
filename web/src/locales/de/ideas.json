@@ -9,21 +9,33 @@
   "generatingHint": "Das kann einige Sekunden dauern.",
   "error": {
     "loadFailed": "Deine Ideen konnten nicht geladen werden. Bitte lade die Seite neu.",
-    "generateFailed": "Das Generieren deiner Ideen ist fehlgeschlagen oder hat zu lange gedauert. Bitte versuche es erneut."
+    "generateFailed": "Das Generieren deiner Ideen ist fehlgeschlagen oder hat zu lange gedauert. Bitte versuche es erneut.",
+    "statusUpdateFailed": "Das konnte nicht gespeichert werden. Bitte versuche es erneut."
+  },
+  "status": {
+    "selected": "ausgewählt",
+    "bookmarked": "gemerkt",
+    "rejected": "abgelehnt"
+  },
+  "actions": {
+    "select": "Auswählen",
+    "bookmark": "Merken",
+    "reject": "Ablehnen"
   },
   "card": {
-    "weeklyTimeLabel": "Wöchentlicher Zeitaufwand",
+    "weeklyTimeLabel": "Zeit pro Woche",
     "startupCostLabel": "Startkosten",
     "riskLevelLabel": "Risikostufe",
     "baselineRateLabel": "Referenzsatz",
-    "monthlyPotentialLabel": "Max. Potenzial pro Monat (bei vollem Zeitbudget)",
+    "monthlyPotentialLabel": "Max. pro Monat",
+    "monthlyPotentialSubLabel": "(bei vollem Zeitbudget)",
     "estimateBadge": "Schätzung",
     "vendorSourceLabel": "Quelle: Tool-Anbieter",
     "unverifiedLabel": "unbestätigt",
-    "rateUnit": {
-      "hour": "pro Stunde",
-      "project": "pro Projekt",
-      "month": "pro Monat"
+    "rateUnitSuffix": {
+      "hour": "/Std.",
+      "project": "/Projekt",
+      "month": "/Monat"
     },
     "sourceTrustTier": {
       "tier_1": "amtliche Statistik",
