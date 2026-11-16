@@ -37,6 +37,7 @@ describe('SettingsPage (AC: real settings screen)', () => {
               { id: 'openai/gpt-6-luna', displayName: 'GPT-6 Luna', pricePerMillionInputTokens: 2.5, pricePerMillionOutputTokens: 10, priceAsOf: '2026-11-01' },
             ],
             uiLanguage: 'English',
+            currency: 'EUR',
           }),
           { status: 200 },
         ),
@@ -58,7 +59,7 @@ describe('SettingsPage (AC: real settings screen)', () => {
       mockFetch(
         {
           '/api/settings': new Response(
-            JSON.stringify({ personality: 'friendly', model: 'openai/gpt-6-luna', selectableModels: [], uiLanguage: 'English' }),
+            JSON.stringify({ personality: 'friendly', model: 'openai/gpt-6-luna', selectableModels: [], uiLanguage: 'English', currency: 'EUR' }),
             { status: 200 },
           ),
           '/api/settings/personality': new Response(null, { status: 204 }),
@@ -91,7 +92,7 @@ describe('SettingsPage (AC: real settings screen)', () => {
       mockFetch(
         {
           '/api/settings': new Response(
-            JSON.stringify({ personality: 'friendly', model: 'openai/gpt-6-luna', selectableModels: [], uiLanguage: 'English' }),
+            JSON.stringify({ personality: 'friendly', model: 'openai/gpt-6-luna', selectableModels: [], uiLanguage: 'English', currency: 'EUR' }),
             { status: 200 },
           ),
           '/api/settings/ui-language': new Response(null, { status: 204 }),
@@ -112,5 +113,72 @@ describe('SettingsPage (AC: real settings screen)', () => {
     expect(i18n.language).toBe('de');
     await waitFor(() => expect(posted?.url).toContain('/api/settings/ui-language'));
     expect(posted?.body).toEqual({ uiLanguage: 'German' });
+  });
+
+  // AC1: "the user picks EUR or USD -> set_currency persists the choice ...
+  // and every displayed amount re-renders in the newly chosen currency
+  // immediately" — the POST fires, and `onCurrencyChange` (the signal
+  // `App.tsx` uses to remount `IdeasPanel`) only fires on a successful save.
+  it('POSTs the newly picked currency to /api/settings/currency and calls onCurrencyChange on success', async () => {
+    let posted: { url: string; body: unknown } | undefined;
+    const onCurrencyChange = vi.fn();
+
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(
+        {
+          // The more specific path must be listed first — `mockFetch`
+          // matches by `url.includes(key)`, and '/api/settings' is itself a
+          // substring of '/api/settings/currency'.
+          '/api/settings/currency': new Response(null, { status: 204 }),
+          '/api/settings': new Response(
+            JSON.stringify({ personality: 'friendly', model: 'openai/gpt-6-luna', selectableModels: [], uiLanguage: 'English', currency: 'EUR' }),
+            { status: 200 },
+          ),
+        },
+        (url, body) => {
+          posted = { url, body };
+        },
+      ),
+    );
+
+    render(<SettingsPage onCurrencyChange={onCurrencyChange} />);
+
+    const currencySelect = (await screen.findByLabelText(/currency/i)) as HTMLSelectElement;
+    await waitFor(() => expect(currencySelect.value).toBe('EUR'));
+
+    fireEvent.change(currencySelect, { target: { value: 'USD' } });
+
+    await waitFor(() => expect(posted?.url).toContain('/api/settings/currency'));
+    expect(posted?.body).toEqual({ currency: 'USD' });
+    await waitFor(() => expect(onCurrencyChange).toHaveBeenCalledTimes(1));
+  });
+
+  // Validation boundary: `onCurrencyChange` must never fire on a failed save.
+  it('does not call onCurrencyChange when the currency save fails', async () => {
+    const onCurrencyChange = vi.fn();
+
+    vi.stubGlobal(
+      'fetch',
+      mockFetch({
+        // See the previous test's comment: the more specific path must be
+        // listed first for `mockFetch`'s `url.includes(key)` matching.
+        '/api/settings/currency': new Response(null, { status: 500 }),
+        '/api/settings': new Response(
+          JSON.stringify({ personality: 'friendly', model: 'openai/gpt-6-luna', selectableModels: [], uiLanguage: 'English', currency: 'EUR' }),
+          { status: 200 },
+        ),
+      }),
+    );
+
+    render(<SettingsPage onCurrencyChange={onCurrencyChange} />);
+
+    const currencySelect = (await screen.findByLabelText(/currency/i)) as HTMLSelectElement;
+    await waitFor(() => expect(currencySelect.value).toBe('EUR'));
+
+    fireEvent.change(currencySelect, { target: { value: 'USD' } });
+
+    await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
+    expect(onCurrencyChange).not.toHaveBeenCalled();
   });
 });

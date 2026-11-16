@@ -4,7 +4,9 @@ import {
   setPersonalityRequestSchema,
   setModelRequestSchema,
   setUiLanguageRequestSchema,
+  setCurrencyRequestSchema,
   resolveUiLanguage,
+  resolveCurrency,
 } from '@app/shared';
 import type { Env } from '../../config/env.js';
 import type { createDb } from '../../db/client.js';
@@ -14,6 +16,7 @@ import { resolveModelId, listSelectableModels } from '../../agent/registry.js';
 import { setPersonality } from '../../tools/plain/set_personality.js';
 import { setModel, UnselectableModelError } from '../../tools/plain/set_model.js';
 import { setUiLanguage } from '../../tools/plain/set_ui_language.js';
+import { setCurrency } from '../../tools/plain/set_currency.js';
 
 export interface SettingsRouterDeps {
   env: Pick<Env, 'OPENROUTER_API_KEY' | 'MISTRAL_API_KEY'>;
@@ -22,8 +25,8 @@ export interface SettingsRouterDeps {
 
 /**
  * `createSettingsRouter`: the settings screen's backend, covering Story 5.1
- * (personality + model) and Story 5.4 (UI language; `set_currency` lands
- * with Story 5.5 on this same table and router). Relies on the blanket
+ * (personality + model), Story 5.4 (UI language), and Story 5.5 (currency,
+ * on this same table and router). Relies on the blanket
  * `requireAuth` gate already applied in `app.ts` before this router is
  * mounted, same as `createChatRouter`.
  */
@@ -47,6 +50,9 @@ export function createSettingsRouter({ env, db }: SettingsRouterDeps) {
         // AC2: "a first-time visit with no stored preference -> defaults to
         // English" — never browser-detected (AD-20).
         uiLanguage: resolveUiLanguage(settings?.uiLanguage),
+        // AC: "a first-time visit with no stored preference -> defaults to
+        // EUR" (AD-27).
+        currency: resolveCurrency(settings?.currency),
       }),
     );
   });
@@ -89,6 +95,17 @@ export function createSettingsRouter({ env, db }: SettingsRouterDeps) {
     }
 
     await setUiLanguage(db, req.session.userId!, parseResult.data.uiLanguage);
+    res.status(204).end();
+  });
+
+  router.post('/currency', async (req, res) => {
+    const parseResult = setCurrencyRequestSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      res.status(400).json({ error: 'Bad request' });
+      return;
+    }
+
+    await setCurrency(db, req.session.userId!, parseResult.data.currency);
     res.status(204).end();
   });
 

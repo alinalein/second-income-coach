@@ -26,6 +26,13 @@
       "German": "Deutsch"
     }
   },
+  "currency": {
+    "label": "Währung",
+    "options": {
+      "EUR": "Euro (EUR)",
+      "USD": "US-Dollar (USD)"
+    }
+  },
   "saved": "Gespeichert.",
   "error": "Beim Speichern deiner Einstellungen ist etwas schiefgelaufen. Bitte versuche es erneut."
 }

@@ -189,6 +189,11 @@ export function App() {
   // AC: "it is applied when the app loads for a signed-in user" — only once
   // a session is confirmed, never speculatively while still signed out.
   useAppliedUiLanguage(authStatus.state === 'authenticated');
+  // Story 5.5: bumping this key remounts `IdeasPanel` on a successful
+  // currency save, so its existing mount-time fetch re-reads the
+  // now-updated currency from `GET /api/ideas` — no change needed inside
+  // `IdeasPanel.tsx` itself.
+  const [ideasCurrencyKey, setIdeasCurrencyKey] = React.useState(0);
 
   if (authStatus.state !== 'authenticated') {
     return (
@@ -236,13 +241,13 @@ export function App() {
           </div>
         ) : (
           <>
-            <IdeasPanel />
+            <IdeasPanel key={ideasCurrencyKey} />
             <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
               <ChatThread />
               <div>
                 <RevisitIntakeLink onClick={() => setShowIntakeForm(true)} />
               </div>
-              <SettingsPage />
+              <SettingsPage onCurrencyChange={() => setIdeasCurrencyKey((k) => k + 1)} />
             </div>
           </>
         )}
