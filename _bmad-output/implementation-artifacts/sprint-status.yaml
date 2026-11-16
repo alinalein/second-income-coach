@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 11-14-2026 19:50
-last_updated: 11-16-2026 13:10
+last_updated: 11-16-2026 14:00
 project: Second Income Coach
 project_key: NOKEY
 tracking_system: file-system
@@ -40,7 +40,7 @@ development_status:
   1-2-google-sign-in: done
   1-3-core-agent-loop-with-moderation-observability: done
   1-4-internationalization-i18n-foundation-bilingual-replies: done
-  1-5-agent-progress-display-markdown-rendering: backlog
+  1-5-agent-progress-display-markdown-rendering: done
   epic-1-retrospective: optional
 
   epic-2: backlog
