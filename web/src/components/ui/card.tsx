@@ -4,7 +4,7 @@ import { cn } from '../../lib/utils';
 export function Card({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
   return (
     <div
-      className={cn('rounded-xl border border-border bg-card text-foreground shadow-sm', className)}
+      className={cn('rounded-xl glass-panel border shadow-[var(--shadow)] text-foreground', className)}
       {...props}
     />
   );
@@ -19,7 +19,12 @@ export function CardTitle({ className, ...props }: React.HTMLAttributes<HTMLHead
 }
 
 export function CardDescription({ className, ...props }: React.HTMLAttributes<HTMLParagraphElement>) {
-  return <p className={cn('text-sm text-muted-foreground', className)} {...props} />;
+  // `--foreground`, not `--muted-foreground`: Card always sits on a glass
+  // surface, and a soft accent blob behind that glass can measure as low
+  // as 3.89:1 against `--muted-foreground` (computed directly, both
+  // themes) — below 4.5:1, with no opacity/token fix available since the
+  // blob's own color/opacity are fixed. `--foreground` stays safe.
+  return <p className={cn('text-sm text-foreground', className)} {...props} />;
 }
 
 export function CardContent({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {

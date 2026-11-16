@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { createAgent, dynamicSystemPromptMiddleware } from 'langchain';
 import { END, MessagesAnnotation, START, StateGraph } from '@langchain/langgraph';
 import type { RetryPolicy } from '@langchain/langgraph';
@@ -6,30 +7,20 @@ import type { BaseChatModel } from '@langchain/core/language_models/chat_models'
 import type { DynamicStructuredTool } from '@langchain/core/tools';
 import type { Env } from '../config/env.js';
 import type { createDb } from '../db/client.js';
-import { createChatModel } from './model.js';
+import { getUserSettings } from '../db/settings-repository.js';
+import { createChatModel, createModelSelectionMiddleware } from './model.js';
+import { DEFAULT_MODEL_ID } from './registry.js';
+import { DEFAULT_PERSONALITY, PERSONALITY_PROMPTS, resolvePersonality, type Personality } from './personality.js';
 import { createModerationMiddleware, type ClassifyText } from './moderation.js';
 import { createProgressMiddleware } from './progress.js';
 import { applyModelNodeResilience, MODEL_NODE_TIMEOUT_MS } from './resilience.js';
 import { createSubmitIntakeTool } from '../tools/plain/submit_intake.js';
 import { createGenerateIdeasTool } from '../tools/llm/generate_ideas.js';
 
-/**
- * AD-20 (deferred): the fixed personality tones a `user_settings.personality`
- * row will eventually select between. Only `'friendly'` is reachable until
- * Story 5.1 adds the `set_personality` tool/UI — same hardcoded-default
- * pattern Story 1.3 used for the model (Design Notes).
- */
-export const PERSONALITY_PROMPTS = {
-  formal: 'Keep a formal, professional tone — no slang, no exclamation points.',
-  friendly: 'Keep a warm, encouraging, friendly tone, like a supportive coach.',
-  terse: 'Keep replies short and to the point — no filler, no pleasantries.',
-} as const;
-
-export type Personality = keyof typeof PERSONALITY_PROMPTS;
-
-/** Design Notes: "Personality default" — hardcoded until Story 5.1 wires the
- * real `user_settings.personality` value through. */
-export const DEFAULT_PERSONALITY: Personality = 'friendly';
+// Story 5.1 moved these to `./personality.js` (now backed by the shared
+// `personalitySchema` enum, AD-16) — re-exported so existing importers of
+// `./index.js` don't need to change their import path.
+export { PERSONALITY_PROMPTS, DEFAULT_PERSONALITY, type Personality };
 
 /**
  * AD-25: "personality × language is handled as one prompt-construction step,
@@ -57,8 +48,8 @@ const REPLY_LANGUAGE_INSTRUCTION =
  * output can be asserted directly in a unit test without constructing a
  * LangGraph runtime.
  */
-export function buildSystemPrompt(): string {
-  return `${PERSONALITY_PROMPTS[DEFAULT_PERSONALITY]} ${REPLY_LANGUAGE_INSTRUCTION}`;
+export function buildSystemPrompt(personality: Personality = DEFAULT_PERSONALITY): string {
+  return `${PERSONALITY_PROMPTS[personality]} ${REPLY_LANGUAGE_INSTRUCTION}`;
 }
 
 /**
@@ -95,6 +86,26 @@ export function buildIntakeTriggerThreadId(userId: string): string {
   return `intake-trigger:${userId}`;
 }
 
+const DISCOVERY_THREAD_PREFIX = 'discovery:';
+
+/** Inverse of `buildDiscoveryThreadId` — Story 5.1 needs the `userId` back
+ * out of `runtime.configurable.thread_id` to look up `user_settings` per
+ * turn, without `src/api/routes/chat.ts` (which builds that thread id)
+ * having to pass it through separately. */
+export function extractUserIdFromThreadId(threadId: string | undefined): string | undefined {
+  if (!threadId?.startsWith(DISCOVERY_THREAD_PREFIX)) return undefined;
+  const userId = threadId.slice(DISCOVERY_THREAD_PREFIX.length);
+  return userId.length > 0 ? userId : undefined;
+}
+
+/** The per-turn values the outer node resolves from `user_settings` and
+ * hands to the inner `createAgent` as middleware context (AD-20: personality
+ * for `buildSystemPrompt`, `modelId` for `createModelSelectionMiddleware`). */
+const agentContextSchema = z.object({
+  personality: z.string().optional(),
+  modelId: z.string().optional(),
+});
+
 export interface CreateCoachAgentDeps {
   env: Pick<Env, 'OPENROUTER_API_KEY' | 'MISTRAL_API_KEY'>;
   checkpointer: BaseCheckpointSaver;
@@ -102,9 +113,10 @@ export interface CreateCoachAgentDeps {
   model?: BaseChatModel;
   /** Test-only seam: a fake moderation classifier instead of a real Mistral call. */
   classify?: ClassifyText;
-  /** The shared db handle `submit_intake` persists through — `api/index.ts`
-   * already builds one `createDb(env)` pool for `AppDeps`; this reuses that
-   * same instance rather than opening a second pool. */
+  /** The shared db handle: `submit_intake` persists through it and (Story 5.1,
+   * AD-20) each turn reads `user_settings` from it — `api/index.ts` already
+   * builds one `createDb(env)` pool for `AppDeps`; this reuses that same
+   * instance rather than opening a second pool. */
   db: ReturnType<typeof createDb>['db'];
   /** Story 2.2 (AD-5): the one MCP tool (`web_search`), constructed async
    * in `src/api/index.ts` via `MCPAdapter.listTools()` before
@@ -152,27 +164,48 @@ export function createCoachAgent({
   modelNodeTimeoutMs = MODEL_NODE_TIMEOUT_MS,
   modelNodeRetryPolicy,
 }: CreateCoachAgentDeps) {
-  const chatModel = model ?? createChatModel(env);
+  const chatModel = model ?? createChatModel(env, DEFAULT_MODEL_ID);
   const progress = createProgressMiddleware();
   const moderation = createModerationMiddleware(env, { classify });
-  const systemPrompt = dynamicSystemPromptMiddleware(buildSystemPrompt);
+  const systemPrompt = dynamicSystemPromptMiddleware<{ personality?: string }>((_state, runtime) =>
+    buildSystemPrompt(resolvePersonality(runtime.context?.personality)),
+  );
+
+  // Story 5.1 (AD-20): per-turn model swapping only applies to the real,
+  // registry-backed model. A test that injects its own fake `model` (the
+  // seam above) wants that exact instance invoked on every turn, never
+  // swapped out underneath it by the registry-driven middleware below.
+  const middleware = model
+    ? [progress, moderation, systemPrompt]
+    : [progress, moderation, systemPrompt, createModelSelectionMiddleware({ env })];
 
   // Story 1.5 Design Notes: `progress` goes first so its `beforeModel` always
   // fires, even when `moderation`'s own `beforeModel` jumps straight to
   // `end` on a jailbreak reject.
   const reactAgent = createAgent({
     model: chatModel,
-    middleware: [progress, moderation, systemPrompt],
+    middleware,
+    contextSchema: agentContextSchema,
     tools: [createSubmitIntakeTool(db), createGenerateIdeasTool(db, chatModel, webSearchTool, env)],
   });
 
   const graph = new StateGraph(MessagesAnnotation).addNode('model', async (state, runtime) => {
+    // Story 5.1 (AD-20): resolve this turn's personality/model from
+    // `user_settings`, keyed by the `userId` embedded in the thread id — no
+    // settings lookup (and defaults throughout) when `db` wasn't supplied.
+    const userId = extractUserIdFromThreadId(runtime.configurable?.thread_id as string | undefined);
+    const settings = db && userId ? await getUserSettings(db, userId) : undefined;
+
     // `runtime` (a `LangGraphRunnableConfig`, which extends `RunnableConfig`)
     // carries `configurable` (incl. `thread_id`) alongside the callback/
     // tracing fields `reactAgent.invoke` expects; forwarding it as-is keeps
     // the inner agent's LangSmith run nested under this node's run instead of
-    // starting a disconnected one.
-    const result = await reactAgent.invoke({ messages: state.messages }, runtime);
+    // starting a disconnected one. `context` is added on top for the two
+    // middlewares above to read.
+    const result = await reactAgent.invoke(
+      { messages: state.messages },
+      { ...runtime, context: { personality: settings?.personality, modelId: settings?.model ?? undefined } },
+    );
     return { messages: result.messages };
   });
 

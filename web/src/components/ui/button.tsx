@@ -10,7 +10,10 @@ const buttonVariants = cva(
     variants: {
       variant: {
         default: 'bg-primary text-primary-foreground hover:opacity-90',
-        outline: 'border border-border bg-card text-foreground hover:bg-muted',
+        // `.btn.ghost` in layout-preview.html — the stronger glass tier
+        // (same as the header/controls chrome). Hover uses a translucent
+        // tint (not solid bg-muted) so the backdrop-blur stays visible.
+        outline: 'glass-chrome border text-foreground hover:bg-muted/40',
         ghost: 'text-foreground hover:bg-muted',
       },
       size: {

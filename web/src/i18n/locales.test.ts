@@ -5,6 +5,8 @@ import chatEn from '../locales/en/chat.json';
 import chatDe from '../locales/de/chat.json';
 import intakeEn from '../locales/en/intake.json';
 import intakeDe from '../locales/de/intake.json';
+import settingsEn from '../locales/en/settings.json';
+import settingsDe from '../locales/de/settings.json';
 
 /** Recursively collects every leaf key path (e.g. `auth.signInTitle`) out of
  * a nested translation resource, so two resources can be compared by shape
@@ -25,6 +27,7 @@ describe('locale resources (AC1/AC2: EN/DE key parity)', () => {
     ['common', commonEn, commonDe],
     ['chat', chatEn, chatDe],
     ['intake', intakeEn, intakeDe],
+    ['settings', settingsEn, settingsDe],
   ] as const)('%s namespace: en and de define the same key set', (_namespace, en, de) => {
     expect(keyPaths(de).sort()).toEqual(keyPaths(en).sort());
   });

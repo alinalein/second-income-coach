@@ -104,6 +104,7 @@ export const MODEL_FAILURE_MESSAGE =
 export * from './intake.js';
 export * from './ideas.js';
 export * from '../money.js';
+export * from './settings.js';
 
 /**
  * Story 1.5: the turn-scoped SSE progress/result wire contract. Re-exported

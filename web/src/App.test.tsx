@@ -56,7 +56,9 @@ function mockFetch(responses: Record<string, Response | (() => Response)>) {
     const match = Object.keys(responses).find((key) => url.includes(key));
     if (!match) throw new Error(`Unmocked fetch: ${url}`);
     const entry = responses[match]!;
-    return Promise.resolve(typeof entry === 'function' ? entry() : entry);
+    // `SettingsPage` and `useAppliedUiLanguage` both fetch `/api/settings` —
+    // clone so each caller gets its own readable body.
+    return Promise.resolve(typeof entry === 'function' ? entry() : entry.clone());
   });
 }
 
@@ -108,6 +110,10 @@ describe('App (AC: authenticated view renders)', () => {
         '/api/intake': () => new Response(JSON.stringify({ intake: existingIntakeRecord() }), { status: 200 }),
         '/api/chat/messages': new Response(JSON.stringify({ messages: [] }), { status: 200 }),
         '/api/ideas': () => new Response(JSON.stringify({ ideas: [], currency: 'EUR' }), { status: 200 }),
+        '/api/settings': new Response(
+          JSON.stringify({ personality: 'friendly', model: 'openai/gpt-6-luna', selectableModels: [], uiLanguage: 'English' }),
+          { status: 200 },
+        ),
       }),
     );
 
@@ -164,6 +170,14 @@ describe('App (Story 2.1: intake gates chat)', () => {
         if (url.includes('/api/ideas')) {
           return Promise.resolve(new Response(JSON.stringify({ ideas: [], currency: 'EUR' }), { status: 200 }));
         }
+        if (url.includes('/api/settings')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ personality: 'friendly', model: 'openai/gpt-6-luna', selectableModels: [], uiLanguage: 'English' }),
+              { status: 200 },
+            ),
+          );
+        }
         throw new Error(`Unmocked fetch: ${url}`);
       }),
     );
@@ -190,6 +204,10 @@ describe('App (Story 2.1: intake gates chat)', () => {
         '/api/intake': () => new Response(JSON.stringify({ intake: existingIntakeRecord() }), { status: 200 }),
         '/api/chat/messages': new Response(JSON.stringify({ messages: [] }), { status: 200 }),
         '/api/ideas': () => new Response(JSON.stringify({ ideas: [], currency: 'EUR' }), { status: 200 }),
+        '/api/settings': new Response(
+          JSON.stringify({ personality: 'friendly', model: 'openai/gpt-6-luna', selectableModels: [], uiLanguage: 'English' }),
+          { status: 200 },
+        ),
       }),
     );
 

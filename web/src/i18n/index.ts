@@ -8,6 +8,8 @@ import intakeEn from '../locales/en/intake.json';
 import intakeDe from '../locales/de/intake.json';
 import ideasEn from '../locales/en/ideas.json';
 import ideasDe from '../locales/de/ideas.json';
+import settingsEn from '../locales/en/settings.json';
+import settingsDe from '../locales/de/settings.json';
 
 /**
  * AD-24: `react-i18next`, resources bundled statically (no HTTP backend —
@@ -23,8 +25,8 @@ import ideasDe from '../locales/de/ideas.json';
  */
 void i18n.use(initReactI18next).init({
   resources: {
-    en: { common: commonEn, chat: chatEn, intake: intakeEn, ideas: ideasEn },
-    de: { common: commonDe, chat: chatDe, intake: intakeDe, ideas: ideasDe },
+    en: { common: commonEn, chat: chatEn, intake: intakeEn, ideas: ideasEn, settings: settingsEn },
+    de: { common: commonDe, chat: chatDe, intake: intakeDe, ideas: ideasDe, settings: settingsDe },
   },
   lng: 'en',
   fallbackLng: 'en',

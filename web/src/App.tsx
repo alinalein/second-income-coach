@@ -8,6 +8,8 @@ import { ThemeToggle } from './theme/theme-toggle';
 import { ChatThread } from './chat/ChatThread';
 import { IntakeForm } from './features/intake/IntakeForm';
 import { IdeasPanel } from './features/ideas/IdeasPanel';
+import { SettingsPage } from './features/settings/SettingsPage';
+import { useAppliedUiLanguage } from './features/settings/useAppliedUiLanguage';
 
 type AuthStatus =
   | { state: 'checking' }
@@ -184,10 +186,13 @@ export function App() {
   React.useEffect(() => {
     if (hasIntake !== null) setShowIntakeForm(!hasIntake);
   }, [hasIntake]);
+  // AC: "it is applied when the app loads for a signed-in user" — only once
+  // a session is confirmed, never speculatively while still signed out.
+  useAppliedUiLanguage(authStatus.state === 'authenticated');
 
   if (authStatus.state !== 'authenticated') {
     return (
-      <div className="min-h-screen bg-background text-foreground">
+      <div className="min-h-screen text-foreground">
         <header className="border-b border-border">
           <div className="mx-auto flex max-w-3xl items-center justify-between px-6 py-4">
             <span className="text-sm font-semibold tracking-tight">{t('app.title')}</span>
@@ -202,7 +207,7 @@ export function App() {
   }
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
+    <div className="min-h-screen text-foreground">
       <header className="border-b border-border">
         <div className="mx-auto flex max-w-3xl items-center justify-between px-6 py-4">
           <span className="text-sm font-semibold tracking-tight">{t('app.title')}</span>
@@ -237,6 +242,7 @@ export function App() {
               <div>
                 <RevisitIntakeLink onClick={() => setShowIntakeForm(true)} />
               </div>
+              <SettingsPage />
             </div>
           </>
         )}
