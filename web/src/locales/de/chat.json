@@ -7,5 +7,11 @@
   "sendButton": "Senden",
   "error": {
     "modelFailure": "Bei uns ist etwas schiefgelaufen und ich konnte keine Antwort erzeugen. Bitte versuche es gleich noch einmal."
+  },
+  "progress": {
+    "checking_message": "Prüfe deine Nachricht…",
+    "generating_response": "Denke nach…",
+    "checking_answer": "Prüfe die Antwort…",
+    "tool_fallback": "Arbeite daran…"
   }
 }

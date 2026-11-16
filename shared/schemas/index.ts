@@ -104,3 +104,12 @@ export const MODEL_FAILURE_MESSAGE =
 export * from './intake.js';
 export * from './ideas.js';
 export * from '../money.js';
+
+/**
+ * Story 1.5: the turn-scoped SSE progress/result wire contract. Re-exported
+ * at the END of this file (not the top) — `progress.ts` imports
+ * `chatMessageSchema` back from this module, and this file's own
+ * `chatMessageSchema` export must already be initialized by the time that
+ * circular import is resolved.
+ */
+export * from './progress.js';

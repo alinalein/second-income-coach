@@ -7,5 +7,11 @@
   "sendButton": "Send",
   "error": {
     "modelFailure": "Something went wrong on our end and I couldn't generate a response. Please try again in a moment."
+  },
+  "progress": {
+    "checking_message": "Checking your message…",
+    "generating_response": "Thinking…",
+    "checking_answer": "Checking the answer…",
+    "tool_fallback": "Working on it…"
   }
 }
