@@ -1,0 +1,24 @@
+{
+  "title": "Settings",
+  "description": "Choose how the coach talks to you and which model answers.",
+  "personality": {
+    "label": "Personality",
+    "options": {
+      "formal": "Formal",
+      "friendly": "Friendly",
+      "terse": "Short and direct"
+    },
+    "helperText": {
+      "formal": "Professional and structured",
+      "friendly": "Warm and encouraging",
+      "terse": "Brief answers, no small talk"
+    }
+  },
+  "model": {
+    "label": "Model",
+    "priceLabel": "${{input}}/${{output}} per 1M tokens (in/out)",
+    "fallbackNotice": "If your selected model becomes unavailable, we'll automatically use the default model instead and let you know in chat."
+  },
+  "saved": "Saved.",
+  "error": "Something went wrong saving your settings. Please try again."
+}

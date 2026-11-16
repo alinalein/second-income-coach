@@ -39,7 +39,9 @@ try {
   // startup (its own schema — not a Drizzle migration)."
   const checkpointer = createCheckpointer(env);
   await withTimeout(checkpointer.setup(), CHECKPOINTER_SETUP_TIMEOUT_MS, 'Checkpointer setup');
-  const agent = createCoachAgent({ env, checkpointer });
+  // Story 5.1: `db` lets the agent resolve each turn's personality/model
+  // from `user_settings` (AD-20).
+  const agent = createCoachAgent({ env, checkpointer, db });
 
   const app = createApp({ env, db, pool, agent });
 

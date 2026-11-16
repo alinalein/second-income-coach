@@ -13,6 +13,7 @@ import { createSessionMiddleware } from './middleware/session.js';
 import { createHealthRouter } from './routes/health.js';
 import { createAuthRouter } from './routes/auth.js';
 import { createChatRouter } from './routes/chat.js';
+import { createSettingsRouter } from './routes/settings.js';
 
 export interface AppDeps {
   env: Env;
@@ -82,6 +83,9 @@ export function createApp({ env, db, pool, agent }: AppDeps) {
   // session (Boundary: "Every route this story adds sits behind the existing
   // `requireAuth` gate").
   app.use('/api/chat', createChatRouter({ env, agent }));
+
+  // Story 5.1: personality + model settings, same auth gate as /api/chat.
+  app.use('/api/settings', createSettingsRouter({ env, db }));
 
   // Centralized error handler. Oversized bodies and malformed JSON surface
   // here as errors from the body parser — this is what keeps the process

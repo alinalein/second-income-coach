@@ -4,6 +4,8 @@ import commonEn from '../locales/en/common.json';
 import commonDe from '../locales/de/common.json';
 import chatEn from '../locales/en/chat.json';
 import chatDe from '../locales/de/chat.json';
+import settingsEn from '../locales/en/settings.json';
+import settingsDe from '../locales/de/settings.json';
 
 /**
  * AD-24: `react-i18next`, resources bundled statically (no HTTP backend —
@@ -19,8 +21,8 @@ import chatDe from '../locales/de/chat.json';
  */
 void i18n.use(initReactI18next).init({
   resources: {
-    en: { common: commonEn, chat: chatEn },
-    de: { common: commonDe, chat: chatDe },
+    en: { common: commonEn, chat: chatEn, settings: settingsEn },
+    de: { common: commonDe, chat: chatDe, settings: settingsDe },
   },
   lng: 'en',
   fallbackLng: 'en',

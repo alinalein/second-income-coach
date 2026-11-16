@@ -6,6 +6,7 @@ import { Badge } from './components/ui/badge';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from './components/ui/card';
 import { ThemeToggle } from './theme/theme-toggle';
 import { ChatThread } from './chat/ChatThread';
+import { SettingsPage } from './features/settings/SettingsPage';
 
 type AuthStatus =
   | { state: 'checking' }
@@ -151,6 +152,7 @@ export function App() {
 
       <main className="mx-auto flex max-w-3xl flex-col gap-6 px-6 py-10">
         <ChatThread />
+        <SettingsPage />
       </main>
     </div>
   );

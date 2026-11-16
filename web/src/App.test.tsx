@@ -65,6 +65,10 @@ describe('App (AC: authenticated view renders)', () => {
           { status: 200 },
         ),
         '/api/chat/messages': new Response(JSON.stringify({ messages: [] }), { status: 200 }),
+        '/api/settings': new Response(
+          JSON.stringify({ personality: 'friendly', model: 'openai/gpt-6-luna', selectableModels: [] }),
+          { status: 200 },
+        ),
       }),
     );
 
