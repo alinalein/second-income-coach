@@ -1,5 +1,5 @@
 import { eq } from 'drizzle-orm';
-import type { Personality, UiLanguage } from '@app/shared';
+import type { CurrencyCode, Personality, UiLanguage } from '@app/shared';
 import type { createDb } from './client.js';
 import { userSettings } from './schema/index.js';
 
@@ -9,6 +9,7 @@ export interface UserSettingsRow {
   personality: string;
   model: string | null;
   uiLanguage: string;
+  currency: string;
 }
 
 /**
@@ -22,7 +23,12 @@ export interface UserSettingsRow {
  */
 export async function getUserSettings(db: Db, userId: string): Promise<UserSettingsRow | undefined> {
   const [row] = await db
-    .select({ personality: userSettings.personality, model: userSettings.model, uiLanguage: userSettings.uiLanguage })
+    .select({
+      personality: userSettings.personality,
+      model: userSettings.model,
+      uiLanguage: userSettings.uiLanguage,
+      currency: userSettings.currency,
+    })
     .from(userSettings)
     .where(eq(userSettings.userId, userId))
     .limit(1);
@@ -53,5 +59,14 @@ export async function updateUiLanguage(db: Db, userId: string, uiLanguage: UiLan
   await db
     .update(userSettings)
     .set({ uiLanguage, updatedAt: new Date() })
+    .where(eq(userSettings.userId, userId));
+}
+
+/** AD-4/AD-27: the deterministic write `src/tools/plain/set_currency.ts`
+ * calls — never called directly by anything else. */
+export async function updateCurrency(db: Db, userId: string, currency: CurrencyCode): Promise<void> {
+  await db
+    .update(userSettings)
+    .set({ currency, updatedAt: new Date() })
     .where(eq(userSettings.userId, userId));
 }
