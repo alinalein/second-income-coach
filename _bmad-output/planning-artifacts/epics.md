@@ -500,6 +500,10 @@ So that I'm not stuck with a generic list.
 **When** displayed
 **Then** it is a card layout (option A) - each of the 5 cards shows its rationale and its sourced baseline-rate citation (AD-6) directly on the card, not hidden behind a detail view or expansion
 
+**Given** ideas already exist and the user has changed their intake answers
+**When** they request new ideas from the ideas panel
+**Then** a visible "Generate new ideas" action runs `generate_ideas` again for the current intake and replaces the current batch of `suggested` ideas (ideas the user bookmarked or rejected in Story 2.3 are kept); "more ideas" alongside the existing ones is Story 2.4
+
 **Given** this story introduces the `web_search` provider's credential
 **When** it is built
 **Then** the project's environment-variable rule applies (see Additional Requirements): the variable is added to `.env.example` as a placeholder and to the startup check in `src/config/env.ts`, and the completion report lists which key the user must fill in
