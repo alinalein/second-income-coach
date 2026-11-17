@@ -72,11 +72,11 @@ describe('IdeasPanel (regression: startupCost/baselineRate rendered under the co
 
     expect(startupCostRow).toHaveTextContent(startupCostText);
     expect(startupCostRow).not.toHaveTextContent(baselineRateText);
-    expect(startupCostRow).not.toHaveTextContent('estimate'); // same-currency: never marked an estimate
+    expect(startupCostRow).not.toHaveTextContent('est.'); // same-currency: never marked an estimate
 
     expect(baselineRateRow).toHaveTextContent(baselineRateText);
     expect(baselineRateRow).not.toHaveTextContent(startupCostText);
-    expect(baselineRateRow).toHaveTextContent('estimate'); // USD -> EUR: a genuine conversion
+    expect(baselineRateRow).toHaveTextContent('est.'); // USD -> EUR: a genuine conversion
     // Story 2.3 Fix2: the amount and the compact rate-unit suffix are glued
     // together with no space (English's hourly suffix is "/h") — the same
     // compact shape Fix2's own German test exercises, pinned here for
@@ -93,10 +93,23 @@ describe('IdeasPanel (regression: startupCost/baselineRate rendered under the co
     const monthlyPotentialText = formatMoney({ amountMinorUnits: expectedMonthlyPotentialEur, currencyCode: 'EUR' }, 'en-US');
     const monthlyPotentialRow = (await screen.findByText(/Max\. potential per month/)).closest('div');
     expect(monthlyPotentialRow).toHaveTextContent(monthlyPotentialText);
-    expect(monthlyPotentialRow).toHaveTextContent('estimate');
+    expect(monthlyPotentialRow).toHaveTextContent('est.');
     // Bug fix (user-reported): English's intentionally-empty sub-label must
     // never render as the literal, untranslated key path.
     expect(monthlyPotentialRow).not.toHaveTextContent('card.monthlyPotentialSubLabel');
+
+    // Layout fix (progressive disclosure): always-visible summary of how
+    // many intake answers shaped this idea (replaces the old always-visible
+    // chip row), and the citation/source-trust tier collapsed under the
+    // "Details" toggle, closed by default — not reachable via role until
+    // opened (review fix: this is asserted, not just assumed).
+    expect(await screen.findByText('Based on 3 of your inputs')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'example.com' })).not.toBeInTheDocument();
+    // Review fix: the toggle's accessible name carries the idea's own title
+    // (`aria-label`, not just the visible "Details" text) so every card's
+    // toggle isn't indistinguishable from its siblings — assert the exact
+    // name, not a loose match that the old shared name would also satisfy.
+    fireEvent.click(await screen.findByRole('button', { name: `Details – ${idea.title}` }));
 
     // Story 2.2 follow-up fix round 3, fix 2a: a URL citation renders as a
     // link — visible text is just the hostname, href/title carry the full
@@ -108,12 +121,21 @@ describe('IdeasPanel (regression: startupCost/baselineRate rendered under the co
     expect(citationLink).toHaveAttribute('rel', 'noopener noreferrer');
 
     // Story 2.2 follow-up fix round 6, fix 6: the source-trust tier label
-    // renders directly on the card, next to the citation — never behind an
-    // expansion. Round 11 (user-requested removal): the quoted evidence
-    // sentence no longer renders on the card at all.
-    expect(await screen.findByText('independent source')).toBeInTheDocument();
+    // renders directly on the card, next to the citation (behind the
+    // Details toggle opened above). Layout fix: plain text now, with a
+    // trailing "," separator in the same text node, hence the regex. Round
+    // 11 (user-requested removal): the quoted evidence sentence no longer
+    // renders on the card at all.
+    expect(await screen.findByText(/independent source/)).toBeInTheDocument();
     expect(screen.queryByText(`“${idea.baselineRateQuote}”`)).not.toBeInTheDocument();
     expect(screen.queryByText('unverified')).not.toBeInTheDocument();
+
+    // Review fix: the cited-intake chips (now behind the same toggle) still
+    // render their translated labels, not just the citation/trust tier —
+    // `fakeIdea()`'s own 3 fields, asserted by their known English text.
+    expect(screen.getByText('Your weekly time')).toBeInTheDocument();
+    expect(screen.getByText('Your starting budget')).toBeInTheDocument();
+    expect(screen.getByText('Your risk comfort')).toBeInTheDocument();
 
     // Story 2.2 follow-up fix round 4, fix 3: the rationale renders as a
     // real list, one <li> per newline-separated bullet line — never as one
@@ -157,11 +179,20 @@ describe('IdeasPanel (vendor-sourced range + non-hourly rate)', () => {
 
     expect(screen.queryByText(/Max\. potential per month/)).not.toBeInTheDocument();
 
+    // Layout fix (progressive disclosure): the trust tier and "unverified"
+    // text are collapsed under the "Details" toggle, closed by default —
+    // not reachable via role until opened.
+    expect(screen.queryByRole('link', { name: 'example.com' })).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: `Details – ${idea.title}` }));
+
     // Story 2.2 follow-up fix round 6, fix 6: tier 1 still renders its own
-    // label, and a tier-3-without-corroboration idea's "unverified" badge
+    // label, and a tier-3-without-corroboration idea's "unverified" text
     // shows even when `isVendorSource` is also true — independent flags.
-    expect(await screen.findByText('official statistics')).toBeInTheDocument();
-    expect(screen.getByText('unverified')).toBeInTheDocument();
+    // Layout fix: "unverified" is now plain muted text next to its source
+    // (not a separate pill badge), sharing a text node with a "," separator
+    // — hence the regexes.
+    expect(await screen.findByText(/official statistics/)).toBeInTheDocument();
+    expect(screen.getByText(/unverified/)).toBeInTheDocument();
   });
 });
 
@@ -451,11 +482,14 @@ describe('IdeasPanel (Fix1: loading skeleton, never the empty state)', () => {
   });
 });
 
-// Story 2.3 Fix2: the compact "<amount> <suffix>" rate line (no space, no
-// side badge — the estimate badge moved under the label), and the
-// shortened German weekly-time/monthly-potential labels with the budget
+// Story 2.3 Fix2: the compact "<amount> <suffix>" rate line (no space), and
+// the shortened German weekly-time/monthly-potential labels with the budget
 // caveat as separate small text. Fixed-width label columns stay the same
-// class in both languages.
+// class in both languages. Layout fix: the estimate badge is inline beside
+// the value (not under the label); also covers German progressive-
+// disclosure copy (`citedFieldsSummary`/`detailsToggle`) and the Details
+// panel's content, since the other German test (Fix2) is this file's only
+// German-locale coverage.
 describe('IdeasPanel (Fix2: German compact rate + shortened labels)', () => {
   it('renders "<amount> €/Std." and the shortened labels with the caveat as separate text', async () => {
     void i18n.changeLanguage('de');
@@ -476,7 +510,7 @@ describe('IdeasPanel (Fix2: German compact rate + shortened labels)', () => {
     const baselineRateRow = baselineRateLabel.closest('div');
     expect(baselineRateRow).toHaveTextContent('23,34 €/Std.');
     // Same-currency (EUR -> EUR): never marked an estimate.
-    expect(baselineRateRow).not.toHaveTextContent('Schätzung');
+    expect(baselineRateRow).not.toHaveTextContent('ca.');
     // The fixed-width class lives on the label cell (the text's own parent
     // span), same as every other row's label — not on the bare text node.
     expect(baselineRateLabel.parentElement?.className).toContain('w-36');
@@ -485,6 +519,17 @@ describe('IdeasPanel (Fix2: German compact rate + shortened labels)', () => {
     const monthlyPotentialLabel = await screen.findByText('Max. pro Monat');
     const monthlyPotentialRow = monthlyPotentialLabel.closest('div');
     expect(screen.getByText('(bei vollem Zeitbudget)')).toBeInTheDocument();
-    expect(monthlyPotentialRow).toHaveTextContent('Schätzung');
+    expect(monthlyPotentialRow).toHaveTextContent('ca.');
+
+    // Layout fix (progressive disclosure), German: the always-visible
+    // summary renders translated and the Details toggle (its accessible
+    // name carries the idea's own title) opens the panel — covers the one
+    // new-copy path this file's only other German test doesn't touch.
+    // ("Closed by default" itself is already covered, locale-independently,
+    // by the two English tests above.)
+    expect(await screen.findByText('Basierend auf 3 deiner Angaben')).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: `Details – ${idea.title}` }));
+    expect(await screen.findByText(/unabhängige Quelle/)).toBeInTheDocument();
+    expect(screen.getByText('Deine wöchentliche Zeit')).toBeInTheDocument();
   });
 });

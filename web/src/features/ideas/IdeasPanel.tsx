@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Loader2 } from 'lucide-react';
+import { ChevronDown, Loader2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
   ideasResponseSchema,
@@ -214,15 +214,25 @@ function AmountWithEstimateBadge({
   money,
   locale,
   estimateLabel,
+  estimateLabelFull,
 }: {
   money: ReturnType<typeof convertMoney>;
   locale: string;
   estimateLabel: string;
+  estimateLabelFull: string;
 }) {
   return (
     <span className="flex items-center gap-2">
       {formatMoney(money, locale)}
-      {money.isEstimate ? <Badge variant="muted">{estimateLabel}</Badge> : null}
+      {/* Review fix: the visible text is a short "(est.)"/"(ca.)" so this
+       * row doesn't wrap onto its own line next to a money value in a
+       * narrow card — but a screen reader shouldn't be left spelling that
+       * out letter by letter, so `aria-label` carries the full word. */}
+      {money.isEstimate ? (
+        <Badge variant="muted" aria-label={estimateLabelFull}>
+          {estimateLabel}
+        </Badge>
+      ) : null}
     </span>
   );
 }
@@ -232,23 +242,28 @@ function AmountWithEstimateBadge({
  * Design Notes): the rate unit renders as a short suffix glued directly to
  * the formatted amount with no space (`card.rateUnitSuffix.<unit>` — e.g.
  * `"23,34 €"` + `"/Std."` -> `"23,34 €/Std."`, `"€23.34"` + `"/h"` ->
- * `"€23.34/h"`), not the old verbose translated unit word with a space. The
- * "estimate" badge no longer renders beside the value here — it moved to
- * the label cell (`IdeaCard`'s baseline-rate row) so the value stays a
- * single compact line; the vendor-source badge stays beside the value,
- * since it's about *this amount specifically* being a range, not a
- * currency-conversion caveat shared by the whole row.
+ * `"€23.34/h"`), not the old verbose translated unit word with a space.
+ * Layout fix (idea-card spacing polish): the "estimate" badge renders
+ * inline next to the value here (same pattern as `AmountWithEstimateBadge`)
+ * instead of stacked under the label, so the row never breaks onto its own
+ * line just for the badge; the vendor-source badge stays alongside it.
  */
 function BaselineRateDisplay({
   idea,
   currency,
   locale,
   vendorSourceLabel,
+  estimateLabel,
+  estimateLabelFull,
+  isEstimate,
 }: {
   idea: IdeaResponse;
   currency: CurrencyCode;
   locale: string;
   vendorSourceLabel: string;
+  estimateLabel: string;
+  estimateLabelFull: string;
+  isEstimate: boolean;
 }) {
   const { t } = useTranslation('ideas');
   const low = convertMoney(idea.baselineRateLow, currency);
@@ -262,6 +277,13 @@ function BaselineRateDisplay({
           ? `${formatMoney(low, locale)}–${formatMoney(high, locale)}${suffix}`
           : `${formatMoney(low, locale)}${suffix}`}
       </span>
+      {/* Review fix: same short-badge/full-word-for-AT split as
+       * `AmountWithEstimateBadge` above. */}
+      {isEstimate ? (
+        <Badge variant="muted" aria-label={estimateLabelFull}>
+          {estimateLabel}
+        </Badge>
+      ) : null}
       {idea.isVendorSource ? <Badge variant="outline">{vendorSourceLabel}</Badge> : null}
     </span>
   );
@@ -318,19 +340,41 @@ function Citation({ citation }: { citation: string }) {
  * here via `shared/money.ts` so a later currency-setting change (Story
  * 5.5) re-renders correctly without a new fetch (AD-27).
  *
- * Layout (Story 2.2 follow-up fix round 3, fix 2b): CSS **subgrid**, not
- * just equal card height. `IdeasPanel`'s grid declares 5 explicit row
- * tracks per card-row (`[grid-auto-rows:...]`); each `Card` spans all 5
- * (`row-span-5`) and declares its own rows as `subgrid`, so its 5 direct
- * children — title+type / description / cited-fields / stats / citation —
- * size against the *same* 5 shared tracks every sibling card in that row
- * uses. That is what makes e.g. every card's "Your skills & interests"
- * badge row start at an identical height regardless of how long any one
- * card's rationale is — a fixed-height estimate would break the moment
- * real content varies; subgrid sizes each track from whichever sibling
- * actually needs the most room there. `items-stretch` on the outer grid
- * still makes same-row cards equal overall height; subgrid is what aligns
- * what's *inside* them.
+ * Layout: one spacing scale — `gap-4` (16px) between the card's direct
+ * blocks, `gap-2` (8px) for spacing inside a block — matching
+ * `_bmad-output/planning-artifacts/layout-preview.html`'s
+ * `.idea-card`/`.idea-actions` glass tokens/structure.
+ *
+ * Full subgrid, all 5 direct children (header, rationale, facts,
+ * disclosure, actions — user-reported round 3: "Zeit pro Woche"/weekly-time,
+ * the facts block's first row, must start at the same height on every card
+ * in a row, or the row looks messy): `Card` spans exactly 5 rows of the
+ * outer grid (`row-span-5`) and declares those as `subgrid`, so each of its
+ * 5 direct children sizes against the *same* shared track every sibling
+ * card in that row uses — every card has exactly these same 5 children
+ * (the conditional monthly-potential row and the disclosure panel's content
+ * are nested *inside* the facts/disclosure children, not additional
+ * top-level children), so the span always matches the real child count.
+ * That matters: an EARLIER version of this fix spanned only 2 of the 5 rows
+ * (header+rationale) to avoid matching the facts/disclosure height too —
+ * but a subgrid item with *more* children than its span gets extra
+ * implicit rows the parent grid never reserves space for, so those rows
+ * render past the item's formal area and can visually overlap the next
+ * row of cards. Spanning the true number of children avoids that
+ * entirely. The accepted tradeoff: a card whose facts/disclosure content is
+ * shorter than a row-sibling's gets matched to that sibling's height, which
+ * can leave blank space at the bottom of its own facts or disclosure block
+ * (flex-col packs content at the top) — bounded to those two spots, not the
+ * unpredictable "gaps between random blocks" round 1 fixed (which was
+ * caused by inconsistent per-block padding, now a uniform `gap-4`/`gap-2`
+ * regardless of this subgrid). The actions row needs no special handling
+ * for a flush bottom edge — it's the *last* shared track, and with every
+ * card's preceding 4 tracks matched, every card's actions row lands at an
+ * identical height with no `mt-auto` margin trick required.
+ *
+ * `citedIntakeFields` (round 2, fix 3) renders as small translated labels
+ * — never the raw field id — so the reader can see which answers shaped
+ * the idea without the rationale prose having to spell them out.
  *
  * `citedIntakeFields` (round 2, fix 3) renders as small translated labels
  * — never the raw field id — so the reader can see which answers shaped
@@ -359,10 +403,15 @@ function IdeaCard({
   // intentionally-empty `en/ideas.json` value alone isn't a safe enough
   // guard on its own.
   const monthlyPotentialSubLabel = t('card.monthlyPotentialSubLabel', { defaultValue: '' });
+  // Review fix: `estimateLabel` is the short "(est.)"/"(ca.)" shown in the
+  // badge — kept short so the row it sits in doesn't wrap. `estimateLabelFull`
+  // is the original full word ("estimate"/"Schätzung"), used only as that
+  // badge's `aria-label` so a screen reader doesn't spell the short form out.
   const estimateLabel = t('card.estimateBadge');
-  // Story 2.3 Fix2: the baseline-rate row's "estimate" badge now lives in
-  // the label cell (below), not beside `BaselineRateDisplay`'s value — this
-  // is the one place that decides whether it shows at all.
+  const estimateLabelFull = t('card.estimateBadgeFull');
+  // Layout fix: the baseline-rate row's "estimate" badge renders inline
+  // beside `BaselineRateDisplay`'s value (passed down as `isEstimate`) —
+  // this is the one place that decides whether it shows at all.
   const baselineRateIsEstimate =
     convertMoney(idea.baselineRateLow, currency).isEstimate || convertMoney(idea.baselineRateHigh, currency).isEstimate;
   // Fix round 4, fix 3: 2-3 bullet lines, newline-separated within the one
@@ -372,75 +421,86 @@ function IdeaCard({
   // Story 2.3 AC2: shared fixed-width label column so values start at a
   // consistent x-position regardless of label length/language (Code Map).
   const labelClassName = 'w-36 shrink-0 text-muted-foreground';
+  // Progressive disclosure (layout fix): cited-intake chips and the source
+  // line(s) collapse under a "Details" toggle, default closed — everything
+  // else on the card (badges/title, rationale, facts, actions) stays always
+  // visible. `detailsPanelId` links the toggle button to its panel via
+  // `aria-controls`, same pattern a native disclosure widget uses.
+  const [detailsOpen, setDetailsOpen] = React.useState(false);
+  const detailsPanelId = React.useId();
 
   return (
-    <Card className="grid h-full row-span-5 grid-cols-1 [grid-template-rows:subgrid]">
-      {/* Row 1: status badge (Story 2.3 AC2, only once the idea has left
-       * `suggested`) + title + idea type. User-requested: a bit more
-       * compact top-to-bottom than the base `CardHeader`'s default `p-6`. */}
-      <CardHeader className="gap-1 pt-4 pb-1.5">
-        {idea.status !== 'suggested' ? (
-          <Badge variant={idea.status === 'selected' ? 'default' : 'muted'} className="w-fit">
-            {t(`status.${idea.status}`)}
-          </Badge>
-        ) : null}
-        <CardTitle>{idea.title}</CardTitle>
-        <Badge variant="muted" className="w-fit">
-          {t(`ideaType.${idea.ideaType}`)}
-        </Badge>
-      </CardHeader>
+    <Card className="grid grid-cols-1 row-span-5 gap-4 p-4 [grid-template-rows:subgrid]">
+      {/* Block: status badge (Story 2.3 AC2, only once the idea has left
+       * `suggested`) + idea type inline, title below with normal
+       * line-height — layout fix: these no longer stack vertically. */}
+      <div className="flex flex-col gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {idea.status !== 'suggested' ? (
+            <Badge variant={idea.status === 'selected' ? 'default' : 'muted'}>{t(`status.${idea.status}`)}</Badge>
+          ) : null}
+          <Badge variant="muted">{t(`ideaType.${idea.ideaType}`)}</Badge>
+        </div>
+        <CardTitle className="leading-snug">{idea.title}</CardTitle>
+      </div>
 
-      {/* Row 2: rationale, as a real list — why it fits / first step /
+      {/* Block: rationale, as a real list — why it fits / first step /
        * optional caveat (Boundary: AC still requires this directly on the
        * card, in both languages, never behind an expansion). */}
-      <CardContent className="pt-0 pb-1.5">
-        <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
-          {rationaleLines.map((line, index) => (
-            // Index-keyed is fine here: this list is never reordered,
-            // filtered, or edited in place — only ever rendered once from
-            // a persisted, already-validated idea.
-            <li key={index}>{line}</li>
-          ))}
-        </ul>
-      </CardContent>
-
-      {/* Row 3: cited intake fields. */}
-      <CardContent className="flex flex-wrap content-start gap-1 pt-0 pb-1.5">
-        {idea.citedIntakeFields.map((field) => (
-          <Badge key={field} variant="outline">
-            {t(`citedIntakeFields.${field}`)}
-          </Badge>
+      <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
+        {rationaleLines.map((line, index) => (
+          // Index-keyed is fine here: this list is never reordered,
+          // filtered, or edited in place — only ever rendered once from
+          // a persisted, already-validated idea.
+          <li key={index}>{line}</li>
         ))}
-      </CardContent>
+      </ul>
 
-      {/* Row 4: structured stats. Story 2.3 AC2: every label cell shares
+      {/* Block: structured stats. Story 2.3 AC2: every label cell shares
        * `labelClassName`'s fixed width so values start at a consistent
        * x-position regardless of label length/language — the per-row
        * `<div>` wrapper itself is unchanged (Design Notes: existing tests
        * locate a row via `closest('div')` on the label text). */}
-      <CardContent className="flex flex-col content-start gap-1.5 pt-0 pb-1.5 text-sm">
+      <div className="flex flex-col gap-2 text-sm">
         <div className="flex items-center justify-between gap-3">
           <span className={labelClassName}>{t('card.weeklyTimeLabel')}</span>
           <span>{t(`weeklyTimeAvailability.${idea.weeklyTimeCommitment}`)}</span>
         </div>
         <div className="flex items-center justify-between gap-3">
           <span className={labelClassName}>{t('card.startupCostLabel')}</span>
-          <AmountWithEstimateBadge money={startupCost} locale={locale} estimateLabel={estimateLabel} />
+          <AmountWithEstimateBadge
+            money={startupCost}
+            locale={locale}
+            estimateLabel={estimateLabel}
+            estimateLabelFull={estimateLabelFull}
+          />
         </div>
         <div className="flex items-center justify-between gap-3">
           <span className={labelClassName}>{t('card.riskLevelLabel')}</span>
           <span>{t(`riskTolerance.${idea.riskLevel}`)}</span>
         </div>
-        {/* Story 2.3 Fix2: the "estimate" badge moved from beside the value
-         * into this label cell (stacked below the label text) — the value
-         * cell (`BaselineRateDisplay`) is now just the compact
-         * amount+suffix, plus the vendor badge when applicable. */}
+        {/* Layout fix: the "estimate" badge moved back inline next to the
+         * value (`BaselineRateDisplay`) instead of stacked under the label,
+         * so it no longer forces its own line by default (a vendor-sourced
+         * *and* converted idea can still wrap two badges plus the amount on
+         * a narrow card — `flex-wrap` on that value span handles it). The
+         * label cell's `flex-col`/nested `<span>` no longer wraps a second
+         * child now that the badge is gone, but stays as a pure test-compat
+         * shim: a pinned test asserts the label text's own parent carries
+         * `labelClassName` (`w-36`). */}
         <div className="flex items-start justify-between gap-3">
           <span className={`flex flex-col gap-0.5 ${labelClassName}`}>
             <span>{t('card.baselineRateLabel')}</span>
-            {baselineRateIsEstimate ? <Badge variant="muted">{estimateLabel}</Badge> : null}
           </span>
-          <BaselineRateDisplay idea={idea} currency={currency} locale={locale} vendorSourceLabel={t('card.vendorSourceLabel')} />
+          <BaselineRateDisplay
+            idea={idea}
+            currency={currency}
+            locale={locale}
+            vendorSourceLabel={t('card.vendorSourceLabel')}
+            estimateLabel={estimateLabel}
+            estimateLabelFull={estimateLabelFull}
+            isEstimate={baselineRateIsEstimate}
+          />
         </div>
         {/* Fix round 4, fix 4(d): only shown for hourly rates — a per-project
          * or per-month rate can't be meaningfully multiplied by a weekly-
@@ -459,70 +519,128 @@ function IdeaCard({
              * a currency conversion happens to occur. */}
             <span className="flex items-center gap-2">
               {formatMoney(monthlyPotentialConverted, locale)}
-              <Badge variant="muted">{estimateLabel}</Badge>
+              <Badge variant="muted" aria-label={estimateLabelFull}>
+                {estimateLabel}
+              </Badge>
             </span>
           </div>
         ) : null}
-      </CardContent>
+      </div>
 
-      {/* Row 5: citation — the last subgrid row, so always the card's
-       * bottom-most section regardless of how tall rows 1-4 end up. The
-       * source-trust tier and (when applicable) the "unverified" label sit
-       * next to the citation link. Round 11 (user-requested removal): the
-       * quoted evidence sentence (`baselineRateQuote`) no longer renders
-       * here — checked against epics.md's Story 2.2 AC and AD-6 first: AD-6
-       * only requires the rate *value + citation* to be persisted/shown on
-       * the card, never the quote text itself, so this is a pure UI
-       * simplification, not a requirement removal. `baselineRateQuote`
-       * itself is untouched server-side — still required and verified
-       * (AD-4's quote-matches-search-results check), just not displayed. */}
-      <CardFooter className="flex flex-col items-stretch gap-1 pt-0 pb-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <Citation citation={idea.baselineRateCitation} />
-          <span className="flex shrink-0 items-center gap-1.5">
-            <Badge variant="outline">{t(`card.sourceTrustTier.${idea.sourceTrustTier}`)}</Badge>
-            {idea.isRateUnverified ? <Badge variant="muted">{t('card.unverifiedLabel')}</Badge> : null}
+      {/* Block: progressive disclosure. Always visible: a one-line count of
+       * how many intake answers shaped this idea, and the "Details" toggle
+       * itself. Collapsed (default closed): the cited-field chips and the
+       * source line(s) — citation + trust tier, with "unverified" (kept, a
+       * trust-tier requirement) as muted inline text next to its own source
+       * rather than a separate pill. Round 11 (user-requested removal): the
+       * quoted evidence sentence (`baselineRateQuote`) still doesn't render
+       * here either — checked against epics.md's Story 2.2 AC and AD-6
+       * first: AD-6 only requires the rate *value + citation* to be
+       * persisted/shown on the card, never the quote text itself.
+       * `baselineRateQuote` itself is untouched server-side — still
+       * required and verified (AD-4's quote-matches-search-results check),
+       * just not displayed. */}
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs text-muted-foreground">
+            {t('card.citedFieldsSummary', { count: idea.citedIntakeFields.length })}
           </span>
-        </div>
-        {/* Story 2.3 AC2: Select/Bookmark/Reject directly on every card,
-         * never behind a menu — a second block stacked below the citation
-         * row (`CardFooter` is already `flex flex-col`, so this doesn't need
-         * its own subgrid track). The action matching the card's current
-         * status renders as the primary (`default`) button; the others are
-         * `outline`. None is primary while still `suggested`. */}
-        <div className="flex gap-2 pt-1">
           <Button
             type="button"
+            variant="ghost"
             size="sm"
-            variant={idea.status === 'selected' ? 'default' : 'outline'}
-            className="flex-1"
-            disabled={pending}
-            onClick={() => onSetStatus(idea.id, 'selected')}
+            className="h-auto gap-1 px-2 py-1 text-xs"
+            // Review fix: every card's toggle otherwise shares the exact
+            // same accessible name ("Details"), which is ambiguous the
+            // moment more than one idea renders (the normal case — 5 cards
+            // at once) for screen-reader users and for role-based lookups.
+            // The visible label stays the plain "Details" text below;
+            // `aria-label` is what screen readers announce instead.
+            aria-label={t('card.detailsToggleAriaLabel', { title: idea.title })}
+            aria-expanded={detailsOpen}
+            aria-controls={detailsPanelId}
+            onClick={() => setDetailsOpen((open) => !open)}
           >
-            {t('actions.select')}
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            variant={idea.status === 'bookmarked' ? 'default' : 'outline'}
-            className="flex-1"
-            disabled={pending}
-            onClick={() => onSetStatus(idea.id, 'bookmarked')}
-          >
-            {t('actions.bookmark')}
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            variant={idea.status === 'rejected' ? 'default' : 'outline'}
-            className="flex-1"
-            disabled={pending}
-            onClick={() => onSetStatus(idea.id, 'rejected')}
-          >
-            {t('actions.reject')}
+            {t('card.detailsToggle')}
+            <ChevronDown
+              aria-hidden="true"
+              className={`h-3.5 w-3.5 transition-transform ${detailsOpen ? 'rotate-180' : ''}`}
+            />
           </Button>
         </div>
-      </CardFooter>
+        {/* Review fix: always mounted (never conditionally unmounted) and
+         * toggled via the native `hidden` attribute, so `aria-controls`
+         * above always points at a real element instead of an id that only
+         * exists once opened — the same "always mounted, toggle
+         * visibility" pattern this file already uses for the generate-
+         * progress block below. `hidden` also removes it from the
+         * accessibility tree, which is what makes the closed-by-default
+         * tests below able to assert its content isn't reachable. */}
+        <div id={detailsPanelId} hidden={!detailsOpen} className="flex flex-col gap-2">
+          <div className="flex flex-wrap gap-2">
+            {idea.citedIntakeFields.map((field) => (
+              <Badge key={field} variant="outline">
+                {t(`citedIntakeFields.${field}`)}
+              </Badge>
+            ))}
+          </div>
+          {/* Layout fix: the trust-tier label sits on the left, before the
+           * citation it describes, and renders as plain muted text — same
+           * weight as `Citation`'s own link — instead of a bordered pill;
+           * "unverified" (kept, a trust-tier requirement) follows the same
+           * plain-text treatment. Review fix: separators are plain ", "
+           * text, not a decorative `aria-hidden` dot — a non-URL citation
+           * renders as plain text too (see `Citation`), and a screen
+           * reader reading 3 adjacent spans straight through needs an
+           * actual announced boundary between them, not just a visual one. */}
+          <div className="flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
+            <span>{t(`card.sourceTrustTier.${idea.sourceTrustTier}`)},</span>
+            <Citation citation={idea.baselineRateCitation} />
+            {idea.isRateUnverified ? <span>, {t('card.unverifiedLabel')}</span> : null}
+          </div>
+        </div>
+      </div>
+
+      {/* Block: Select/Bookmark/Reject directly on every card, never behind
+       * a menu (Story 2.3 AC2) — the 5th and last of the card's subgridded
+       * rows (see the doc comment above), so it lands at an identical
+       * height across every card in a row with no margin trick needed; its
+       * own content (3 buttons) never varies in height across ideas. The
+       * action matching the card's current status renders as the primary
+       * (`default`) button; the others are `outline`. None is primary
+       * while still `suggested`. */}
+      <div className="flex gap-2">
+        <Button
+          type="button"
+          size="sm"
+          variant={idea.status === 'selected' ? 'default' : 'outline'}
+          className="flex-1"
+          disabled={pending}
+          onClick={() => onSetStatus(idea.id, 'selected')}
+        >
+          {t('actions.select')}
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant={idea.status === 'bookmarked' ? 'default' : 'outline'}
+          className="flex-1"
+          disabled={pending}
+          onClick={() => onSetStatus(idea.id, 'bookmarked')}
+        >
+          {t('actions.bookmark')}
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant={idea.status === 'rejected' ? 'default' : 'outline'}
+          className="flex-1"
+          disabled={pending}
+          onClick={() => onSetStatus(idea.id, 'rejected')}
+        >
+          {t('actions.reject')}
+        </Button>
+      </div>
     </Card>
   );
 }
@@ -736,7 +854,7 @@ export function IdeasPanel() {
           <p className="text-sm text-muted-foreground">{t('empty')}</p>
         ) : null}
         {ideas.length > 0 ? (
-          <div className="grid grid-cols-1 items-stretch gap-4 sm:grid-cols-2 lg:grid-cols-3 [grid-auto-rows:auto_auto_auto_auto_auto]">
+          <div className="grid grid-cols-1 items-stretch gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {ideas.map((idea) => (
               <IdeaCard
                 key={idea.id}
