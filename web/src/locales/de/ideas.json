@@ -7,10 +7,12 @@
   "generatingButton": "Wird generiert…",
   "generatingStatus": "Deine Ideen werden generiert…",
   "generatingHint": "Das kann bis zu einer Minute dauern.",
+  "translating": "Deine Ideen werden übersetzt…",
   "error": {
     "loadFailed": "Deine Ideen konnten nicht geladen werden. Bitte lade die Seite neu.",
     "generateFailed": "Das Generieren deiner Ideen ist fehlgeschlagen oder hat zu lange gedauert. Bitte versuche es erneut.",
-    "statusUpdateFailed": "Das konnte nicht gespeichert werden. Bitte versuche es erneut."
+    "statusUpdateFailed": "Das konnte nicht gespeichert werden. Bitte versuche es erneut.",
+    "translateFailed": "Deine Ideen konnten nicht übersetzt werden. Sie werden weiterhin in der ursprünglichen Sprache angezeigt."
   },
   "status": {
     "selected": "ausgewählt",
@@ -20,7 +22,8 @@
   "actions": {
     "select": "Auswählen",
     "bookmark": "Merken",
-    "reject": "Ablehnen"
+    "reject": "Ablehnen",
+    "retryTranslation": "Übersetzung erneut versuchen"
   },
   "card": {
     "weeklyTimeLabel": "Zeit pro Woche",

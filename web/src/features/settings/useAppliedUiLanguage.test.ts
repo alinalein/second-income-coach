@@ -38,4 +38,34 @@ describe('useAppliedUiLanguage (AC: stored language applied on load)', () => {
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(i18n.language).toBe('en');
   });
+
+  // Live fix (post-handoff, user-reported): the race this closes — a
+  // UI-language-dependent action (e.g. "Generate new ideas") firing while
+  // `ready` is still false would read the wrong, not-yet-applied `i18n`
+  // default. `App.tsx` gates its loading placeholder on this value.
+  it('is not ready until the settings fetch resolves and the language is applied', async () => {
+    let resolveFetch!: (value: Response) => void;
+    const pendingFetch = new Promise<Response>((resolve) => {
+      resolveFetch = resolve;
+    });
+    vi.stubGlobal('fetch', vi.fn(() => pendingFetch));
+
+    const { result } = renderHook(() => useAppliedUiLanguage(true));
+    expect(result.current).toBe(false);
+
+    resolveFetch(
+      new Response(
+        JSON.stringify({ personality: 'friendly', model: 'openai/gpt-6-luna', selectableModels: [], uiLanguage: 'German', currency: 'EUR' }),
+        { status: 200 },
+      ),
+    );
+
+    await waitFor(() => expect(result.current).toBe(true));
+    expect(i18n.language).toBe('de');
+  });
+
+  it('is immediately ready when disabled', () => {
+    const { result } = renderHook(() => useAppliedUiLanguage(false));
+    expect(result.current).toBe(true);
+  });
 });

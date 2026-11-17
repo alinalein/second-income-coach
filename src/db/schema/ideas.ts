@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, integer, boolean, timestamp } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, text, integer, boolean, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
 import { users } from './users.js';
 
 /**
@@ -83,6 +83,46 @@ export const ideas = pgTable('ideas', {
   demandEvidenceQuote: text('demand_evidence_quote'),
   isDemandEvidenceUnverified: boolean('is_demand_evidence_unverified').notNull().default(false),
   growthPath: text('growth_path'),
+  /**
+   * Story 2.7: the language this row's text fields were generated/written
+   * in — `'en'`/`'de'` (`shared/schemas/ideas.ts`'s `replyLanguageSchema`),
+   * plain `text()` per the no-`pgEnum` precedent used throughout this
+   * table. Defaults to `'en'` so a pre-Story-2.7 row (never written in a
+   * tracked language) reads back as English, its real original write
+   * language in every case so far.
+   */
+  language: text('language').notNull().default('en'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+/**
+ * Story 2.7: an immutable cache of one idea's text fields translated into
+ * one other language, keyed `(idea_id, language)`. Ideas never change
+ * post-generation (Boundary), so a cached translation never needs
+ * invalidation — only a fresh insert the first time a given idea+language
+ * pair is requested, written with `onConflictDoNothing` (never updated in
+ * place). `ideaId` cascades — a deleted idea's translations are never
+ * orphaned. `demandEvidenceNote`/`growthPath` are nullable, mirroring the
+ * same nullability as `ideas`' own columns (a translation of a `null`
+ * source field is itself `null`, never invented text).
+ * `baselineRateQuote`/`demandEvidenceQuote`/citations/numbers/currency are
+ * never stored here at all (Boundary: never sent to or returned by the
+ * translation call) — this table only ever holds the 4 fields that are.
+ */
+export const ideaTranslations = pgTable(
+  'idea_translations',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    ideaId: uuid('idea_id')
+      .notNull()
+      .references(() => ideas.id, { onDelete: 'cascade' }),
+    language: text('language').notNull(),
+    title: text('title').notNull(),
+    rationale: text('rationale').notNull(),
+    demandEvidenceNote: text('demand_evidence_note'),
+    growthPath: text('growth_path'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [uniqueIndex('idea_translations_idea_id_language_idx').on(table.ideaId, table.language)],
+);

@@ -3,10 +3,12 @@ import { ChevronDown, Loader2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
   ideasResponseSchema,
+  translateIdeasResponseSchema,
   convertMoney,
   formatMoney,
   type IdeaResponse,
   type IdeaStatus,
+  type IdeaTranslation,
   type CurrencyCode,
   type WeeklyTimeAvailability,
   type Money,
@@ -171,6 +173,13 @@ function IdeasSkeleton({ loadingLabel }: { loadingLabel: string }) {
  * No dedicated UI-language-to-locale layer exists yet (Story 5.4), so this
  * is the minimal mapping this story needs. */
 const LOCALE_BY_LANGUAGE: Record<string, string> = { en: 'en-US', de: 'de-DE' };
+
+/** Story 2.7: the `translations` cache's own key — one cached translation
+ * per idea *and* language, mirroring the server's `idea_translations`
+ * table's own `(idea_id, language)` uniqueness. */
+function translationKey(ideaId: string, language: string): string {
+  return `${ideaId}:${language}`;
+}
 
 /**
  * Story 2.2 follow-up fix round 2, fix 1: a time-based *determinate* bar —
@@ -397,18 +406,38 @@ function Citation({ citation }: { citation: string }) {
  */
 function IdeaCard({
   idea,
+  translation,
   currency,
   locale,
   onSetStatus,
   pending,
 }: {
   idea: IdeaResponse;
+  /** Story 2.7: the cached translation for this idea into the *current* UI
+   * language, if one exists and is needed (`idea.language !== i18n.language`
+   * — the parent only ever passes one once it's resolved, never a stale
+   * one for a different language). `undefined` when the card's own stored
+   * language already matches the UI, or a translation hasn't arrived yet. */
+  translation: IdeaTranslation | undefined;
   currency: CurrencyCode;
   locale: string;
   onSetStatus: (ideaId: string, status: SettableStatus) => void;
   pending: boolean;
 }) {
   const { t } = useTranslation('ideas');
+  // Story 2.7: only the 4 fields a translation ever covers are overridden —
+  // every other field (numbers, currency, citations, URLs, quotes, trust
+  // labels) always comes from the original `idea`, whether or not a
+  // translation is active (Boundary: those are never translated at all).
+  const displayIdea: IdeaResponse = translation
+    ? {
+        ...idea,
+        title: translation.title,
+        rationale: translation.rationale,
+        demandEvidenceNote: translation.demandEvidenceNote,
+        growthPath: translation.growthPath,
+      }
+    : idea;
   const startupCost = convertMoney(idea.startupCost, currency);
   const monthlyPotential = computeMonthlyPotential(idea);
   const monthlyPotentialConverted = monthlyPotential ? convertMoney(monthlyPotential, currency) : undefined;
@@ -432,7 +461,9 @@ function IdeaCard({
   // Fix round 4, fix 3: 2-3 bullet lines, newline-separated within the one
   // rationale string (shared/schemas/ideas.ts's rationaleSchema enforces
   // the shape) — split for a real <ul>/<li> list, never raw \n in prose.
-  const rationaleLines = idea.rationale.split('\n');
+  // Story 2.7: `displayIdea.rationale`, so an active translation renders
+  // its own lines, not the stored-language ones.
+  const rationaleLines = displayIdea.rationale.split('\n');
   // Story 2.3 AC2: shared fixed-width label column so values start at a
   // consistent x-position regardless of label length/language (Code Map).
   const labelClassName = 'w-36 shrink-0 text-muted-foreground';
@@ -461,7 +492,7 @@ function IdeaCard({
           ) : null}
           <Badge variant="muted">{t(`ideaType.${idea.ideaType}`)}</Badge>
         </div>
-        <CardTitle className="leading-snug">{idea.title}</CardTitle>
+        <CardTitle className="leading-snug">{displayIdea.title}</CardTitle>
       </div>
 
       {/* Block: rationale, as a real list — why it fits / first step /
@@ -569,7 +600,7 @@ function IdeaCard({
          * when this idea actually has demand evidence; otherwise the row
          * holds just the toggle, same as an idea predating this story. */}
         <div className="flex items-center justify-between gap-2">
-          {hasDemandEvidence(idea) ? <span className="text-xs text-muted-foreground">{t('card.demandEvidenceLabel')}</span> : <span />}
+          {hasDemandEvidence(displayIdea) ? <span className="text-xs text-muted-foreground">{t('card.demandEvidenceLabel')}</span> : <span />}
           <Button
             type="button"
             variant="ghost"
@@ -581,7 +612,7 @@ function IdeaCard({
             // at once) for screen-reader users and for role-based lookups.
             // The visible label stays the plain "Details" text below;
             // `aria-label` is what screen readers announce instead.
-            aria-label={t('card.detailsToggleAriaLabel', { title: idea.title })}
+            aria-label={t('card.detailsToggleAriaLabel', { title: displayIdea.title })}
             aria-expanded={detailsOpen}
             aria-controls={detailsPanelId}
             onClick={() => setDetailsOpen((open) => !open)}
@@ -609,7 +640,7 @@ function IdeaCard({
           {/* User-requested follow-up: demand evidence + growth path lead
            * the panel, ahead of the cited-fields chips and the baseline-
            * rate citation line below. */}
-          <IdeaEvidence idea={idea} viewerCountry={viewerCountry} />
+          <IdeaEvidence idea={displayIdea} viewerCountry={viewerCountry} />
           <span className="text-xs text-muted-foreground">
             {t('card.citedFieldsSummary', { count: idea.citedIntakeFields.length })}
           </span>
@@ -711,6 +742,32 @@ export function IdeasPanel() {
   const [pendingIdeaIds, setPendingIdeaIds] = React.useState<ReadonlySet<string>>(new Set());
   const [statusUpdateFailed, setStatusUpdateFailed] = React.useState(false);
 
+  // Story 2.7: a cached translation per `${ideaId}:${language}` — an
+  // immutable client-side mirror of the server's own `idea_translations`
+  // cache, so toggling the UI language back and forth after the first
+  // translate never re-fetches (AC: "switching back and forth is instant").
+  const [translations, setTranslations] = React.useState<ReadonlyMap<string, IdeaTranslation>>(new Map());
+  // Live fix (post-handoff): per-language, not a single phase — this is
+  // what lets the banner's visibility be *derived* from "is a translation
+  // for the currently-selected UI language in flight/failed right now",
+  // regardless of whether that fetch was started by the user actually
+  // switching or by the background prefetch below. A prefetch for a
+  // language the user isn't currently viewing never shows anything; the
+  // moment they switch to a language that's already in-flight or already
+  // failed, the right banner appears immediately, with no new fetch needed
+  // in the in-flight case.
+  const [translatingLanguages, setTranslatingLanguages] = React.useState<ReadonlySet<string>>(new Set());
+  const [failedLanguages, setFailedLanguages] = React.useState<ReadonlySet<string>>(new Set());
+  const translationsRef = React.useRef(translations);
+  React.useEffect(() => {
+    translationsRef.current = translations;
+  }, [translations]);
+  // Guards against a second concurrent call for the *same* target language
+  // firing before the first resolves — the state above alone isn't enough,
+  // since the effects below re-run synchronously on every render while the
+  // state update that would reflect a call starting is still pending.
+  const translationInFlightRef = React.useRef<Set<string>>(new Set());
+
   const isMountedRef = React.useRef(true);
   React.useEffect(() => {
     // See `IntakeForm`'s identical comment: React 19 `<StrictMode>` double-
@@ -749,6 +806,129 @@ export function IdeasPanel() {
       cancelled = true;
     };
   }, []);
+
+  /**
+   * Story 2.7: one batched `POST /api/ideas/translate` for every visible id
+   * still missing a cached translation into `language` — never one call
+   * per idea (AC: "one batched model call translates all visible cards
+   * together"). The whole batch's result is merged into `translations` in
+   * one `setState` call, so cards swap atomically together, never one at a
+   * time (Boundary: "never a mixed-language flash").
+   *
+   * Called by both the foreground effect (current UI language) and the
+   * background prefetch effect (the other one) below — which one started
+   * it never matters to the UI, since the banner is derived from
+   * `translatingLanguages`/`failedLanguages` against the *currently
+   * selected* language, not from who issued the request.
+   */
+  const runTranslation = React.useCallback((ideaIds: string[], language: string) => {
+    translationInFlightRef.current.add(language);
+    setTranslatingLanguages((prev) => new Set(prev).add(language));
+    setFailedLanguages((prev) => {
+      if (!prev.has(language)) return prev;
+      const next = new Set(prev);
+      next.delete(language);
+      return next;
+    });
+
+    fetch('/api/ideas/translate', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ideaIds, language }),
+    })
+      .then(async (res) => {
+        const body: unknown = await res.json();
+        const result = translateIdeasResponseSchema.safeParse(body);
+        if (!res.ok || !result.success) {
+          if (isMountedRef.current) setFailedLanguages((prev) => new Set(prev).add(language));
+          return;
+        }
+        if (isMountedRef.current) {
+          setTranslations((prev) => {
+            const next = new Map(prev);
+            for (const translation of result.data.translations) {
+              next.set(translationKey(translation.ideaId, translation.language), translation);
+            }
+            return next;
+          });
+        }
+      })
+      .catch(() => {
+        if (isMountedRef.current) setFailedLanguages((prev) => new Set(prev).add(language));
+      })
+      .finally(() => {
+        translationInFlightRef.current.delete(language);
+        if (isMountedRef.current) {
+          setTranslatingLanguages((prev) => {
+            if (!prev.has(language)) return prev;
+            const next = new Set(prev);
+            next.delete(language);
+            return next;
+          });
+        }
+      });
+  }, []);
+
+  // AC: "a visible card's language differs from the UI language" triggers
+  // exactly one batched translate call — re-evaluated whenever the loaded
+  // ideas or the UI language change, but only once `GET /api/ideas` itself
+  // has settled (never mid-load/mid-generate, where `ideas` is still stale
+  // or about to be replaced wholesale). Skipped when the background
+  // prefetch effect (below) is already chasing this same language — its
+  // own in-flight/failed state already drives the banner either way.
+  React.useEffect(() => {
+    if (phase !== 'idle' || translationInFlightRef.current.has(i18n.language)) return;
+    const language = i18n.language;
+    const missingIds = ideas
+      .filter((idea) => idea.language !== language && !translationsRef.current.has(translationKey(idea.id, language)))
+      .map((idea) => idea.id);
+    if (missingIds.length > 0) runTranslation(missingIds, language);
+  }, [ideas, i18n.language, phase, runTranslation]);
+
+  // Live fix (post-handoff, user-reported): "the moment the user clicks
+  // from English to German, the translation should already be there" — a
+  // switch into a language no card has been translated into yet used to
+  // only start the model call once the user actually switched, so the
+  // first switch (unlike a repeat one) always had a real, visible wait.
+  // This pre-translates every visible idea into whichever of the two
+  // supported languages it ISN'T already stored in, as soon as ideas load
+  // — by the time the user actually toggles the UI language, the cache
+  // this populates usually already has it, so that switch is the same
+  // instant cache-hit a *repeat* switch already was. Invisible until the
+  // user actually switches to the language it's working on (the banner is
+  // derived from `translatingLanguages`/`failedLanguages` against the
+  // *currently selected* language, never from who started the request).
+  React.useEffect(() => {
+    if (phase !== 'idle') return;
+    const byOtherLanguage = new Map<string, string[]>();
+    for (const idea of ideas) {
+      if (idea.status === 'rejected') continue;
+      const otherLanguage = idea.language === 'en' ? 'de' : 'en';
+      if (translationsRef.current.has(translationKey(idea.id, otherLanguage))) continue;
+      const ids = byOtherLanguage.get(otherLanguage) ?? [];
+      ids.push(idea.id);
+      byOtherLanguage.set(otherLanguage, ids);
+    }
+    for (const [otherLanguage, ids] of byOtherLanguage) {
+      if (!translationInFlightRef.current.has(otherLanguage)) runTranslation(ids, otherLanguage);
+    }
+  }, [ideas, phase, runTranslation]);
+
+  /**
+   * AC: "on failure the cards stay in their stored language with a neutral
+   * notice and a retry" — re-runs the exact same batched request for
+   * whatever is still mismatched right now (if the ideas list changed
+   * since the failed attempt, this naturally retries the current set, not
+   * a stale one).
+   */
+  const handleRetryTranslation = React.useCallback(() => {
+    const language = i18n.language;
+    const missingIds = ideas
+      .filter((idea) => idea.language !== language && !translationsRef.current.has(translationKey(idea.id, language)))
+      .map((idea) => idea.id);
+    if (missingIds.length > 0) runTranslation(missingIds, language);
+  }, [ideas, i18n.language, runTranslation]);
 
   /**
    * AC1/AC2/AC3/AC5/Fix: optimistic local update mirroring the server's own
@@ -821,7 +1001,17 @@ export function IdeasPanel() {
       setProgress(Math.min(PROGRESS_HOLD_PERCENT, (elapsedMs / TYPICAL_GENERATE_DURATION_MS) * PROGRESS_HOLD_PERCENT));
     }, PROGRESS_TICK_MS);
 
-    fetch('/api/ideas/generate', { method: 'POST', credentials: 'include', signal: controller.signal })
+    // Story 2.7 (AC4): a button click is not a written chat message, so the
+    // server can't detect its language from a discovery-thread message —
+    // the current UI language is sent explicitly instead, and the server
+    // uses it directly rather than guessing.
+    fetch('/api/ideas/generate', {
+      method: 'POST',
+      credentials: 'include',
+      signal: controller.signal,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ language: i18n.language }),
+    })
       .then(async (res) => {
         const body: unknown = await res.json();
         const result = ideasResponseSchema.safeParse(body);
@@ -851,7 +1041,7 @@ export function IdeasPanel() {
         window.clearTimeout(timeoutId);
         window.clearInterval(progressIntervalId);
       });
-  }, []);
+  }, [i18n.language]);
 
   const locale = LOCALE_BY_LANGUAGE[i18n.language] ?? 'en-US';
   const generating = phase === 'generating';
@@ -889,6 +1079,28 @@ export function IdeasPanel() {
             {t('error.statusUpdateFailed')}
           </Badge>
         ) : null}
+        {/* Story 2.7: independent of `phase`/`statusUpdateFailed` too — a
+         * language-switch translation runs in the background while the
+         * existing cards keep showing their stored-language text (the
+         * atomic swap in `translations` only happens once the whole batch
+         * resolves), so this is a small status line, not a replacement for
+         * the grid below (mirrors `IdeasSkeleton`'s own
+         * `role="status" aria-live="polite"` announcement pattern). */}
+        {translatingLanguages.has(i18n.language) ? (
+          <Badge variant="muted" role="status" aria-live="polite">
+            {t('translating')}
+          </Badge>
+        ) : null}
+        {failedLanguages.has(i18n.language) && !translatingLanguages.has(i18n.language) ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="muted" role="alert">
+              {t('error.translateFailed')}
+            </Badge>
+            <Button type="button" size="sm" variant="outline" onClick={handleRetryTranslation}>
+              {t('actions.retryTranslation')}
+            </Button>
+          </div>
+        ) : null}
         {/* Round 13: only when genuinely idle and empty — not alongside an
          * error message, which already explains the state. */}
         {phase === 'idle' && ideas.length === 0 ? (
@@ -900,6 +1112,7 @@ export function IdeasPanel() {
               <IdeaCard
                 key={idea.id}
                 idea={idea}
+                translation={translations.get(translationKey(idea.id, i18n.language))}
                 currency={currency}
                 locale={locale}
                 onSetStatus={handleSetIdeaStatus}

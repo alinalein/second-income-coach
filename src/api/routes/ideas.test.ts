@@ -8,7 +8,12 @@ import { createIdeasRouter, type IdeasRouterDeps } from './ideas.js';
 import { createDb } from '../../db/client.js';
 import { users, ideas, userSettings } from '../../db/schema/index.js';
 
-const testEnv: IdeasRouterDeps['env'] = { RATE_LIMIT_WINDOW_MS: 60_000 };
+// Story 2.7: `createIdeasRouter` now also builds a translation chat model
+// at construction time (`createChatModel(env, TRANSLATION_MODEL_ID)`) —
+// these two keys are never actually used by any test below (no test here
+// exercises `POST /translate`'s real model call), just present so
+// construction itself doesn't throw / fails typecheck.
+const testEnv: IdeasRouterDeps['env'] = { RATE_LIMIT_WINDOW_MS: 60_000, OPENROUTER_API_KEY: 'test-key', MISTRAL_API_KEY: 'test-key' };
 
 type FakeAgent = IdeasRouterDeps['agent'];
 
@@ -45,7 +50,7 @@ function fakeAgent(overrides: Partial<FakeAgent> = {}): FakeAgent {
   } as unknown as FakeAgent;
 }
 
-function buildTestApp(agent: FakeAgent, userId: string) {
+function buildTestApp(agent: FakeAgent, userId: string, overrides: Partial<IdeasRouterDeps> = {}) {
   const app = express();
   app.use(express.json());
   app.use(session({ secret: 'test-secret', resave: false, saveUninitialized: false }));
@@ -53,7 +58,7 @@ function buildTestApp(agent: FakeAgent, userId: string) {
     req.session.userId = userId;
     next();
   });
-  app.use('/api/ideas', createIdeasRouter({ env: testEnv, db, agent }));
+  app.use('/api/ideas', createIdeasRouter({ env: testEnv, db, agent, ...overrides }));
   return app;
 }
 
@@ -215,6 +220,124 @@ describe('createIdeasRouter POST /generate', () => {
       expect(res.body).toEqual({ error: expect.any(String) });
       const rows = await db.select().from(ideas).where(eq(ideas.userId, userId));
       expect(rows).toHaveLength(0);
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+
+  // Story 2.7 (AC4): the button's own explicit `language` wins outright,
+  // never overridden by the (unmocked, thus always-fallback-'en')
+  // discovery-thread detection.
+  it('passes an explicit request-body language straight through as replyLanguage, skipping detection', async () => {
+    const userId = await createTestUser();
+    try {
+      const agent = fakeAgent({
+        invoke: vi.fn().mockImplementation(async () => {
+          await insertFiveIdeas(userId);
+          return { messages: [] };
+        }),
+      });
+
+      await request(buildTestApp(agent, userId)).post('/api/ideas/generate').send({ language: 'de' });
+
+      const [{ messages }, config] = (agent.invoke as ReturnType<typeof vi.fn>).mock.calls[0]!;
+      expect(config).toEqual({ configurable: { thread_id: `ideas-trigger:${userId}` }, signal: expect.any(AbortSignal) });
+      expect(messages[0].content).toContain('German ("de")');
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+});
+
+describe('createIdeasRouter POST /translate', () => {
+  // AC1/AC2: a translation of the caller's own ideas, persisted and
+  // returned — via the injectable `translateIdeaCards` seam (the real
+  // implementation's own model/moderation/cache behavior has its own
+  // dedicated test suite in `src/agent/translate-idea-cards.test.ts`).
+  it('returns the translations produced by translateIdeaCards for the caller’s own idea ids', async () => {
+    const userId = await createTestUser();
+    try {
+      const ids = await insertFiveIdeas(userId);
+      const translateIdeaCards = vi.fn().mockResolvedValue([
+        { ideaId: ids[0], language: 'de', title: 'DE Titel', rationale: 'Zeile 1.\nZeile 2.', demandEvidenceNote: null, growthPath: null },
+      ]);
+
+      const res = await request(buildTestApp(fakeAgent(), userId, { translateIdeaCards }))
+        .post('/api/ideas/translate')
+        .send({ ideaIds: [ids[0]], language: 'de' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.translations).toEqual([
+        { ideaId: ids[0], language: 'de', title: 'DE Titel', rationale: 'Zeile 1.\nZeile 2.', demandEvidenceNote: null, growthPath: null },
+      ]);
+      expect(translateIdeaCards).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.anything(),
+        [ids[0]],
+        'de',
+        expect.any(AbortSignal),
+      );
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+
+  // Security-relevant failure branch: a foreign idea id must never be
+  // translated or leak whether it exists — same 404 vocabulary as
+  // `POST /:id/status`'s own ownership check.
+  it('returns 404 and never calls translateIdeaCards when an idea id is not owned by the caller', async () => {
+    const userId = await createTestUser();
+    const otherUserId = await createTestUser();
+    try {
+      await insertFiveIdeas(userId);
+      const otherIds = await insertFiveIdeas(otherUserId);
+      const translateIdeaCards = vi.fn();
+
+      const res = await request(buildTestApp(fakeAgent(), userId, { translateIdeaCards }))
+        .post('/api/ideas/translate')
+        .send({ ideaIds: [otherIds[0]], language: 'de' });
+
+      expect(res.status).toBe(404);
+      expect(translateIdeaCards).not.toHaveBeenCalled();
+    } finally {
+      await cleanUp(userId);
+      await cleanUp(otherUserId);
+    }
+  });
+
+  // I/O matrix: "Failure/abort/moderation-reject persists nothing" surfaces
+  // to the client as a generic error, same vocabulary as POST /generate's
+  // own failure path.
+  it('returns 502 when translateIdeaCards fails (timeout, abort, or moderation reject)', async () => {
+    const userId = await createTestUser();
+    try {
+      const ids = await insertFiveIdeas(userId);
+      const translateIdeaCards = vi.fn().mockRejectedValue(new Error('translate_idea_cards: moderation rejected the translated batch'));
+
+      const res = await request(buildTestApp(fakeAgent(), userId, { translateIdeaCards }))
+        .post('/api/ideas/translate')
+        .send({ ideaIds: [ids[0]], language: 'de' });
+
+      expect(res.status).toBe(502);
+      expect(res.body).toEqual({ error: expect.any(String) });
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+
+  // Input-validation failure branch: an empty/malformed body never reaches
+  // the ownership check or translateIdeaCards at all.
+  it('returns 400 for a malformed body (no ideaIds)', async () => {
+    const userId = await createTestUser();
+    try {
+      const translateIdeaCards = vi.fn();
+      const res = await request(buildTestApp(fakeAgent(), userId, { translateIdeaCards }))
+        .post('/api/ideas/translate')
+        .send({ language: 'de' });
+
+      expect(res.status).toBe(400);
+      expect(translateIdeaCards).not.toHaveBeenCalled();
     } finally {
       await cleanUp(userId);
     }

@@ -188,7 +188,11 @@ export function App() {
   }, [hasIntake]);
   // AC: "it is applied when the app loads for a signed-in user" — only once
   // a session is confirmed, never speculatively while still signed out.
-  useAppliedUiLanguage(authStatus.state === 'authenticated');
+  // Live fix (post-handoff): `uiLanguageReady` gates rendering below, same
+  // pattern as `hasIntake === null` — nothing that depends on the real UI
+  // language (e.g. "Generate new ideas") can fire before it's actually
+  // applied.
+  const uiLanguageReady = useAppliedUiLanguage(authStatus.state === 'authenticated');
   // Story 5.5: bumping this key remounts `IdeasPanel` on a successful
   // currency save, so its existing mount-time fetch re-reads the
   // now-updated currency from `GET /api/ideas` — no change needed inside
@@ -228,7 +232,7 @@ export function App() {
        * (which should stay the original narrow reading width) get their own
        * `max-w-3xl` wrapper instead of inheriting one from `<main>`. */}
       <main className="mx-auto flex max-w-6xl flex-col gap-6 px-6 py-10">
-        {hasIntake === null ? (
+        {hasIntake === null || !uiLanguageReady ? (
           <p className="mx-auto w-full max-w-3xl text-sm text-muted-foreground">{tIntake('loading')}</p>
         ) : showIntakeForm ? (
           <div className="mx-auto w-full max-w-3xl">
