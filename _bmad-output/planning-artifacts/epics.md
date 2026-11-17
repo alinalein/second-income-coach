@@ -1204,6 +1204,10 @@ So that I understand what I'm actually spending.
 **When** it completes
 **Then** the token count, the model id actually used, and a snapshot of that model's price at the time are all persisted per message in Postgres as an integer minor-unit amount plus currency code - not a float, not just a final dollar figure
 
+**Given** a typical chat turn that costs a fraction of a cent
+**When** the cost is stored and displayed
+**Then** it is never rounded to a misleading "0.00": the amount is stored as an integer in micro-units (millionths of the currency unit, still an integer, never a float, AD-27) and the shared money helper formats it with enough decimals to be meaningful (for example "€0.0014 (est.)"; an amount of exactly zero tokens of cost shows nothing special); the registry price and conversion rate stay the single source
+
 **Given** a model with no price in the registry
 **When** cost would be computed
 **Then** the display shows the token count only, with no cost figure - it never guesses or shows a misleading $0
