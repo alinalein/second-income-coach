@@ -137,6 +137,14 @@ export interface CreateCoachAgentDeps {
    * only agent instance above, so a timeout there fails the turn instead of
    * re-running the whole thing (including every search) from scratch. */
   modelNodeRetryPolicy?: RetryPolicy;
+  /** Story 6.2 (AD-23): test-only seam for the trajectory eval harness
+   * (`src/evals/harness.ts`) — overrides the hardcoded `tools: [...]` array
+   * below wholesale. Lets an eval case swap in a schema-identical, instant
+   * fake `generate_ideas` (its real factory makes its own nested real-model
+   * call, which would compound per-model eval cost) while still reusing the
+   * real `submit_intake` tool unmodified. Omitted in production — defaults
+   * to today's exact two-tool wiring, so this is purely additive. */
+  tools?: DynamicStructuredTool[];
 }
 
 /**
@@ -163,6 +171,7 @@ export function createCoachAgent({
   webSearchTool,
   modelNodeTimeoutMs = MODEL_NODE_TIMEOUT_MS,
   modelNodeRetryPolicy,
+  tools,
 }: CreateCoachAgentDeps) {
   const chatModel = model ?? createChatModel(env, DEFAULT_MODEL_ID);
   const progress = createProgressMiddleware();
@@ -186,7 +195,7 @@ export function createCoachAgent({
     model: chatModel,
     middleware,
     contextSchema: agentContextSchema,
-    tools: [createSubmitIntakeTool(db), createGenerateIdeasTool(db, chatModel, webSearchTool, env)],
+    tools: tools ?? [createSubmitIntakeTool(db), createGenerateIdeasTool(db, chatModel, webSearchTool, env)],
   });
 
   const graph = new StateGraph(MessagesAnnotation).addNode('model', async (state, runtime) => {

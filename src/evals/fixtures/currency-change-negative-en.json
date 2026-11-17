@@ -1,0 +1,19 @@
+{
+  "id": "currency-change-negative-en",
+  "type": "deterministic",
+  "language": "en",
+  "toolUnderTest": "none",
+  "input": [
+    {
+      "role": "human",
+      "content": "Can you change my currency to USD please?"
+    }
+  ],
+  "referenceTrajectory": [
+    { "role": "user", "content": "currency change request" },
+    {
+      "role": "assistant",
+      "content": "I can't change your currency myself — you can switch it in the Settings screen."
+    }
+  ]
+}

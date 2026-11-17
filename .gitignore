@@ -8,3 +8,7 @@ dist/
 !.env.example
 .DS_Store
 Blueprint-LLM-agent-app.md
+# Story 6.2: generated per-run trajectory eval output, never checked in —
+# `npm run eval` writes it fresh every time (fixtures under
+# src/evals/fixtures/ are the versioned, committed part of the suite).
+src/evals/results/

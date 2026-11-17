@@ -1,0 +1,31 @@
+{
+  "id": "submit-intake-forgets-en",
+  "type": "deterministic",
+  "language": "en",
+  "toolUnderTest": "submit_intake",
+  "input": [
+    {
+      "role": "human",
+      "content": "My intake info: Skills/interests: 'Writing blog posts and newsletters.' Weekly time availability: under 5 hours. Starting budget range: under 100 euros. Risk tolerance: low. What's stopped me before: 'Nothing dramatic ever happens, it just slips my mind and keeps getting pushed to the bottom of my list until I forget about it entirely.' Please submit it."
+    }
+  ],
+  "referenceTrajectory": [
+    { "role": "user", "content": "intake answers" },
+    {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+        {
+          "id": "ref-1",
+          "type": "function",
+          "function": {
+            "name": "submit_intake",
+            "arguments": "{\"skillsInterests\":\"Writing blog posts and newsletters.\",\"weeklyTimeAvailability\":\"under_5h\",\"startingBudgetRange\":\"under_100\",\"riskTolerance\":\"low\",\"stoppedBeforeText\":\"Nothing dramatic ever happens, it just slips my mind and keeps getting pushed to the bottom of my list until I forget about it entirely.\",\"failurePattern\":\"forgets_deprioritizes\"}"
+          }
+        }
+      ]
+    },
+    { "role": "tool", "tool_call_id": "ref-1", "content": "" },
+    { "role": "assistant", "content": "Thanks, I've saved your answers." }
+  ]
+}

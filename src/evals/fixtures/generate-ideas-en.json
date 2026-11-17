@@ -1,0 +1,31 @@
+{
+  "id": "generate-ideas-en",
+  "type": "deterministic",
+  "language": "en",
+  "toolUnderTest": "generate_ideas",
+  "input": [
+    {
+      "role": "human",
+      "content": "I already finished my intake form earlier — can you generate my 5 income ideas now?"
+    }
+  ],
+  "referenceTrajectory": [
+    { "role": "user", "content": "generate ideas request" },
+    {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+        {
+          "id": "ref-1",
+          "type": "function",
+          "function": {
+            "name": "generate_ideas",
+            "arguments": "{\"replyLanguage\":\"en\"}"
+          }
+        }
+      ]
+    },
+    { "role": "tool", "tool_call_id": "ref-1", "content": "" },
+    { "role": "assistant", "content": "Here are your 5 income ideas." }
+  ]
+}

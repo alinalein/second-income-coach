@@ -9,6 +9,7 @@
     "start": "node dist/api/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
+    "eval": "vitest run --config evals/vitest.eval.config.ts",
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",
     "db:migrate": "drizzle-kit migrate"
@@ -45,6 +46,7 @@
     "@types/node": "^20.19.0",
     "@types/pg": "^8.23.1",
     "@types/supertest": "^7.2.1",
+    "agentevals": "^0.0.7",
     "drizzle-kit": "^0.31.11",
     "supertest": "^7.3.2",
     "tsx": "^4.23.15",

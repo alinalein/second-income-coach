@@ -1,0 +1,31 @@
+{
+  "id": "submit-intake-gets-stuck-en",
+  "type": "deterministic",
+  "language": "en",
+  "toolUnderTest": "submit_intake",
+  "input": [
+    {
+      "role": "human",
+      "content": "Here's my intake: Skills/interests: 'Photography and editing photos.' Weekly time availability: 10 to 20 hours. Starting budget range: 500 to 2000 euros. Risk tolerance: high. What's stopped me before: 'I get everything set up and then I just don't know what the next step actually is, so I stall out and never move forward.' Please save this."
+    }
+  ],
+  "referenceTrajectory": [
+    { "role": "user", "content": "intake answers" },
+    {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+        {
+          "id": "ref-1",
+          "type": "function",
+          "function": {
+            "name": "submit_intake",
+            "arguments": "{\"skillsInterests\":\"Photography and editing photos.\",\"weeklyTimeAvailability\":\"10_to_20h\",\"startingBudgetRange\":\"500_to_2000\",\"riskTolerance\":\"high\",\"stoppedBeforeText\":\"I get everything set up and then I just don't know what the next step actually is, so I stall out and never move forward.\",\"failurePattern\":\"gets_stuck_no_next_step\"}"
+          }
+        }
+      ]
+    },
+    { "role": "tool", "tool_call_id": "ref-1", "content": "" },
+    { "role": "assistant", "content": "Thanks, I've saved your answers." }
+  ]
+}

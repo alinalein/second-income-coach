@@ -1,0 +1,12 @@
+{
+  "id": "quality-generate-ideas-phrasing-en",
+  "type": "quality",
+  "language": "en",
+  "toolUnderTest": "generate_ideas",
+  "input": [
+    {
+      "role": "human",
+      "content": "okay so I filled out that form thing earlier, what can I actually do to make some extra cash on the side given everything I told you?"
+    }
+  ]
+}
