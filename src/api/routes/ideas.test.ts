@@ -25,6 +25,7 @@ const testEnv: IdeasRouterDeps['env'] = {
   MISTRAL_API_KEY: 'test-key',
   DAILY_SEARCH_BUDGET: 1_000_000,
   DAILY_GENERATIONS_PER_USER: 1_000_000,
+  UNLIMITED_USER_EMAILS: '',
 };
 
 type FakeAgent = IdeasRouterDeps['agent'];

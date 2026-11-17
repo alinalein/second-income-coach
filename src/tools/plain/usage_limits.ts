@@ -1,6 +1,7 @@
 import { and, eq, sql } from 'drizzle-orm';
 import type { createDb } from '../../db/client.js';
-import { userGenerationCounts, searchBudgetCounts } from '../../db/schema/index.js';
+import type { Env } from '../../config/env.js';
+import { userGenerationCounts, searchBudgetCounts, users } from '../../db/schema/index.js';
 
 type Db = ReturnType<typeof createDb>['db'];
 
@@ -86,4 +87,32 @@ export async function incrementAndGetSearchBudgetCount(db: Db, now: Date = new D
     .returning({ count: searchBudgetCounts.count });
   // Same guarantee as `incrementAndGetUserGenerationCount` above.
   return row!.count;
+}
+
+/**
+ * Story 2.11 follow-up: trimmed, case-insensitive match against
+ * `UNLIMITED_USER_EMAILS`'s comma-separated list. Pure and deterministic
+ * — never logs or returns the list itself (no email is ever passed back),
+ * just a boolean. An empty list (the default) matches nobody.
+ */
+export function isUnlimitedUserEmail(email: string, unlimitedUserEmails: string): boolean {
+  const normalizedEmail = email.trim().toLowerCase();
+  return unlimitedUserEmails
+    .split(',')
+    .map((entry) => entry.trim().toLowerCase())
+    .filter((entry) => entry.length > 0)
+    .includes(normalizedEmail);
+}
+
+/**
+ * The session only carries `userId` (never email), so this looks the
+ * signed-in user's own email up by id before checking the exemption list.
+ * Exempts only the per-user daily generation check — the shared search
+ * budget, the per-run search cap, the forced cheap search settings, and
+ * the per-user query cache all still apply to every user, listed or not.
+ */
+export async function isUnlimitedUser(db: Db, userId: string, env: Pick<Env, 'UNLIMITED_USER_EMAILS'>): Promise<boolean> {
+  const [row] = await db.select({ email: users.email }).from(users).where(eq(users.id, userId)).limit(1);
+  if (!row) return false;
+  return isUnlimitedUserEmail(row.email, env.UNLIMITED_USER_EMAILS);
 }

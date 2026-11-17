@@ -79,6 +79,11 @@ const envSchema = z.object({
   // Both counters live in Postgres and reset at UTC midnight.
   DAILY_SEARCH_BUDGET: z.coerce.number().int().positive().default(500),
   DAILY_GENERATIONS_PER_USER: z.coerce.number().int().positive().default(50),
+  // Story 2.11 follow-up: comma-separated owner emails exempt from
+  // DAILY_GENERATIONS_PER_USER only (never the shared search budget, the
+  // per-run cap, or the forced search settings). Empty default -> nobody
+  // exempt.
+  UNLIMITED_USER_EMAILS: z.string().default(''),
 });
 
 export type Env = z.infer<typeof envSchema>;

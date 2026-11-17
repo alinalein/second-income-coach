@@ -51,6 +51,8 @@ describe('loadEnv (I/O matrix: fresh checkout, missing env)', () => {
     expect(env.WEB_SEARCH_MODE).toBe('live');
     expect(env.DAILY_SEARCH_BUDGET).toBe(500);
     expect(env.DAILY_GENERATIONS_PER_USER).toBe(50);
+    // Story 2.11 follow-up: empty by default -> nobody exempt.
+    expect(env.UNLIMITED_USER_EMAILS).toBe('');
   });
 
   // Story 2.11 AC4: "the mode is one env variable documented in

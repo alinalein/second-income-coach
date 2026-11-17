@@ -27,6 +27,7 @@ function testEnv(overrides: Partial<Env> = {}): Env {
     WEB_SEARCH_MODE: 'stub',
     DAILY_SEARCH_BUDGET: 500,
     DAILY_GENERATIONS_PER_USER: 50,
+    UNLIMITED_USER_EMAILS: '',
     ...overrides,
   };
 }

@@ -27,6 +27,7 @@ import {
   incrementAndGetUserGenerationCount,
   getSearchBudgetCount,
   getNextUtcResetIso,
+  isUnlimitedUser,
 } from '../../tools/plain/usage_limits.js';
 import { userSettings, plans } from '../../db/schema/index.js';
 import { createStrictRateLimiter } from '../middleware/rateLimit.js';
@@ -48,7 +49,10 @@ const setIdeaStatusRequestSchema = z.object({ status: settableIdeaStatusSchema }
 const generateIdeasRequestSchema = z.object({ language: replyLanguageSchema }).partial();
 
 export interface IdeasRouterDeps {
-  env: Pick<Env, 'RATE_LIMIT_WINDOW_MS' | 'OPENROUTER_API_KEY' | 'MISTRAL_API_KEY' | 'DAILY_SEARCH_BUDGET' | 'DAILY_GENERATIONS_PER_USER'>;
+  env: Pick<
+    Env,
+    'RATE_LIMIT_WINDOW_MS' | 'OPENROUTER_API_KEY' | 'MISTRAL_API_KEY' | 'DAILY_SEARCH_BUDGET' | 'DAILY_GENERATIONS_PER_USER' | 'UNLIMITED_USER_EMAILS'
+  >;
   db: ReturnType<typeof createDb>['db'];
   agent: CoachAgent;
   /** Test-only seam — same DI precedent as `GenerateIdeasDeps.generateDrafts`
@@ -80,19 +84,22 @@ async function getUserCurrency(db: Db, userId: string): Promise<CurrencyCode> {
  */
 async function computeGenerateLimitStatus(
   db: Db,
-  env: Pick<Env, 'DAILY_SEARCH_BUDGET' | 'DAILY_GENERATIONS_PER_USER'>,
+  env: Pick<Env, 'DAILY_SEARCH_BUDGET' | 'DAILY_GENERATIONS_PER_USER' | 'UNLIMITED_USER_EMAILS'>,
   userId: string,
   now: Date = new Date(),
 ): Promise<GenerateLimitStatus> {
-  const [userGenerationsUsed, sharedSearchesUsed] = await Promise.all([
+  const [userGenerationsUsed, sharedSearchesUsed, unlimited] = await Promise.all([
     getUserGenerationCount(db, userId, now),
     getSearchBudgetCount(db, now),
+    isUnlimitedUser(db, userId, env),
   ]);
 
   if (sharedSearchesUsed >= env.DAILY_SEARCH_BUDGET) {
     return { blocked: true, reason: 'shared_budget', limit: null, resetsAt: getNextUtcResetIso(now) };
   }
-  if (userGenerationsUsed >= env.DAILY_GENERATIONS_PER_USER) {
+  // Story 2.11 follow-up: an unlimited user skips only this check — the
+  // shared budget check above still applies to them unchanged.
+  if (!unlimited && userGenerationsUsed >= env.DAILY_GENERATIONS_PER_USER) {
     return { blocked: true, reason: 'user_limit', limit: env.DAILY_GENERATIONS_PER_USER, resetsAt: getNextUtcResetIso(now) };
   }
   return { blocked: false, reason: null, limit: null, resetsAt: null };
@@ -292,8 +299,11 @@ export function createIdeasRouter({ env, db, agent, translateIdeaCards: translat
       res.status(429).json({ error: 'limit_reached', reason: 'shared_budget', limit: null, resetsAt: getNextUtcResetIso(now) });
       return;
     }
-    const userGenerationsUsed = await incrementAndGetUserGenerationCount(db, userId, now);
-    if (userGenerationsUsed > env.DAILY_GENERATIONS_PER_USER) {
+    const [userGenerationsUsed, unlimited] = await Promise.all([
+      incrementAndGetUserGenerationCount(db, userId, now),
+      isUnlimitedUser(db, userId, env),
+    ]);
+    if (!unlimited && userGenerationsUsed > env.DAILY_GENERATIONS_PER_USER) {
       res.status(429).json({ error: 'limit_reached', reason: 'user_limit', limit: env.DAILY_GENERATIONS_PER_USER, resetsAt: getNextUtcResetIso(now) });
       return;
     }
