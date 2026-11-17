@@ -1,10 +1,11 @@
 import { z } from 'zod';
 import { createAgent, dynamicSystemPromptMiddleware } from 'langchain';
-import { END, MessagesAnnotation, START, StateGraph } from '@langchain/langgraph';
+import { Annotation, END, MessagesAnnotation, START, StateGraph } from '@langchain/langgraph';
 import type { RetryPolicy } from '@langchain/langgraph';
 import type { BaseCheckpointSaver } from '@langchain/langgraph-checkpoint';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import type { DynamicStructuredTool } from '@langchain/core/tools';
+import { isAIMessage, type BaseMessage } from '@langchain/core/messages';
 import type { Env } from '../config/env.js';
 import type { createDb } from '../db/client.js';
 import { getUserSettings } from '../db/settings-repository.js';
@@ -15,6 +16,7 @@ import { createModerationMiddleware, type ClassifyText } from './moderation.js';
 import { createProgressMiddleware } from './progress.js';
 import { createForceToolChoiceMiddleware } from './toolChoice.js';
 import { applyModelNodeResilience, MODEL_NODE_TIMEOUT_MS } from './resilience.js';
+import { sumTurnUsage, type TurnUsage } from './turn-cost.js';
 import { createSubmitIntakeTool } from '../tools/plain/submit_intake.js';
 import { createGenerateIdeasTool } from '../tools/llm/generate_ideas.js';
 
@@ -131,6 +133,66 @@ const agentContextSchema = z.object({
   modelId: z.string().optional(),
 });
 
+/**
+ * Story 5.2 (AD-21): this turn's summed token usage plus the model id that
+ * actually answered it — `undefined` only when the turn produced no AI
+ * message at all (e.g. a moderation `beforeModel` short-circuit, which
+ * `jumpTo: 'end'`s before any model call happens). `modelId` comes from the
+ * *last* new AI message that carries a `resolvedModelId` (Code Map:
+ * `src/agent/model.ts`'s `tagResolvedModelId`) — the one that actually
+ * produced this turn's final reply, which is also the one a mid-turn
+ * fallback (I/O matrix: "Fallback mid-turn") leaves tagged as the default
+ * model.
+ */
+export interface TurnUsageWithModel extends TurnUsage {
+  modelId?: string;
+}
+
+/**
+ * Bug fix (user-reported: plan-chat replies showed thumbs but no cost line
+ * at all, not even a token count). Root cause: `src/api/index.ts` passes a
+ * pre-built `model` into every production `createCoachAgent(...)` call
+ * (Follow-up fix round 7, AD-7 — shares one `ChatOpenAI` client instead of
+ * building one per agent) — but `createCoachAgent`'s own middleware wiring
+ * treats *any* injected `model` as "this is a test, skip
+ * `createModelSelectionMiddleware`" (see its own comment below), so
+ * `model.ts`'s `tagResolvedModelId` never runs in production, for *any*
+ * agent (chat/ideas/plans) — `resolvedModelId` was never present to read,
+ * for any turn, ever (confirmed: zero `message_costs` rows existed despite
+ * real prior conversations). Falls back to `response_metadata.model_name`
+ * — the raw, provider-native field `@langchain/openai`'s own converter sets
+ * from the actual completion response's `model` field on *every* real call,
+ * independent of which middleware ran — before giving up. Prefers the
+ * explicit `resolvedModelId` tag when present (covers the fallback-to-
+ * default-model path's own notice-prefixed message, which still carries it
+ * forward) since that's a stronger, in-house signal than the provider's own
+ * echo.
+ */
+function resolveTurnModelId(newMessages: readonly BaseMessage[]): string | undefined {
+  for (let i = newMessages.length - 1; i >= 0; i -= 1) {
+    const message = newMessages[i];
+    if (!message || !isAIMessage(message)) continue;
+    const metadata = message.response_metadata as { resolvedModelId?: string; model_name?: string } | undefined;
+    const modelId = metadata?.resolvedModelId ?? metadata?.model_name;
+    if (modelId) return modelId;
+  }
+  return undefined;
+}
+
+/**
+ * Code Map: "extend to a custom `Annotation.Root` with an added `turnUsage`
+ * channel (reducer: replace)". Spreads `MessagesAnnotation.spec` rather than
+ * redefining the `messages` channel by hand, so this stays additive — every
+ * existing reader of `state.messages`/`result.messages` is unaffected.
+ */
+const CoachAgentState = Annotation.Root({
+  ...MessagesAnnotation.spec,
+  turnUsage: Annotation<TurnUsageWithModel | undefined>({
+    reducer: (_previous, next) => next,
+    default: () => undefined,
+  }),
+});
+
 export interface CreateCoachAgentDeps {
   env: Pick<Env, 'OPENROUTER_API_KEY' | 'MISTRAL_API_KEY' | 'IDEAS_PER_BATCH' | 'DAILY_SEARCH_BUDGET'>;
   checkpointer: BaseCheckpointSaver;
@@ -224,7 +286,7 @@ export function createCoachAgent({
     tools: tools ?? [createSubmitIntakeTool(db), createGenerateIdeasTool(db, chatModel, webSearchTool, env)],
   });
 
-  const graph = new StateGraph(MessagesAnnotation).addNode('model', async (state, runtime) => {
+  const graph = new StateGraph(CoachAgentState).addNode('model', async (state, runtime) => {
     // Story 5.1 (AD-20): resolve this turn's personality/model from
     // `user_settings`, keyed by the `userId` embedded in the thread id — no
     // settings lookup (and defaults throughout) when `db` wasn't supplied.
@@ -241,7 +303,16 @@ export function createCoachAgent({
       { messages: state.messages },
       { ...runtime, context: { personality: settings?.personality, modelId: settings?.model ?? undefined } },
     );
-    return { messages: result.messages };
+
+    // Story 5.2 (AD-21): "sums every model call made during that turn's full
+    // agent-loop execution" — scoped to just this turn's own new AI messages
+    // (`result.messages.slice(state.messages.length)`), never the thread's
+    // whole history, so a later turn in the same thread never re-sums an
+    // earlier turn's tokens.
+    const newMessages = result.messages.slice(state.messages.length);
+    const turnUsage: TurnUsageWithModel = { ...sumTurnUsage(newMessages), modelId: resolveTurnModelId(newMessages) };
+
+    return { messages: result.messages, turnUsage };
   });
 
   graph.addEdge(START, 'model').addEdge('model', END);

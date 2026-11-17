@@ -131,3 +131,49 @@ describe('ChatMessage (AC5: client-side typing reveal, Markdown-aware)', () => {
     expect(screen.getByText('Notice text.')).toBeInTheDocument();
   });
 });
+
+// Bug fix (user-reported): footer items (cost/feedback) used to render
+// fully visible and clickable for the whole duration of the typing reveal.
+// They now stay mounted (so a footer item's own in-session state, e.g.
+// `MessageFeedback`'s rating, is never lost) but invisible and
+// non-interactive until the reveal finishes, then fade in.
+describe('ChatMessage (bug fix: footer items wait for the typing reveal to finish)', () => {
+  function TestFooterItem() {
+    return <span>footer-item</span>;
+  }
+
+  it('hides footer items (opacity-0, non-interactive) while revealing, then fades them in once done', () => {
+    vi.useFakeTimers();
+    try {
+      render(<ChatMessage message={makeMessage({ content: 'A fairly long reply to reveal over several ticks.' })} animate footerItems={[TestFooterItem]} />);
+
+      const footer = screen.getByText('footer-item').parentElement!;
+      expect(footer.className).toMatch(/opacity-0/);
+      expect(footer.className).toMatch(/pointer-events-none/);
+
+      // Two separate `act()` calls: the first drains the reveal's own
+      // interval (flipping `isRevealing` to false only after it returns,
+      // since a passive effect reacting to that flip doesn't run until
+      // `act()` settles); the second lets that effect's own follow-up
+      // `setTimeout` (scheduled only once the first `act()` settled) fire.
+      act(() => {
+        vi.advanceTimersByTime(5_000);
+      });
+      act(() => {
+        vi.advanceTimersByTime(100);
+      });
+
+      expect(footer.className).toMatch(/opacity-100/);
+      expect(footer.className).not.toMatch(/pointer-events-none/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('shows footer items immediately for a non-animated (history) message, no fade delay', () => {
+    render(<ChatMessage message={makeMessage()} footerItems={[TestFooterItem]} />);
+
+    const footer = screen.getByText('footer-item').parentElement!;
+    expect(footer.className).toMatch(/opacity-100/);
+  });
+});

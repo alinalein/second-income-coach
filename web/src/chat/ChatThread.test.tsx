@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, cleanup, fireEvent } from '@testing-library/react';
 import { ChatThread } from './ChatThread';
+import { createMessageFeedbackItem } from './MessageFeedback';
 import chatEn from '../locales/en/chat.json';
 
 function mockFetch(responses: Record<string, Response | (() => Response)>) {
@@ -197,5 +198,153 @@ describe('ChatThread (AC: chat UI)', () => {
     fireEvent.click(screen.getByRole('button', { name: /send/i }));
 
     expect(await screen.findByText(chatEn.error.modelFailure)).toBeInTheDocument();
+  });
+});
+
+// Story 2.13 AC: "the view scrolls so the user's new message sits at the
+// top" / "a bottom spacer ... so the reply is never cut off" / "the user
+// has scrolled up manually ... the view is not moved against their will".
+describe('ChatThread (Story 2.13: chat scroll behaviour)', () => {
+  it('scrolls (via scrollTo, not scrollIntoView — never an ancestor) when a message is sent', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (!url.includes('/api/chat/messages')) throw new Error(`Unmocked fetch: ${url}`);
+        if (init?.method === 'POST') {
+          return Promise.resolve(
+            sseResponse([resultFrame({ id: 'reply-4', role: 'assistant', kind: 'message', content: 'Sure!', createdAt: new Date().toISOString() })]),
+          );
+        }
+        return Promise.resolve(new Response(JSON.stringify({ messages: [] }), { status: 200 }));
+      }),
+    );
+    const scrollToSpy = vi.spyOn(Element.prototype, 'scrollTo');
+
+    render(<ChatThread />);
+    const input = (await screen.findByRole('textbox', { name: /message/i })) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'Give me an example' } });
+    fireEvent.click(screen.getByRole('button', { name: /send/i }));
+
+    await waitFor(() => expect(scrollToSpy).toHaveBeenCalled());
+  });
+
+  it('renders a bottom spacer after the reply so the input never covers it', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (!url.includes('/api/chat/messages')) throw new Error(`Unmocked fetch: ${url}`);
+        if (init?.method === 'POST') {
+          return Promise.resolve(
+            sseResponse([resultFrame({ id: 'reply-5', role: 'assistant', kind: 'message', content: 'Here is a plan.', createdAt: new Date().toISOString() })]),
+          );
+        }
+        return Promise.resolve(new Response(JSON.stringify({ messages: [] }), { status: 200 }));
+      }),
+    );
+
+    render(<ChatThread />);
+    const input = (await screen.findByRole('textbox', { name: /message/i })) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'Plan my day' } });
+    fireEvent.click(screen.getByRole('button', { name: /send/i }));
+
+    expect(await screen.findByText('Here is a plan.')).toBeInTheDocument();
+    expect(screen.getByTestId('chat-bottom-spacer')).toBeInTheDocument();
+  });
+
+  it('stops auto-scrolling for the rest of the turn once the user scrolls away on their own', async () => {
+    let releaseReply: (() => void) | undefined;
+    const replyGate = new Promise<void>((resolve) => {
+      releaseReply = resolve;
+    });
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (!url.includes('/api/chat/messages')) throw new Error(`Unmocked fetch: ${url}`);
+        if (init?.method === 'POST') {
+          const encoder = new TextEncoder();
+          const body = new ReadableStream<Uint8Array>({
+            async start(controller) {
+              await replyGate;
+              controller.enqueue(
+                encoder.encode(
+                  resultFrame({ id: 'reply-6', role: 'assistant', kind: 'message', content: 'Here you go.', createdAt: new Date().toISOString() }),
+                ),
+              );
+              controller.close();
+            },
+          });
+          return Promise.resolve(new Response(body, { status: 200 }));
+        }
+        return Promise.resolve(new Response(JSON.stringify({ messages: [] }), { status: 200 }));
+      }),
+    );
+    const scrollToSpy = vi.spyOn(Element.prototype, 'scrollTo');
+
+    render(<ChatThread />);
+    const input = (await screen.findByRole('textbox', { name: /message/i })) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'Plan something' } });
+    fireEvent.click(screen.getByRole('button', { name: /send/i }));
+
+    await waitFor(() => expect(scrollToSpy).toHaveBeenCalled());
+    const callsBeforeManualScroll = scrollToSpy.mock.calls.length;
+
+    // Past the programmatic-scroll suppression window, so the next `scroll`
+    // event registers as the user's own, not an echo of the call above.
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    fireEvent.scroll(screen.getByTestId('chat-scroll-region'));
+
+    releaseReply?.();
+    await screen.findByText('Here you go.');
+
+    expect(scrollToSpy.mock.calls.length).toBe(callsBeforeManualScroll);
+  });
+});
+
+// Story 5.3 Boundary (explicit test): "the chat input is never disabled or
+// gated on a missing rating." `MessageFeedback` shares no state and no prop
+// with `ChatThread`'s own input — this exercises them together, with no
+// rating given at all and with a feedback request left pending, to prove
+// neither state has any bearing on the input's `disabled` attribute.
+describe('ChatThread (Story 5.3 Boundary: chat input independent of feedback)', () => {
+  it('keeps the message input enabled with no rating given, and while a feedback request is in flight', async () => {
+    let resolveFeedbackFetch!: (value: Response) => void;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url.includes('/feedback')) {
+          return new Promise<Response>((resolve) => {
+            resolveFeedbackFetch = resolve;
+          });
+        }
+        if (url.includes('/api/chat/messages') && init?.method !== 'POST') {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                messages: [{ id: 'reply-1', role: 'assistant', kind: 'message', content: 'Here is an idea.', createdAt: new Date().toISOString() }],
+              }),
+              { status: 200 },
+            ),
+          );
+        }
+        throw new Error(`Unmocked fetch: ${url}`);
+      }),
+    );
+
+    render(<ChatThread footerItems={[createMessageFeedbackItem('/api/chat/messages')]} />);
+
+    const input = (await screen.findByRole('textbox', { name: /message/i })) as HTMLInputElement;
+    expect(input).not.toBeDisabled();
+
+    fireEvent.click(screen.getByLabelText('Good response'));
+    expect(input).not.toBeDisabled();
+
+    resolveFeedbackFetch(new Response(JSON.stringify({ feedback: { rating: 'up', comment: null } }), { status: 200 }));
+    await waitFor(() => expect(screen.getByLabelText('Good response')).toHaveAttribute('aria-pressed', 'true'));
+    expect(input).not.toBeDisabled();
   });
 });

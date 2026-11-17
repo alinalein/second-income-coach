@@ -5,22 +5,37 @@ import {
   chatHistoryResponseSchema,
   chatMessageSchema,
   progressEventSchema,
+  recordFeedbackRequestSchema,
   resultEventSchema,
   sendMessageRequestSchema,
   type ChatMessage,
+  type CurrencyCode,
 } from '@app/shared';
 import type { Env } from '../../config/env.js';
+import type { createDb } from '../../db/client.js';
 import type { CoachAgent } from '../../agent/index.js';
+import type { TurnUsageWithModel } from '../../agent/index.js';
 import { buildDiscoveryThreadId } from '../../agent/index.js';
 import { classifyAssistantMessageKind } from '../../agent/moderation.js';
 import { MODEL_FAILURE_MESSAGE, MODEL_FAILURE_MESSAGE_DE } from '../../agent/resilience.js';
 import { detectReplyLanguage } from '../../agent/language.js';
 import { createStrictRateLimiter } from '../middleware/rateLimit.js';
+import { getUserSettings } from '../../db/settings-repository.js';
+import { computeMessageCost, convertStoredCost, toMessageCostDisplay } from '../../agent/turn-cost.js';
+import { getMessageCosts, saveMessageCost } from '../../db/message-cost-repository.js';
+import { FeedbackOwnershipError, removeFeedback, setFeedback } from '../../tools/plain/record_feedback.js';
 
 export interface ChatRouterDeps {
-  env: Pick<Env, 'RATE_LIMIT_WINDOW_MS'>;
+  env: Pick<Env, 'RATE_LIMIT_WINDOW_MS' | 'MISTRAL_API_KEY'>;
   agent: CoachAgent;
+  /** Story 5.2/5.3: reads `user_settings.currency` for cost conversion
+   * (AD-27) and persists/reads `message_costs`/`message_feedback` rows. */
+  db: ReturnType<typeof createDb>['db'];
 }
+
+/** AD-27: the default when a user has no settings row yet — same default
+ * `user_settings.currency` itself carries (Story 1.2). */
+const DEFAULT_CURRENCY: CurrencyCode = 'EUR';
 
 function toChatMessage(message: BaseMessage): ChatMessage | undefined {
   const type = message._getType();
@@ -51,7 +66,7 @@ function toChatMessage(message: BaseMessage): ChatMessage | undefined {
  * is mounted (Code Map: "mount the chat router after `app.use(requireAuth)`")
  * — neither route re-applies it itself.
  */
-export function createChatRouter({ env, agent }: ChatRouterDeps) {
+export function createChatRouter({ env, agent, db }: ChatRouterDeps) {
   const router = Router();
   // Intent: "`POST /api/chat/messages` uses `createStrictRateLimiter`" — the
   // first LLM-backed, cost-bearing route to consume the stricter tier
@@ -147,7 +162,7 @@ export function createChatRouter({ env, agent }: ChatRouterDeps) {
         { configurable: { thread_id: threadId }, streamMode: ['custom', 'values'] },
       );
 
-      let lastValuesMessages: BaseMessage[] | undefined;
+      let lastValuesPayload: { messages?: BaseMessage[]; turnUsage?: TurnUsageWithModel } | undefined;
 
       for await (const [mode, payload] of stream as AsyncIterable<[string, unknown]>) {
         if (clientDisconnected) break; // triggers the loop's own iterator.return()
@@ -161,17 +176,17 @@ export function createChatRouter({ env, agent }: ChatRouterDeps) {
             safeWrite(`event: progress\ndata: ${JSON.stringify(parsed.data)}\n\n`);
           }
         } else if (mode === 'values') {
-          lastValuesMessages = (payload as { messages?: BaseMessage[] })?.messages;
+          lastValuesPayload = payload as { messages?: BaseMessage[]; turnUsage?: TurnUsageWithModel };
         }
       }
 
       // AC4: the final answer is only released after `afterModel` moderation
-      // has resolved — `lastValuesMessages` is this invocation's own final
+      // has resolved — `lastValuesPayload` is this invocation's own final
       // state (the last superstep the stream emitted before completing), not
       // a separate thread-wide read, so no concurrent request can race it.
-      const messages = lastValuesMessages ?? [];
+      const messages = lastValuesPayload?.messages ?? [];
       const lastMessage = messages[messages.length - 1];
-      const reply = lastMessage ? toChatMessage(lastMessage) : undefined;
+      let reply = lastMessage ? toChatMessage(lastMessage) : undefined;
 
       if (!reply) {
         // The agent resolved without throwing but produced nothing usable
@@ -179,6 +194,38 @@ export function createChatRouter({ env, agent }: ChatRouterDeps) {
         // log it the same way the catch branch below logs a thrown failure,
         // so this fallback path isn't silent (thread id + count only).
         console.error('[chat] agent produced no usable reply:', { threadId, messageCount: messages.length });
+      }
+
+      // Story 5.2 (AD-21): persist + attach this turn's cost — only when a
+      // reply actually exists and the turn produced at least one AI message
+      // with a resolved model id (a moderation short-circuit has neither).
+      // Never blocks delivery of the reply itself on this: a persistence
+      // failure here is logged and swallowed, same "the turn's own result
+      // is never gated on this" treatment the feedback routes below get.
+      const turnUsage = lastValuesPayload?.turnUsage;
+      if (reply && turnUsage?.modelId) {
+        try {
+          const settings = await getUserSettings(db, req.session.userId!);
+          const currency = (settings?.currency as CurrencyCode | undefined) ?? DEFAULT_CURRENCY;
+          const cost = computeMessageCost({ inputTokens: turnUsage.inputTokens, outputTokens: turnUsage.outputTokens }, turnUsage.modelId, currency);
+
+          await saveMessageCost(db, {
+            messageId: reply.id,
+            threadId,
+            userId: req.session.userId!,
+            modelId: cost.modelId,
+            inputTokens: cost.inputTokens,
+            outputTokens: cost.outputTokens,
+            amountMicroUnitsUsd: cost.amountMicroUnitsUsd,
+            pricePerMillionInputTokens: cost.pricePerMillionInputTokens,
+            pricePerMillionOutputTokens: cost.pricePerMillionOutputTokens,
+            priceAsOf: cost.priceAsOf,
+          });
+
+          reply = { ...reply, cost: toMessageCostDisplay(cost) };
+        } catch (error) {
+          console.error('[chat] cost persistence failed:', { threadId, error: (error as Error)?.message });
+        }
       }
 
       writeResultEvent(
@@ -230,9 +277,84 @@ export function createChatRouter({ env, agent }: ChatRouterDeps) {
         console.warn('[chat] history read skipped unusable message(s):', { threadId, skipped });
       }
 
+      // Story 5.2 (AD-27 "Reload" row): re-converts each persisted cost row
+      // to the user's *current* currency on every read — never the currency
+      // that happened to be active when the turn was first answered.
+      try {
+        // Review fix: neither read depends on the other's result — issuing
+        // them in parallel instead of sequentially halves this hot read
+        // path's round-trip count.
+        const [settings, costs] = await Promise.all([
+          getUserSettings(db, req.session.userId!),
+          getMessageCosts(
+            db,
+            history.map((message) => message.id),
+          ),
+        ]);
+        const currency = (settings?.currency as CurrencyCode | undefined) ?? DEFAULT_CURRENCY;
+        for (const message of history) {
+          const row = costs.get(message.id);
+          if (row) message.cost = convertStoredCost(row, currency);
+        }
+      } catch (error) {
+        console.error('[chat] cost attach failed:', { threadId, error: (error as Error)?.message });
+      }
+
       res.json(chatHistoryResponseSchema.parse({ messages: history }));
     } catch (error) {
       console.error('[chat] history read failed:', { threadId, error: (error as Error)?.message });
+      res.status(503).json({ error: 'Service unavailable' });
+    }
+  });
+
+  // Story 5.3 (AD-4/AD-22): the discovery thread is already scoped to
+  // `req.session.userId` the same way the message routes above are — the
+  // caller can only ever act on their own thread. `setFeedback` itself still
+  // checks that a client-supplied `messageId` doesn't already have feedback
+  // owned by a different user (review fix: `FeedbackOwnershipError` -> 404,
+  // same precedent as `set_idea_status.ts`'s `IdeaNotFoundError`).
+  router.post('/messages/:messageId/feedback', async (req, res) => {
+    const userId = req.session.userId!;
+    const messageId = req.params.messageId;
+    const parseResult = recordFeedbackRequestSchema.safeParse(req.body);
+    if (!messageId || !parseResult.success) {
+      res.status(400).json({ error: 'Bad request' });
+      return;
+    }
+
+    const threadId = buildDiscoveryThreadId(userId);
+    try {
+      const feedback = await setFeedback(db, env, {
+        messageId,
+        threadId,
+        userId,
+        rating: parseResult.data.rating,
+        comment: parseResult.data.comment,
+      });
+      res.json({ feedback });
+    } catch (error) {
+      if (error instanceof FeedbackOwnershipError) {
+        res.status(404).json({ error: 'Message not found' });
+        return;
+      }
+      console.error('[chat] feedback write failed:', { threadId, error: (error as Error)?.message });
+      res.status(503).json({ error: 'Service unavailable' });
+    }
+  });
+
+  router.delete('/messages/:messageId/feedback', async (req, res) => {
+    const userId = req.session.userId!;
+    const messageId = req.params.messageId;
+    if (!messageId) {
+      res.status(400).json({ error: 'Bad request' });
+      return;
+    }
+
+    try {
+      await removeFeedback(db, messageId, userId);
+      res.status(204).end();
+    } catch (error) {
+      console.error('[chat] feedback removal failed:', { error: (error as Error)?.message });
       res.status(503).json({ error: 'Service unavailable' });
     }
   });

@@ -4,11 +4,15 @@ import session from 'express-session';
 import request from 'supertest';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
+import { fakeModel } from '@langchain/core/testing';
+import { AIMessage } from '@langchain/core/messages';
+import { MemorySaver } from '@langchain/langgraph-checkpoint';
 import { createPlanChatRouter, type PlanChatRouterDeps } from './plan-chat.js';
+import { createCoachAgent } from '../../agent/index.js';
 import { createDb } from '../../db/client.js';
-import { users, ideas, plans } from '../../db/schema/index.js';
+import { users, ideas, plans, messageCosts } from '../../db/schema/index.js';
 
-const testEnv: PlanChatRouterDeps['env'] = { RATE_LIMIT_WINDOW_MS: 60_000 };
+const testEnv: PlanChatRouterDeps['env'] = { RATE_LIMIT_WINDOW_MS: 60_000, MISTRAL_API_KEY: 'test-key' };
 
 type FakeAgent = PlanChatRouterDeps['agent'];
 
@@ -158,5 +162,98 @@ describe('createPlanChatRouter (ownership check against plans.userId)', () => {
     const res = await makeRequest(app, randomUUID());
 
     expect(res.status).toBe(503);
+  });
+
+  // Story 5.3 Design Notes: "no new ownership-check code — ... reuses its
+  // existing `assertPlanOwnership`". Proven here the same way as the
+  // message routes above: a plan owned by someone else is a 404 for the
+  // feedback routes too, before `record_feedback` is ever reached.
+  it.each([
+    ['POST', (app: ReturnType<typeof express>, planId: string) => request(app).post(`/api/plans/${planId}/messages/msg-1/feedback`).send({ rating: 'up' })],
+    ['DELETE', (app: ReturnType<typeof express>, planId: string) => request(app).delete(`/api/plans/${planId}/messages/msg-1/feedback`)],
+  ] as const)('%s .../feedback returns 404 for a plan owned by another user', async (_method, makeRequest) => {
+    const ownerUserId = await createTestUser();
+    const requesterUserId = await createTestUser();
+    try {
+      const ideaId = await insertIdea(ownerUserId);
+      const [plan] = await db
+        .insert(plans)
+        .values({ ideaId, userId: ownerUserId, status: 'draft', threadId: `plan:${randomUUID()}` })
+        .returning();
+
+      const res = await makeRequest(buildTestApp(fakeAgent(), requesterUserId), plan!.id);
+
+      expect(res.status).toBe(404);
+    } finally {
+      await cleanUp(ownerUserId);
+      await cleanUp(requesterUserId);
+    }
+  });
+});
+
+// Bug fix (user-reported): a plan-chat reply showed the thumbs footer item
+// but no cost line at all — not even a token count. Root cause: production
+// (`src/api/index.ts`) passes a shared, pre-built `model` into every
+// `createCoachAgent(...)` call (AD-7 speed optimization), which this
+// router's own agent dependency then also carries into `reactAgent.invoke`
+// — `createCoachAgent`'s middleware wiring treats *any* injected `model` as
+// "skip `createModelSelectionMiddleware`", so `resolvedModelId` was never
+// tagged, for any turn, in production (confirmed: zero `message_costs` rows
+// existed in the lane's own dev DB despite real prior conversations). This
+// reproduces that exact production topology end to end — a *real* compiled
+// `createCoachAgent` (not the `fakeAgent()` stand-in the tests above use),
+// built the same way `src/api/index.ts` builds `plansAgent` (a `model`
+// override, no `createModelSelectionMiddleware`) — through this router's
+// real POST/GET handlers and a real Postgres `message_costs` row, with only
+// the one real network call (the model itself) replaced by a `fakeModel`
+// shaped like a genuine `ChatOpenAI` response (`response_metadata.model_name`
+// set, the provider-native field `src/agent/index.ts`'s `resolveTurnModelId`
+// now falls back to).
+describe('createPlanChatRouter (bug fix: cost line missing because of the production model-sharing topology)', () => {
+  it('persists a message_costs row and attaches cost on reload, using a real createCoachAgent built the same way production builds plansAgent', async () => {
+    const userId = await createTestUser();
+    try {
+      const ideaId = await insertIdea(userId);
+      const [plan] = await db
+        .insert(plans)
+        .values({ ideaId, userId, status: 'draft', threadId: `plan:${randomUUID()}` })
+        .returning();
+
+      const model = fakeModel().respond(
+        new AIMessage({
+          content: 'Here is a half-day outing idea for you.',
+          usage_metadata: { input_tokens: 120, output_tokens: 80, total_tokens: 200 },
+          response_metadata: { model_provider: 'openai', model_name: 'openai/gpt-6-luna' },
+        }),
+      );
+      // Same shape `src/api/index.ts` builds `plansAgent` with: a shared
+      // `model` override (AD-7), real checkpointer, no tools needed for a
+      // plain reply (`tools: []` — this turn never calls one).
+      const realAgent = createCoachAgent({
+        env: { OPENROUTER_API_KEY: 'test-key', MISTRAL_API_KEY: 'test-key', IDEAS_PER_BATCH: 2, DAILY_SEARCH_BUDGET: 500 },
+        checkpointer: new MemorySaver(),
+        db,
+        webSearchTool: {} as never,
+        model,
+        classify: async () => ({}),
+        tools: [],
+      });
+
+      const app = buildTestApp(realAgent, userId);
+      const postRes = await request(app).post(`/api/plans/${plan!.id}/messages`).send({ content: 'Plan a day trip for two.' });
+      expect(postRes.status).toBe(200);
+
+      const costRows = await db.select().from(messageCosts).where(eq(messageCosts.threadId, `plan:${plan!.id}`));
+      expect(costRows).toHaveLength(1);
+      expect(costRows[0]).toMatchObject({ modelId: 'openai/gpt-6-luna', inputTokens: 120, outputTokens: 80 });
+
+      const getRes = await request(app).get(`/api/plans/${plan!.id}/messages`);
+      const reply = getRes.body.messages.find((message: { role: string }) => message.role === 'assistant');
+      expect(reply.cost).toMatchObject({ modelId: 'openai/gpt-6-luna', inputTokens: 120, outputTokens: 80 });
+      expect(reply.cost.amount).not.toBeNull();
+    } finally {
+      await db.delete(messageCosts).where(eq(messageCosts.userId, userId));
+      await cleanUp(userId);
+    }
   });
 });

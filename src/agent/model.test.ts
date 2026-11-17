@@ -29,7 +29,10 @@ function lastRequestedModelId(handler: ReturnType<typeof vi.fn>): string {
 // AC: "a model selection -> ... subsequent turns are answered by the newly
 // selected model" / "the selected provider's key is missing ... the system
 // falls back to the default model and shows a neutral notice - never a hard
-// error."
+// error." / AD-21: "the model id actually used" is tagged onto
+// `response_metadata` on every path through this middleware, not just the
+// common case — folded into this same table-driven test rather than a
+// separate one, since it's the identical selected-vs-fallback split.
 describe('createModelSelectionMiddleware: provider availability', () => {
   it.each([
     ['provider configured', CONFIGURED_ENV, REQUESTED_MODEL_ID, undefined],
@@ -40,6 +43,7 @@ describe('createModelSelectionMiddleware: provider availability', () => {
 
     expect(lastRequestedModelId(handler)).toBe(expectedModelId);
     expect(response.text).toBe(expectedNotice ? `${expectedNotice}\n\nthe answer` : 'the answer');
+    expect(response.response_metadata?.resolvedModelId).toBe(expectedModelId);
   });
 });
 
@@ -58,6 +62,24 @@ describe('createModelSelectionMiddleware: model-call failure', () => {
 
     expect(lastRequestedModelId(handler)).toBe(DEFAULT_MODEL_ID);
     expect(response.text).toBe(`${expectedNotice}\n\nthe answer`);
+  });
+
+  // Code Map bug fix: `withFallbackNotice` used to reconstruct a bare
+  // `AIMessage` with only `id`/`content`, silently dropping `usage_metadata`
+  // — a latent gap for AD-21's "sum every model call's tokens", since a
+  // fallback call's own usage would vanish from the turn's total the moment
+  // its notice was prepended.
+  it('preserves usage_metadata on the fallback response instead of dropping it', async () => {
+    const handler = vi.fn<FakeHandler>()
+      .mockRejectedValueOnce(new Error('network down'))
+      .mockResolvedValueOnce(
+        new AIMessage({ content: 'the answer', usage_metadata: { input_tokens: 12, output_tokens: 34, total_tokens: 46 } }),
+      );
+
+    const response = await buildMiddleware(CONFIGURED_ENV).wrapModelCall(fakeRequest('Hello there'), handler);
+
+    expect(response.usage_metadata).toEqual({ input_tokens: 12, output_tokens: 34, total_tokens: 46 });
+    expect(response.response_metadata?.resolvedModelId).toBe(DEFAULT_MODEL_ID);
   });
 
   afterEach(() => {

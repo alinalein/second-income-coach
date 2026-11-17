@@ -64,6 +64,20 @@
       "when": 1794943004893,
       "tag": "0008_rare_hairball",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1794946819724,
+      "tag": "0009_awesome_james_howlett",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1794951794547,
+      "tag": "0010_rename_message_costs_amount_to_micro_units",
+      "breakpoints": true
     }
   ]
 }
