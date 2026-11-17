@@ -130,18 +130,20 @@ describe('IdeasPanel (regression: startupCost/baselineRate rendered under the co
     // never render as the literal, untranslated key path.
     expect(monthlyPotentialRow).not.toHaveTextContent('card.monthlyPotentialSubLabel');
 
-    // Layout fix (progressive disclosure): always-visible summary of how
-    // many intake answers shaped this idea (replaces the old always-visible
-    // chip row), and the citation/source-trust tier collapsed under the
-    // "Details" toggle, closed by default — not reachable via role until
-    // opened (review fix: this is asserted, not just assumed).
-    expect(await screen.findByText('Based on 3 of your inputs')).toBeInTheDocument();
+    // User-requested follow-up: the cited-fields summary moved from the
+    // always-visible row into the collapsed panel itself (above the
+    // chips), alongside the citation/source-trust tier — closed by default.
+    // It's present in the DOM (`hidden`, not unmounted — `getByText` alone
+    // doesn't respect that attribute, `toBeVisible()` does) but not visible
+    // until the toggle opens.
+    expect(await screen.findByText('Based on 3 of your inputs')).not.toBeVisible();
     expect(screen.queryByRole('link', { name: 'example.com' })).not.toBeInTheDocument();
     // Review fix: the toggle's accessible name carries the idea's own title
     // (`aria-label`, not just the visible "Details" text) so every card's
     // toggle isn't indistinguishable from its siblings — assert the exact
     // name, not a loose match that the old shared name would also satisfy.
     fireEvent.click(await screen.findByRole('button', { name: `Details – ${idea.title}` }));
+    expect(screen.getByText('Based on 3 of your inputs')).toBeVisible();
 
     // Story 2.2 follow-up fix round 3, fix 2a: a URL citation renders as a
     // link — visible text is just the hostname, href/title carry the full
@@ -152,14 +154,14 @@ describe('IdeasPanel (regression: startupCost/baselineRate rendered under the co
     expect(citationLink).toHaveAttribute('target', '_blank');
     expect(citationLink).toHaveAttribute('rel', 'noopener noreferrer');
 
-    // Story 2.2 follow-up fix round 6, fix 6: the source-trust tier label
-    // renders directly on the card, next to the citation (behind the
-    // Details toggle opened above). Layout fix: plain text now, with a
-    // trailing "," separator in the same text node, hence the regex. Round
-    // 11 (user-requested removal): the quoted evidence sentence no longer
-    // renders on the card at all.
-    expect(await screen.findByText(/independent source/)).toBeInTheDocument();
+    // Round 11 (user-requested removal): the quoted evidence sentence no
+    // longer renders on the card at all. User-requested follow-up (compact
+    // citation line): the source-trust tier *phrase* ("independent
+    // source"/"pay-data provider") no longer renders either — only the
+    // citation, an optional region label, and "unverified" share that one
+    // line now (the tier mechanism itself is unaffected server-side).
     expect(screen.queryByText(`“${idea.baselineRateQuote}”`)).not.toBeInTheDocument();
+    expect(screen.queryByText('independent source')).not.toBeInTheDocument();
     expect(screen.queryByText('unverified')).not.toBeInTheDocument();
 
     // Review fix: the cited-intake chips (now behind the same toggle) still
@@ -217,14 +219,16 @@ describe('IdeasPanel (vendor-sourced range + non-hourly rate)', () => {
     expect(screen.queryByRole('link', { name: 'example.com' })).not.toBeInTheDocument();
     fireEvent.click(await screen.findByRole('button', { name: `Details – ${idea.title}` }));
 
-    // Story 2.2 follow-up fix round 6, fix 6: tier 1 still renders its own
-    // label, and a tier-3-without-corroboration idea's "unverified" text
-    // shows even when `isVendorSource` is also true — independent flags.
-    // Layout fix: "unverified" is now plain muted text next to its source
-    // (not a separate pill badge), sharing a text node with a "," separator
-    // — hence the regexes.
-    expect(await screen.findByText(/official statistics/)).toBeInTheDocument();
-    expect(screen.getByText(/unverified/)).toBeInTheDocument();
+    // Story 2.2 follow-up fix round 6, fix 6: an unverified idea's
+    // "unverified" text shows even when `isVendorSource` is also true —
+    // independent flags. Layout fix: "unverified" is plain muted text next
+    // to its source, sharing a text node with a "," separator — hence the
+    // regex. User-requested follow-up (compact citation line): the
+    // source-trust tier *phrase* ("official statistics") no longer renders
+    // on this line at all (the tier mechanism itself is unaffected
+    // server-side).
+    expect(await screen.findByText(/unverified/)).toBeInTheDocument();
+    expect(screen.queryByText('official statistics')).not.toBeInTheDocument();
   });
 });
 
@@ -564,7 +568,9 @@ describe('IdeasPanel (Fix2: German compact rate + shortened labels)', () => {
     // by the two English tests above.)
     expect(await screen.findByText('Basierend auf 3 deiner Angaben')).toBeInTheDocument();
     fireEvent.click(await screen.findByRole('button', { name: `Details – ${idea.title}` }));
-    expect(await screen.findByText(/unabhängige Quelle/)).toBeInTheDocument();
+    // User-requested follow-up (compact citation line): the source-trust
+    // tier phrase no longer renders here — the citation link does.
+    expect(await screen.findByRole('link', { name: 'example.com' })).toBeInTheDocument();
     expect(screen.getByText('Deine wöchentliche Zeit')).toBeInTheDocument();
   });
 });
@@ -584,6 +590,11 @@ describe('IdeasPanel (Story 2.5: demand evidence + growth path)', () => {
     vi.stubGlobal('fetch', mockFetch({ ...INTAKE_NULL_RESPONSE, '/api/ideas': () => new Response(JSON.stringify({ ideas: [idea], currency: 'EUR' }), { status: 200 }) }));
 
     render(<IdeasPanel />);
+
+    // User-requested follow-up: the always-visible toggle-row teaser says
+    // "Current demand" (not the old cited-fields count) whenever this idea
+    // actually has demand evidence.
+    expect(await screen.findByText('Current demand')).toBeVisible();
 
     // Evidence lives in the card's collapsed "Details" panel (card layout).
     fireEvent.click(await screen.findByRole('button', { name: /details/i }));
@@ -636,11 +647,12 @@ describe('IdeasPanel (Story 2.5: foreign-source region label)', () => {
     );
 
     render(<IdeasPanel />);
+    fireEvent.click(await screen.findByRole('button', { name: `Details – ${idea.title}` }));
 
     // The demand-evidence label renders in its own standalone `Badge`; the
-    // baseline-rate label renders inline as "Baseline rate: {label}" in one
-    // paragraph (since the existing citation row can't be touched) — a
-    // substring match (`exact: false`) covers both shapes.
+    // baseline-rate label (user-requested follow-up) renders inline in the
+    // compact citation line instead — a substring match (`exact: false`)
+    // covers both shapes.
     expect(await screen.findByText(expectLabel, { exact: false })).toBeInTheDocument();
   });
 });

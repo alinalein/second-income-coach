@@ -53,12 +53,6 @@
       "hour": "/Std.",
       "project": "/Projekt",
       "month": "/Monat"
-    },
-    "sourceTrustTier": {
-      "tier_1": "amtliche Statistik",
-      "tier_2": "Gehaltsdaten-Anbieter",
-      "tier_3": "unabhängige Quelle",
-      "tier_4": "unbestätigte Quelle"
     }
   },
   "weeklyTimeAvailability": {

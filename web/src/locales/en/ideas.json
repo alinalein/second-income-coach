@@ -53,12 +53,6 @@
       "hour": "/h",
       "project": "/project",
       "month": "/mo"
-    },
-    "sourceTrustTier": {
-      "tier_1": "official statistics",
-      "tier_2": "pay-data provider",
-      "tier_3": "independent source",
-      "tier_4": "unverified source"
     }
   },
   "weeklyTimeAvailability": {

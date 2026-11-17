@@ -136,6 +136,12 @@ baseline_commit: '0a90c60'
 
 **KEEP (round 3, verified still true):** every round-1/round-2 mechanism (occupation-match check, demand-evidence hard/soft checks, currency-contradiction check, the raised timeouts, the narrowed country enum) is untouched — only `generate_ideas`'s own tool-description string changed.
 
+**User-requested UI polish, round 4 (after Story 2.3/Lane A merged into this worktree, restructuring `IdeasPanel.tsx` with a collapsible "Details" panel):**
+
+- **Fix 1:** `generatingHint` copy updated to the honest duration ("This can take up to a minute." / "Das kann bis zu einer Minute dauern.") — the prior "a few seconds" wording predates this story's own measured ~70-150s real generation times.
+- **Fix 2 (compact citation line, explicit boundary exception approved):** the baseline-rate region label (previously its own separate line, since it couldn't be merged into `IdeasPanel.tsx`'s citation line) is now merged into that same line — `foreignSourceRegion`/`useViewerCountry` lifted out of `IdeaEvidence.tsx` (exported, reused by `IdeaCard` directly) so the viewer's country is fetched once per card instead of twice. The source-trust-tier *phrase* ("pay-data provider"/"independent source") was dropped from that line per the user's own literal example (citation, region, "unverified") — the tier mechanism itself (`sourceTrustTier` persistence, tier-4 rejection, corroboration requirement) is untouched server-side; this is display-only, same category as round 11's quote-removal precedent. Dead `card.sourceTrustTier.*` i18n keys removed from both locale files (no other consumer).
+- **Test:** no new tests — 3 existing tests' stale tier-text assertions updated to match (removed/replaced), one existing test's comment/click corrected for the new content location. `58/58` web tests pass, lint clean.
+
 ## Review Triage Log
 
 Three parallel review layers (blind-hunter, edge-case-hunter, verification-gap) ran against the diff since `baseline_commit`.
