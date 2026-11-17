@@ -688,9 +688,13 @@ So that I can move between the things I'm working on without hunting through the
 **When** shown next to this sidebar
 **Then** its status panel (current and next step, timeline) is a compact header above the chat, not a second sidebar, using the narrow-screen layout Story 3.1 already defines
 
+**Given** a normal desktop screen
+**When** the app is shown
+**Then** the sidebar is a fixed, docked column that the user can collapse and expand with a toggle (collapsed = a slim rail or hidden, the choice is remembered across reloads), and opening it never blurs, dims or covers the page content
+
 **Given** a narrow/mobile screen
 **When** the sidebar is shown
-**Then** it collapses to a menu button that opens the sidebar as an overlay, with no horizontal page scroll
+**Then** it collapses to a menu button that opens the sidebar as an overlay over the content with a light, non-blurring backdrop and a close control, with no horizontal page scroll
 
 **Given** the page is reloaded
 **When** a view or plan was active
