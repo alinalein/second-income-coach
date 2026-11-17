@@ -45,3 +45,8 @@
 - Review depth: logic, security, DB or agent changes get one review pass (at most 2 reviewers). Layout-only or text-only changes get no review pass.
 - Fix every defect in the story's own acceptance criteria until it works; there is no round cap for broken behaviour. Polish, new ideas and extras found along the way become their own story instead of extending this one.
 - The report states the tokens used.
+
+## No approval pauses for specs
+
+- Never ask the user to approve the spec, the plan, or the checkpoint before building. Write the spec, then build. The user always approves, so the pause only costs time.
+- Stop and ask only for real decisions: a requirement conflict, a new paid service or key, a migration number collision, or an AC that cannot be met as written.
