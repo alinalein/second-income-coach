@@ -660,6 +660,42 @@ So that I always know what to do next and never see actions that don't apply yet
 **When** this flow is built
 **Then** they stay unchanged: the idea-selection dialog here confirms the choice of idea, activation in 3.2 still confirms the plan itself, and switching in 3.3 reuses the same select-and-confirm dialog
 
+### Story 2.9: Top Navigation Bar
+
+As a signed-in user,
+I want one navigation bar that takes me to my ideas, my plan, my bookmarked ideas and my settings,
+So that I can always find what I need without hunting through the page.
+
+**Acceptance Criteria:**
+
+**Given** a signed-in user with an intake
+**When** any main screen is shown
+**Then** the top bar shows the product name on the left, four navigation items (Ideas, Plan, Bookmarked, Settings), and the existing theme toggle and sign-out on the right; the active item is visibly marked and every item is keyboard-reachable with an accessible name (DE + EN, AD-24)
+
+**Given** the Ideas item
+**When** selected
+**Then** it shows the ideas view of Stories 2.2/2.3/2.8 unchanged
+
+**Given** the Plan item
+**When** the user has a selected idea with a plan
+**Then** it opens that plan's workspace (Story 3.1); with no selected idea it shows a short localized note pointing to the Ideas view, never an error or blank screen
+
+**Given** the Bookmarked item
+**When** selected
+**Then** it lists the user's bookmarked ideas (same idea card, Select/Reject available); choosing Select uses the confirm dialog of Story 2.8, and the plan switch itself stays Story 3.3's behaviour
+
+**Given** the Settings item
+**When** selected
+**Then** it shows the existing settings page (Stories 5.1/5.4/5.5), which is no longer rendered as a card on the main page
+
+**Given** a narrow/mobile screen
+**When** the bar is shown
+**Then** it collapses to a compact form (icons or a menu) without horizontal page scroll
+
+**Given** the page is reloaded
+**When** a navigation item was active
+**Then** the same view is shown (the view is part of the URL or stored locally; the choice is never lost on reload)
+
 ### Story 2.6: Faster Idea Generation (optional)
 
 As a user,
