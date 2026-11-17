@@ -1,0 +1,1 @@
+ALTER TABLE "plan_steps" ALTER COLUMN "description" SET DATA TYPE text[] USING ARRAY[description];

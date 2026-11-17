@@ -8,6 +8,7 @@ import { ThemeToggle } from './theme/theme-toggle';
 import { ChatThread } from './chat/ChatThread';
 import { IntakeForm } from './features/intake/IntakeForm';
 import { IdeasPanel } from './features/ideas/IdeasPanel';
+import { PlanWorkspace } from './features/plan-workspace/PlanWorkspace';
 import { SettingsPage } from './features/settings/SettingsPage';
 import { useAppliedUiLanguage } from './features/settings/useAppliedUiLanguage';
 
@@ -198,6 +199,11 @@ export function App() {
   // now-updated currency from `GET /api/ideas` — no change needed inside
   // `IdeasPanel.tsx` itself.
   const [ideasCurrencyKey, setIdeasCurrencyKey] = React.useState(0);
+  // Story 3.1: which idea's `PlanWorkspace` (if any) replaces the ideas/chat
+  // view below — a local-only toggle, never persisted; "Back to ideas"
+  // clears it. The idea's own title rides along (UI fix, user-reported) so
+  // the workspace can label itself "Your plan for <idea>".
+  const [viewPlanIdea, setViewPlanIdea] = React.useState<{ id: string; title: string } | null>(null);
 
   if (authStatus.state !== 'authenticated') {
     return (
@@ -243,9 +249,11 @@ export function App() {
               }}
             />
           </div>
+        ) : viewPlanIdea ? (
+          <PlanWorkspace ideaId={viewPlanIdea.id} ideaTitle={viewPlanIdea.title} onBack={() => setViewPlanIdea(null)} />
         ) : (
           <>
-            <IdeasPanel key={ideasCurrencyKey} />
+            <IdeasPanel key={ideasCurrencyKey} onViewPlan={(id, title) => setViewPlanIdea({ id, title })} />
             <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
               <ChatThread />
               <div>

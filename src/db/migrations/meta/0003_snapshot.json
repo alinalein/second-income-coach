@@ -1,5 +1,5 @@
 {
-  "id": "5a88a0c6-b4c3-436d-80f2-f278cbabb203",
+  "id": "de18ba61-a4b2-4b94-985d-a8f171b28842",
   "prevId": "5544256c-9d75-46b9-8fd1-853df23ec05f",
   "version": "7",
   "dialect": "postgresql",
@@ -129,37 +129,6 @@
           "type": "boolean",
           "primaryKey": false,
           "notNull": true
-        },
-        "demand_evidence_note": {
-          "name": "demand_evidence_note",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "demand_evidence_citation": {
-          "name": "demand_evidence_citation",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "demand_evidence_quote": {
-          "name": "demand_evidence_quote",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "is_demand_evidence_unverified": {
-          "name": "is_demand_evidence_unverified",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "growth_path": {
-          "name": "growth_path",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
         },
         "created_at": {
           "name": "created_at",
@@ -406,13 +375,6 @@
           "primaryKey": false,
           "notNull": true
         },
-        "country": {
-          "name": "country",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'other'"
-        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -451,6 +413,171 @@
           "nullsNotDistinct": false,
           "columns": [
             "user_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.plan_steps": {
+      "name": "plan_steps",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "plan_id": {
+          "name": "plan_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "step_order": {
+          "name": "step_order",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "description": {
+          "name": "description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "day_offset": {
+          "name": "day_offset",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "plan_steps_plan_id_plans_id_fk": {
+          "name": "plan_steps_plan_id_plans_id_fk",
+          "tableFrom": "plan_steps",
+          "tableTo": "plans",
+          "columnsFrom": [
+            "plan_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.plans": {
+      "name": "plans",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "idea_id": {
+          "name": "idea_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'draft'"
+        },
+        "thread_id": {
+          "name": "thread_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "plans_idea_id_ideas_id_fk": {
+          "name": "plans_idea_id_ideas_id_fk",
+          "tableFrom": "plans",
+          "tableTo": "ideas",
+          "columnsFrom": [
+            "idea_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "plans_user_id_users_id_fk": {
+          "name": "plans_user_id_users_id_fk",
+          "tableFrom": "plans",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "plans_idea_id_unique": {
+          "name": "plans_idea_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "idea_id"
           ]
         }
       },

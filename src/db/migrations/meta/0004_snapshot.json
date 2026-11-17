@@ -1,108 +1,9 @@
 {
-  "id": "3b0c25c3-f32c-4330-9149-3985a5d62009",
-  "prevId": "5a88a0c6-b4c3-436d-80f2-f278cbabb203",
+  "id": "9a8e3380-e817-4c54-8cf8-eb78fee88f27",
+  "prevId": "de18ba61-a4b2-4b94-985d-a8f171b28842",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
-    "public.idea_translations": {
-      "name": "idea_translations",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "idea_id": {
-          "name": "idea_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "language": {
-          "name": "language",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "title": {
-          "name": "title",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "rationale": {
-          "name": "rationale",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "demand_evidence_note": {
-          "name": "demand_evidence_note",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "growth_path": {
-          "name": "growth_path",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "idea_translations_idea_id_language_idx": {
-          "name": "idea_translations_idea_id_language_idx",
-          "columns": [
-            {
-              "expression": "idea_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "language",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "idea_translations_idea_id_ideas_id_fk": {
-          "name": "idea_translations_idea_id_ideas_id_fk",
-          "tableFrom": "idea_translations",
-          "tableTo": "ideas",
-          "columnsFrom": [
-            "idea_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
     "public.ideas": {
       "name": "ideas",
       "schema": "",
@@ -228,44 +129,6 @@
           "type": "boolean",
           "primaryKey": false,
           "notNull": true
-        },
-        "demand_evidence_note": {
-          "name": "demand_evidence_note",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "demand_evidence_citation": {
-          "name": "demand_evidence_citation",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "demand_evidence_quote": {
-          "name": "demand_evidence_quote",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "is_demand_evidence_unverified": {
-          "name": "is_demand_evidence_unverified",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "growth_path": {
-          "name": "growth_path",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "language": {
-          "name": "language",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'en'"
         },
         "created_at": {
           "name": "created_at",
@@ -512,13 +375,6 @@
           "primaryKey": false,
           "notNull": true
         },
-        "country": {
-          "name": "country",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'other'"
-        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -557,6 +413,171 @@
           "nullsNotDistinct": false,
           "columns": [
             "user_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.plan_steps": {
+      "name": "plan_steps",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "plan_id": {
+          "name": "plan_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "step_order": {
+          "name": "step_order",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "description": {
+          "name": "description",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "day_offset": {
+          "name": "day_offset",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "plan_steps_plan_id_plans_id_fk": {
+          "name": "plan_steps_plan_id_plans_id_fk",
+          "tableFrom": "plan_steps",
+          "tableTo": "plans",
+          "columnsFrom": [
+            "plan_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.plans": {
+      "name": "plans",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "idea_id": {
+          "name": "idea_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'draft'"
+        },
+        "thread_id": {
+          "name": "thread_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "plans_idea_id_ideas_id_fk": {
+          "name": "plans_idea_id_ideas_id_fk",
+          "tableFrom": "plans",
+          "tableTo": "ideas",
+          "columnsFrom": [
+            "idea_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "plans_user_id_users_id_fk": {
+          "name": "plans_user_id_users_id_fk",
+          "tableFrom": "plans",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "plans_idea_id_unique": {
+          "name": "plans_idea_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "idea_id"
           ]
         }
       },

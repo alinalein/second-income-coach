@@ -23,7 +23,8 @@
     "select": "Select",
     "bookmark": "Bookmark",
     "reject": "Reject",
-    "retryTranslation": "Retry translation"
+    "retryTranslation": "Retry translation",
+    "viewPlan": "View plan"
   },
   "card": {
     "weeklyTimeLabel": "Weekly time",

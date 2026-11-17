@@ -17,9 +17,9 @@ This document provides the complete epic and story breakdown for Second Income C
 
 FR1: User can complete a structured intake capturing skills, interests, available time, risk tolerance, and starting budget, plus a free-text answer about what has stopped them from starting/following through before; that free-text answer is classified into one of five known failure patterns (overwhelm, loses interest once routine, gets stuck with no next step, life disruption, forgets/deprioritizes) and persisted alongside the rest of the intake.
 
-FR2: System generates exactly 5 tailored second-income ideas from a completed intake. Each idea includes a rationale citing at least 3 different intake fields and structured info on weekly time required, startup cost, and risk level. No idea exceeds the user's stated time/budget/risk; two intakes differing in at least two fields yield different idea sets.
+FR2: System generates exactly 3 tailored (one batch-size constant; a batch is 3 ideas everywhere) second-income ideas from a completed intake. Each idea includes a rationale citing at least 3 different intake fields and structured info on weekly time required, startup cost, and risk level. No idea exceeds the user's stated time/budget/risk; two intakes differing in at least two fields yield different idea sets.
 
-FR3: User can select one of the 5 ideas to work on; the other 4 are retained as "bookmarked" (not discarded); the user can mark any idea "rejected," removing it from the visible list.
+FR3: User can select one of the shown ideas to work on; the others are retained as "bookmarked" (not discarded); the user can mark any idea "rejected," removing it from the visible list.
 
 FR4: Once an idea is selected, the system generates a draft plan of small concrete steps with an estimated timeline, sized and sequenced according to the user's classified failure pattern. Only the current and immediate-next step are visible at any time.
 
@@ -33,7 +33,7 @@ FR8: Starting a step and completing a step each produce their own distinct, spec
 
 FR9: After each completed step or check-in, the user sees an updated income estimate and the concrete next opportunity it unlocks - computed from their actual logged progress and check-in consistency, not fixed at intake and not silently re-fetched/recomputed later.
 
-FR10: User can request "more ideas" for a further batch of 5, never repeating anything already bookmarked or rejected.
+FR10: User can request "more ideas" for a further batch of 3 that is added to the existing ones, never repeating anything already bookmarked or rejected.
 
 FR11: User can set the agent's personality (formal/friendly/terse) and choose which LLM answers from a model registry (id, provider, display name, price per 1M input/output tokens, price_as_of); only providers with a configured server-side key are selectable, and the moderation/transcription models are never user-selectable.
 
@@ -121,7 +121,7 @@ Users can sign in with Google and exchange at least one safe, moderated message 
 **Covers:** FR18, FR19, NFR4, UX-DR1-4, and the Additional Requirements (stack wiring, auth, persistence plumbing, moderation baseline, observability, Express/React shell, i18n foundation, web/API security baseline per AD-30).
 
 ### Epic 2: Tailored Idea Discovery
-Users complete an intake and receive 5 second-income ideas matched to their own skills, time, budget, and risk tolerance - not a generic list - and can curate that list by bookmarking or rejecting ideas.
+Users complete an intake and receive 3 second-income ideas matched to their own skills, time, budget, and risk tolerance - not a generic list - and can curate that list by bookmarking or rejecting ideas.
 **FRs covered:** FR1, FR2, FR3.
 
 ### Epic 3: Plan Creation & Activation
@@ -418,7 +418,7 @@ So that the app matches UX-DR3 and Story 1.1's acceptance criterion, which was a
 
 ## Epic 2: Tailored Idea Discovery
 
-Users complete an intake and receive 5 second-income ideas matched to their own skills, time, budget, and risk tolerance - not a generic list - and can curate that list by bookmarking or rejecting ideas.
+Users complete an intake and receive 3 second-income ideas matched to their own skills, time, budget, and risk tolerance - not a generic list - and can curate that list by bookmarking or rejecting ideas.
 
 ### Story 2.1: Structured Intake with Failure-Pattern Classification
 
@@ -466,7 +466,7 @@ So that I'm not stuck with a generic list.
 
 **Given** a completed intake
 **When** the user requests ideas
-**Then** `generate_ideas` produces exactly 5
+**Then** `generate_ideas` produces exactly 3 (the batch-size constant)
 
 **Given** each idea
 **When** displayed
@@ -502,7 +502,7 @@ So that I'm not stuck with a generic list.
 
 **Given** ideas already exist and the user has changed their intake answers
 **When** they request new ideas from the ideas panel
-**Then** a visible "Generate new ideas" action runs `generate_ideas` again for the current intake and replaces the current batch of `suggested` ideas (ideas the user bookmarked or rejected in Story 2.3 are kept); "more ideas" alongside the existing ones is Story 2.4
+**Then** a visible "Generate new ideas" action runs `generate_ideas` again for the current intake; it adds a further batch of 3 to the existing ideas (nothing the user has bookmarked, rejected or already been shown is removed or repeated) - the batch-adding behaviour is Story 2.4
 
 **Given** this story introduces the `web_search` provider's credential
 **When** it is built
@@ -510,7 +510,7 @@ So that I'm not stuck with a generic list.
 
 ### Story 2.3: Bookmark and Reject Ideas
 
-As a user viewing my 5 ideas,
+As a user viewing my ideas,
 I want to select one to pursue and manage the rest,
 So that I keep useful alternatives without clutter.
 
@@ -538,15 +538,15 @@ So that I keep useful alternatives without clutter.
 
 ### Story 2.4: Generate More Ideas
 
-As a user who isn't satisfied with the current 5 ideas,
+As a user who isn't satisfied with the current ideas,
 I want to request another batch,
 So that I have more options without re-entering my intake.
 
 **Acceptance Criteria:**
 
-**Given** 5 existing ideas with some bookmarked/rejected
+**Given** existing ideas, some of them bookmarked/rejected
 **When** the user requests "more ideas"
-**Then** `generate_ideas` returns a further 5, never repeating anything already `bookmarked` or `rejected`
+**Then** `generate_ideas` returns a further 3, added to the existing ones, never repeating anything already shown (`suggested`, `bookmarked` or `rejected`)
 
 **Given** the new batch
 **When** generated
@@ -568,7 +568,7 @@ So that the suggestions are current and worth acting on, not generic.
 **When** displayed
 **Then** it shows a demand/trend evidence note with its source URL, in addition to the baseline-rate citation (AD-6), directly on the card; the evidence is persisted on the idea's record and is never invented - an idea without sourced evidence is retried, not shown
 
-**Given** a batch of 5
+**Given** a batch of 3
 **When** validated
 **Then** its evidence comes from at least 3 distinct source domains, and the discovery step is not limited to freelance rate pages
 
@@ -623,6 +623,108 @@ So that the cards never show a language I didn't choose.
 **Given** a source quote
 **When** the card is translated
 **Then** the quote stays in its original language and is shown as such; only the surrounding card text is translated
+
+### Story 2.8: Guided Flow from Intake to Plan
+
+As a user,
+I want the app to walk me from my answers to my ideas to my plan in clear steps,
+So that I always know what to do next and never see actions that don't apply yet.
+
+**Acceptance Criteria:**
+
+**Given** a user who submits the intake form for the first time
+**When** the submission succeeds
+**Then** idea generation starts automatically, with the same real-step progress display as today (no extra click); a returning user with ideas goes straight to their ideas
+
+**Given** the ideas are shown
+**When** the user looks under the "Your tailored income ideas" heading
+**Then** a short localized explanation tells them what to do: choose the idea they like most, reject the ones they don't want, and press "Generate new ideas" to see more
+
+**Given** the user presses "Select" on an idea
+**When** the action is triggered
+**Then** a confirmation dialog states that this idea becomes their chosen one and the remaining ideas are kept as bookmarks they can view later; only on confirm does the status change (Story 2.3 behaviour) and the plan get created (Story 3.1, lazily); cancel changes nothing
+
+**Given** the user confirms the selection
+**When** the plan has been generated
+**Then** the plan workspace (Story 3.1) opens with the draft plan and the plan chat
+
+**Given** the idea cards
+**When** an idea has no plan (every idea except the selected one)
+**Then** the card shows no "View plan" action; only the selected idea's card links to its plan
+
+**Given** the empty space under the ideas heading and any reserved-height placeholders
+**When** the ideas are loaded
+**Then** no blank bands remain; the explanation text or nothing occupies that space
+
+**Given** Story 3.2 (draft plan review and activation) and Story 3.3 (switching plans)
+**When** this flow is built
+**Then** they stay unchanged: the idea-selection dialog here confirms the choice of idea, activation in 3.2 still confirms the plan itself, and switching in 3.3 reuses the same select-and-confirm dialog
+
+### Story 2.9: App Navigation Sidebar
+
+As a signed-in user,
+I want a left sidebar that lists my plans and bookmarked ideas and takes me to my ideas and settings,
+So that I can move between the things I'm working on without hunting through the page.
+
+**Acceptance Criteria:**
+
+**Given** a signed-in user with an intake
+**When** any main screen is shown
+**Then** a left sidebar shows, top to bottom: the product name, a "New ideas" entry (the ideas view of Stories 2.2/2.3/2.8, unchanged), a "My plans" list, a "Bookmarked" list, and at the bottom the user's profile entry with Settings, the theme toggle and sign-out; the active entry is visibly marked and every entry is keyboard-reachable with an accessible name (DE + EN, AD-24)
+
+**Given** the "My plans" list
+**When** the user has plans
+**Then** each entry is one idea with a plan, titled with the idea, sorted by last activity; the active plan is marked, paused plans are dimmed; selecting an entry opens that plan's workspace (Story 3.1) with that plan's own chat thread (AD-18); with no plans the list shows a short localized note, never an error or blank area
+
+**Given** the "Bookmarked" list
+**When** the user has bookmarked ideas without a plan
+**Then** each entry is one such idea; selecting it opens the confirmation dialog of Story 2.8, and confirming runs the select-and-plan flow (lazy `create_plan`, Story 3.1/3.3) after which the idea moves to "My plans"; switching which plan is active, pausing and resuming stay Story 3.3's behaviour and the 3.2 confirmation gate is never bypassed
+
+**Given** the profile entry
+**When** opened
+**Then** it offers Settings (the existing settings page, Stories 5.1/5.4/5.5, shown as its own view and no longer as a card on the main page), the theme toggle and sign-out
+
+**Given** the plan workspace of Story 3.1
+**When** shown next to this sidebar
+**Then** its status panel (current and next step, timeline) is a compact header above the chat, not a second sidebar, using the narrow-screen layout Story 3.1 already defines
+
+**Given** a narrow/mobile screen
+**When** the sidebar is shown
+**Then** it collapses to a menu button that opens the sidebar as an overlay, with no horizontal page scroll
+
+**Given** the page is reloaded
+**When** a view or plan was active
+**Then** the same view or plan is shown again (kept in the URL or stored locally; never lost on reload)
+
+### Story 2.10: Direct Paths for Button-Triggered Flows
+
+As a user,
+I want saving my answers, generating ideas and creating a plan to feel fast,
+So that the app is pleasant to use and does not waste time or money on steps it doesn't need.
+
+**Scheduling:** required, built before Stories 2.9, 3.3 and Epic 4, because it changes how every later flow is wired.
+
+**Acceptance Criteria:**
+
+**Given** the intake form, the "Generate new ideas" action and the plan creation after a selection
+**When** the user triggers them
+**Then** each API route calls its tool handler directly (the same handler the agent's tool wraps) with no agent loop around it (AD-4 amendment); free-form chat turns keep the agent loop and still call the same tools, so tool-calling behaviour and the Story 6.2 evals are unchanged
+
+**Given** an intake submit
+**When** it is saved
+**Then** the fields are stored immediately and the user sees "saved" without waiting for a model; the failure pattern is classified by one direct structured-output call to a fast internal model (never in the user-selectable registry), in parallel with one AD-11 moderation of the free-text answer; ideas are never generated before the classification has finished; a flagged answer is rejected with the existing neutral message
+
+**Given** server-authored trigger text (the messages the routes used to send to the agent)
+**When** the flows run
+**Then** no moderation call is made on it, while every piece of user-written text is still moderated (AD-11) and every model-written text shown to the user is still output-moderated and guilt-language checked where AD-12 applies
+
+**Given** each flow
+**When** measured on one real run before and after
+**Then** the report shows both numbers per step honestly, with targets of: intake "saved" within 1 s, classification within about 3 s, plan creation within about 20 s, idea generation within about 45 s for a batch of 3; a miss is reported as a miss, never hidden by raising timeouts
+
+**Given** the change
+**When** done
+**Then** all existing acceptance criteria of Stories 2.1, 2.2, 2.5, 3.1 still pass unchanged, and the ones touching `agent.invoke` in the routes are updated to the direct handler calls
 
 ### Story 2.6: Faster Idea Generation (optional)
 
@@ -688,7 +790,7 @@ So that I know exactly what to do first instead of facing a vague goal.
 
 **Given** `create_plan` is invoked
 **When** that happens
-**Then** it runs lazily - only on first selection or re-selection with no existing plan, never eagerly for all 5 ideas (AD-13)
+**Then** it runs lazily - only on first selection or re-selection with no existing plan, never eagerly for every idea (AD-13)
 
 **Given** a plan is created for the first time
 **When** that happens
@@ -1276,7 +1378,7 @@ So that I understand what was built and why before digging into the code.
 
 **Given** a new reader
 **When** they read the "Example Use Cases" section
-**Then** it walks through at least one full user journey end to end (intake -> 5 ideas -> select -> activate plan -> check in -> see projection)
+**Then** it walks through at least one full user journey end to end (intake -> ideas -> select -> activate plan -> check in -> see projection)
 
 **Given** the README
 **When** checked

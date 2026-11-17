@@ -228,4 +228,36 @@ describe('createModerationMiddleware (hook integration)', () => {
 
     expect(result.messages[0].content).toBe(UNSAFE_RESPONSE_FALLBACK_MESSAGE_DE);
   });
+
+  // Perf fix (user-requested): "the trigger message is not user input, so
+  // there is nothing to screen" — `skipInputModeration` must bypass
+  // `classify` entirely (not just suppress its result), since the whole
+  // point is to avoid paying for the Mistral call at all.
+  it('beforeModel.hook never calls classify when skipInputModeration is set on a server-authored trigger', async () => {
+    const classify = fakeClassify({ jailbreaking: true });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- see above.
+    const middleware = createModerationMiddleware(fakeEnv, { classify }) as any;
+    const humanMessage = new HumanMessage({ id: 'trigger-1', content: 'Please create my plan now by calling create_plan.' });
+    const triggerRuntime = { configurable: { thread_id: 'plan:plan-1', skipInputModeration: true } };
+
+    const result = await middleware.beforeModel.hook({ messages: [humanMessage] }, triggerRuntime);
+
+    expect(classify).not.toHaveBeenCalled();
+    expect(result).toBeUndefined();
+  });
+
+  // A genuine user message in the same plan thread (the free-form follow-up
+  // AC) never sets the flag — moderation must still run for it.
+  it('beforeModel.hook still screens a real user message on a plan thread that does not set skipInputModeration', async () => {
+    const classify = fakeClassify({ jailbreaking: true });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- see above.
+    const middleware = createModerationMiddleware(fakeEnv, { classify }) as any;
+    const humanMessage = new HumanMessage({ id: 'human-10', content: RAW_JAILBREAK_TEXT });
+    const planThreadRuntime = { configurable: { thread_id: 'plan:plan-1' } };
+
+    const result = await middleware.beforeModel.hook({ messages: [humanMessage] }, planThreadRuntime);
+
+    expect(classify).toHaveBeenCalledTimes(1);
+    expect(result.jumpTo).toBe('end');
+  });
 });

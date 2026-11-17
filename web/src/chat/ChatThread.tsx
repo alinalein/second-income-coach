@@ -10,9 +10,13 @@ import {
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '../components/ui/card';
 import { cn } from '../lib/utils';
-import { ChatMessage } from './ChatMessage';
+import { ChatMessage, type ChatMessageFooterItem } from './ChatMessage';
 import { createProgressLabelScheduler } from './progressLabelScheduler';
 import { parseSseStream } from './sse';
+
+/** Story 3.1: the discovery thread's own default endpoint — unchanged
+ * behavior for every existing caller that doesn't pass `endpoint`. */
+const DEFAULT_CHAT_ENDPOINT = '/api/chat/messages';
 
 /** Review follow-up: a crossfade (fade the old label out, swap text, fade
  * the new one in) instead of an instant pop, so a label change reads as a
@@ -52,7 +56,26 @@ function safeJsonParse(data: string): unknown {
  * `progress` status frames followed by one terminal `result` frame — never
  * partial answer text.
  */
-export function ChatThread() {
+export interface ChatThreadProps {
+  /**
+   * Story 3.1 (Code Map: "accept an `endpoint`/`threadKind` prop (default
+   * discovery, unchanged behavior) so `PlanWorkspace` can point it at
+   * `/api/plans/:planId/messages`"). Both `GET` and `POST` are issued
+   * against this same base path, mirroring the discovery thread's own
+   * `/api/chat/messages` shape exactly.
+   */
+  endpoint?: string;
+  /** Story 3.1 extension point, forwarded to every `ChatMessage` — empty by
+   * default (see `ChatMessage.tsx`'s `ChatMessageFooterItem`). */
+  footerItems?: readonly ChatMessageFooterItem[];
+  /** Story 3.1 extension point: an extra chat-input mode rendered beside
+   * the text field (Code Map: "chat input extension point (extra input
+   * modes beside the text field)") — empty by default; Story 4.3 fills it
+   * with a voice-record control. */
+  inputExtra?: React.ReactNode;
+}
+
+export function ChatThread({ endpoint = DEFAULT_CHAT_ENDPOINT, footerItems = [], inputExtra }: ChatThreadProps = {}) {
   const { t } = useTranslation('chat');
   const [messages, setMessages] = React.useState<ChatMessageType[]>([]);
   const [historyLoaded, setHistoryLoaded] = React.useState(false);
@@ -95,7 +118,7 @@ export function ChatThread() {
   React.useEffect(() => {
     let cancelled = false;
 
-    fetch('/api/chat/messages', { credentials: 'include' })
+    fetch(endpoint, { credentials: 'include' })
       .then(async (res) => {
         if (cancelled || !res.ok) return;
         const body: unknown = await res.json();
@@ -110,7 +133,7 @@ export function ChatThread() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [endpoint]);
 
   const handleSubmit = React.useCallback(
     (event: React.FormEvent) => {
@@ -132,7 +155,7 @@ export function ChatThread() {
         let settled = false;
 
         try {
-          const res = await fetch('/api/chat/messages', {
+          const res = await fetch(endpoint, {
             method: 'POST',
             credentials: 'include',
             headers: { 'Content-Type': 'application/json' },
@@ -175,7 +198,7 @@ export function ChatThread() {
         setSending(false);
       })();
     },
-    [draft, sending, t],
+    [draft, sending, t, endpoint],
   );
 
   return (
@@ -190,7 +213,7 @@ export function ChatThread() {
           <p className="text-sm text-muted-foreground">{t('empty')}</p>
         ) : (
           messages.map((message) => (
-            <ChatMessage key={message.id} message={message} animate={animatedIds.has(message.id)} />
+            <ChatMessage key={message.id} message={message} animate={animatedIds.has(message.id)} footerItems={footerItems} />
           ))
         )}
         {sending && displayedStep && (
@@ -223,6 +246,10 @@ export function ChatThread() {
             aria-label={t('messageAriaLabel')}
             className="h-10 flex-1 rounded-md border border-border bg-card px-3 text-sm text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background"
           />
+          {/* Story 3.1 extension point: empty by default — Story 4.3 fills
+           * this with a voice-record control; typed text stays available
+           * either way. */}
+          {inputExtra}
           <Button type="submit" disabled={sending || !draft.trim()}>
             {t('sendButton')}
           </Button>

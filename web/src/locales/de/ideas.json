@@ -23,7 +23,8 @@
     "select": "Auswählen",
     "bookmark": "Merken",
     "reject": "Ablehnen",
-    "retryTranslation": "Übersetzung erneut versuchen"
+    "retryTranslation": "Übersetzung erneut versuchen",
+    "viewPlan": "Plan ansehen"
   },
   "card": {
     "weeklyTimeLabel": "Zeit pro Woche",

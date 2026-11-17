@@ -10,6 +10,8 @@ import ideasEn from '../locales/en/ideas.json';
 import ideasDe from '../locales/de/ideas.json';
 import settingsEn from '../locales/en/settings.json';
 import settingsDe from '../locales/de/settings.json';
+import planEn from '../locales/en/plan.json';
+import planDe from '../locales/de/plan.json';
 
 /**
  * AD-24: `react-i18next`, resources bundled statically (no HTTP backend —
@@ -25,8 +27,8 @@ import settingsDe from '../locales/de/settings.json';
  */
 void i18n.use(initReactI18next).init({
   resources: {
-    en: { common: commonEn, chat: chatEn, intake: intakeEn, ideas: ideasEn, settings: settingsEn },
-    de: { common: commonDe, chat: chatDe, intake: intakeDe, ideas: ideasDe, settings: settingsDe },
+    en: { common: commonEn, chat: chatEn, intake: intakeEn, ideas: ideasEn, settings: settingsEn, plan: planEn },
+    de: { common: commonDe, chat: chatDe, intake: intakeDe, ideas: ideasDe, settings: settingsDe, plan: planDe },
   },
   lng: 'en',
   fallbackLng: 'en',

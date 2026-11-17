@@ -16,7 +16,7 @@ Idea-generation quizzes already solve half of this. None pair tailored ideas wit
 | # | Capability |
 |---|---|
 | CAP-1 | Structured intake (skills, interests, time, risk tolerance, budget) that also classifies *why* past attempts stalled, into one of five failure patterns |
-| CAP-2 | 5 tailored income ideas per intake, each with a rationale tied to at least 3 intake fields; bookmark, reject, or request more |
+| CAP-2 | 3 tailored income ideas per batch (more on request), each with a rationale tied to at least 3 intake fields; bookmark, reject, or request more |
 | CAP-3 | A draft plan of small, sequenced steps — sized to the user's failure pattern — revealing only the current + next step |
 | CAP-4 | Ongoing check-ins by text or voice (recorded → transcribed → user-confirmed); missed check-ins auto-reshuffle the timeline, no shame |
 | CAP-5 | A live income/opportunity projection that updates with real progress |
@@ -122,7 +122,7 @@ Every tool the agent can invoke, split by the same boundary the architecture enf
 
 | Tool | Type | Does |
 |---|---|---|
-| `generate_ideas` | LLM-backed | Produces the 5 tailored income ideas from a completed intake; the only tool that calls `web_search` |
+| `generate_ideas` | LLM-backed | Produces a batch of 3 tailored income ideas from a completed intake; the only tool that calls `web_search` |
 | `create_plan` | LLM-backed | Produces the draft step-by-step plan for a selected idea |
 | `submit_intake` | Plain-code | Persists intake answers + the classified failure pattern |
 | `set_idea_status` | Plain-code | Marks an idea bookmarked/rejected/selected |
@@ -147,7 +147,7 @@ flowchart TD
     B --> C[3. Safety-check the discovery results]
     C --> D[4. Search the web for real income rates<br/>for the opportunities found]
     D --> E[5. Safety-check the rate results]
-    E --> F[6. Write 5 ideas built from the findings and the intake<br/>each with rationale, time, cost, risk, how it can grow,<br/>demand evidence + income rate, both with sources]
+    E --> F[6. Write 3 ideas built from the findings and the intake<br/>each with rationale, time, cost, risk, how it can grow,<br/>demand evidence + income rate, both with sources]
     F --> G{7. Check the ideas<br/>fit time, budget and risk?<br/>evidence for each?<br/>enough variety?}
     G -- no --> F
     G -- yes --> H[8. Save the ideas]

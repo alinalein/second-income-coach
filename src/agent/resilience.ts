@@ -74,6 +74,30 @@ export const IDEAS_MODEL_NODE_RETRY_POLICY: RetryPolicy = {
 };
 
 /**
+ * Story 3.1 (AD-4/AD-7): `create_plan`'s own outer-node timeout. Unlike
+ * `generate_ideas`, `create_plan` makes no nested-agent/`web_search` calls —
+ * it's a single, direct `chatModel.withStructuredOutput(...)` invocation
+ * (Design Notes: "a single direct structured-output call is simpler and
+ * inherently satisfies 'one attempt, no loop'") — so it stays at the
+ * standard chat/intake budget rather than `IDEAS_MODEL_NODE_TIMEOUT_MS`'s
+ * search-inflated one.
+ */
+export const PLAN_MODEL_NODE_TIMEOUT_MS = 30_000;
+
+/**
+ * Story 3.1 (Boundary: "one attempt, no whole-turn retry ... mirroring
+ * IDEAS_MODEL_NODE_RETRY_POLICY"): same `maxAttempts: 1` reasoning as
+ * `IDEAS_MODEL_NODE_RETRY_POLICY` above — a `create_plan` failure (timeout,
+ * Zod validation failure, or any other error) is a failure, never a
+ * whole-turn re-run. `create_plan` itself has no internal retry loop either
+ * (unlike `generate_ideas`'s `MAX_DRAFT_ATTEMPTS`) — this is genuinely the
+ * only attempt the whole turn gets.
+ */
+export const PLAN_MODEL_NODE_RETRY_POLICY: RetryPolicy = {
+  maxAttempts: 1,
+};
+
+/**
  * I/O matrix: "Model call exhausts retries" -> "User sees the fixed generic
  * error message" / "App keeps running, no crash". Returned by the chat route
  * when the compiled graph's `invoke()` rejects after `setNodeDefaults`'s

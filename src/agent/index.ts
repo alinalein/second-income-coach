@@ -13,6 +13,7 @@ import { DEFAULT_MODEL_ID } from './registry.js';
 import { DEFAULT_PERSONALITY, PERSONALITY_PROMPTS, resolvePersonality, type Personality } from './personality.js';
 import { createModerationMiddleware, type ClassifyText } from './moderation.js';
 import { createProgressMiddleware } from './progress.js';
+import { createForceToolChoiceMiddleware } from './toolChoice.js';
 import { applyModelNodeResilience, MODEL_NODE_TIMEOUT_MS } from './resilience.js';
 import { createSubmitIntakeTool } from '../tools/plain/submit_intake.js';
 import { createGenerateIdeasTool } from '../tools/llm/generate_ideas.js';
@@ -84,6 +85,33 @@ export function buildIdeasTriggerThreadId(userId: string): string {
  */
 export function buildIntakeTriggerThreadId(userId: string): string {
   return `intake-trigger:${userId}`;
+}
+
+/**
+ * Story 3.1 (AD-18): "exactly one plan thread per plan, created when that
+ * plan's draft is first generated". Reserved shape (Design Notes in
+ * `buildDiscoveryThreadId`'s own comment above) — never the discovery
+ * thread, never shared across plans. `src/api/routes/plans.ts` mints a
+ * `planId` and builds this thread id *before* `create_plan` has written any
+ * row, so the id itself can't come from a DB lookup.
+ */
+export function buildPlanThreadId(planId: string): string {
+  return `plan:${planId}`;
+}
+
+/**
+ * Bug fix (user-reported): the lazy-create trigger ("Please create my plan
+ * now by calling create_plan...") was running directly on the real
+ * `plan:${planId}` thread, so it got checkpointed into — and then rendered
+ * from — the same history `plan-chat.ts`'s `GET /:planId/messages` reads,
+ * showing the user a raw internal message that was never theirs. Same
+ * internal-only-trigger-thread pattern as `buildIdeasTriggerThreadId`/
+ * `buildIntakeTriggerThreadId` above: `src/api/routes/plans.ts` invokes the
+ * one-time creation trigger here instead, then seeds the real plan thread
+ * with a fixed welcome message once the plan is actually created.
+ */
+export function buildPlanCreateTriggerThreadId(planId: string): string {
+  return `plan-create-trigger:${planId}`;
 }
 
 const DISCOVERY_THREAD_PREFIX = 'discovery:';
@@ -179,14 +207,15 @@ export function createCoachAgent({
   const systemPrompt = dynamicSystemPromptMiddleware<{ personality?: string }>((_state, runtime) =>
     buildSystemPrompt(resolvePersonality(runtime.context?.personality)),
   );
+  const forceToolChoice = createForceToolChoiceMiddleware();
 
   // Story 5.1 (AD-20): per-turn model swapping only applies to the real,
   // registry-backed model. A test that injects its own fake `model` (the
   // seam above) wants that exact instance invoked on every turn, never
   // swapped out underneath it by the registry-driven middleware below.
   const middleware = model
-    ? [progress, moderation, systemPrompt]
-    : [progress, moderation, systemPrompt, createModelSelectionMiddleware({ env })];
+    ? [progress, moderation, systemPrompt, forceToolChoice]
+    : [progress, moderation, systemPrompt, forceToolChoice, createModelSelectionMiddleware({ env })];
 
   // Story 1.5 Design Notes: `progress` goes first so its `beforeModel` always
   // fires, even when `moderation`'s own `beforeModel` jumps straight to

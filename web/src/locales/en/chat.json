@@ -12,6 +12,7 @@
     "checking_message": "Checking your message…",
     "generating_response": "Thinking…",
     "checking_answer": "Checking the answer…",
+    "creating_plan": "Working on your plan…",
     "tool_fallback": "Working on it…"
   }
 }

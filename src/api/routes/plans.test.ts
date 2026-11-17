@@ -1,0 +1,289 @@
+import { randomUUID } from 'node:crypto';
+import express from 'express';
+import session from 'express-session';
+import request from 'supertest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
+import { eq } from 'drizzle-orm';
+import { createPlansRouter, isUniqueViolationError, type PlansRouterDeps } from './plans.js';
+import { createDb } from '../../db/client.js';
+import { users, ideas, plans, planSteps } from '../../db/schema/index.js';
+
+// Bug fix (user-reported, live): Drizzle's `node-postgres` driver wraps the
+// real `pg` error — a genuine unique-violation's `.code` lives at
+// `error.cause.code`, never copied to the wrapper's own top level (confirmed
+// against a real Postgres error, not guessed). This deterministic unit test
+// locks that shape in, independent of whether a live HTTP race happens to
+// hit the exact insert-collision window (the integration test below does,
+// but non-deterministically).
+describe('isUniqueViolationError (real Drizzle/node-postgres error shape)', () => {
+  it.each([
+    ['a Drizzle-wrapped error with the code nested under .cause', { cause: { code: '23505' } }, true],
+    ['a raw pg error with the code at the top level', { code: '23505' }, true],
+    ['a different Postgres error code', { cause: { code: '23502' } }, false],
+    ['an error with no code anywhere', new Error('boom'), false],
+  ] as const)('%s -> %s', (_name, error, expected) => {
+    expect(isUniqueViolationError(error)).toBe(expected);
+  });
+});
+
+const testEnv: PlansRouterDeps['env'] = { RATE_LIMIT_WINDOW_MS: 60_000 };
+
+type FakeAgent = PlansRouterDeps['agent'];
+
+const DATABASE_URL =
+  process.env.DATABASE_URL ?? 'postgres://second_income_coach:second_income_coach@localhost:5432/second_income_coach';
+
+const { db, pool } = createDb({ DATABASE_URL });
+
+afterAll(async () => {
+  await pool.end();
+});
+
+async function createTestUser(): Promise<string> {
+  const googleId = `test-${randomUUID()}`;
+  const [user] = await db
+    .insert(users)
+    .values({ googleId, email: `${googleId}@example.com`, name: 'Test User', picture: null })
+    .returning();
+  return user!.id;
+}
+
+async function insertIdea(userId: string, status: string): Promise<string> {
+  const [idea] = await db
+    .insert(ideas)
+    .values({
+      userId,
+      status,
+      title: 'Resell thrifted items',
+      rationale: 'Fits your schedule.\nStart by listing one item.',
+      citedIntakeFields: ['weeklyTimeAvailability', 'riskTolerance', 'startingBudgetRange'],
+      ideaType: 'resale_arbitrage',
+      weeklyTimeCommitment: '5_to_10h',
+      startupCostAmountMinorUnits: 0,
+      startupCostCurrency: 'EUR',
+      riskLevel: 'low',
+      baselineRateQuote: 'Workers in this field earn $25.00 an hour on average.',
+      baselineRateLowAmountMinorUnits: 2500,
+      baselineRateHighAmountMinorUnits: 2500,
+      isVendorSource: false,
+      rateUnit: 'hour',
+      baselineRateCurrency: 'EUR',
+      baselineRateCitation: 'https://a.example.com/rates',
+      sourceTrustTier: 'tier_1',
+      isRateUnverified: false,
+    })
+    .returning({ id: ideas.id });
+  return idea!.id;
+}
+
+async function cleanUp(userId: string) {
+  const planRows = await db.select({ id: plans.id }).from(plans).where(eq(plans.userId, userId));
+  for (const planRow of planRows) {
+    await db.delete(planSteps).where(eq(planSteps.planId, planRow.id));
+  }
+  await db.delete(plans).where(eq(plans.userId, userId));
+  await db.delete(ideas).where(eq(ideas.userId, userId));
+  await db.delete(users).where(eq(users.id, userId));
+}
+
+function fakeAgent(overrides: Partial<FakeAgent> = {}): FakeAgent {
+  return {
+    invoke: vi.fn(),
+    getState: vi.fn(),
+    updateState: vi.fn(),
+    ...overrides,
+  } as unknown as FakeAgent;
+}
+
+function buildTestApp(agent: FakeAgent, userId: string) {
+  const app = express();
+  app.use(express.json());
+  app.use(session({ secret: 'test-secret', resave: false, saveUninitialized: false }));
+  app.use((req, _res, next) => {
+    req.session.userId = userId;
+    next();
+  });
+  app.use('/api/plans', createPlansRouter({ env: testEnv, db, agent }));
+  return app;
+}
+
+describe('createPlansRouter POST /select/:ideaId', () => {
+  // I/O matrix: "Idea not owned by user / unselected idea" -> 404, no plan
+  // created.
+  it('returns 404 and creates no plan when the idea is still suggested', async () => {
+    const userId = await createTestUser();
+    try {
+      const ideaId = await insertIdea(userId, 'suggested');
+      const agent = fakeAgent();
+
+      const res = await request(buildTestApp(agent, userId)).post(`/api/plans/select/${ideaId}`);
+
+      expect(res.status).toBe(404);
+      expect(agent.invoke).not.toHaveBeenCalled();
+      const [row] = await db.select().from(plans).where(eq(plans.ideaId, ideaId)).limit(1);
+      expect(row).toBeUndefined();
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+
+  // I/O matrix: "Re-open, plan exists" -> existing row returned,
+  // create_plan never re-invoked.
+  it('returns the existing plan without invoking the agent when one already exists', async () => {
+    const userId = await createTestUser();
+    try {
+      const ideaId = await insertIdea(userId, 'selected');
+      const [existingPlan] = await db
+        .insert(plans)
+        .values({ ideaId, userId, status: 'draft', threadId: `plan:${randomUUID()}` })
+        .returning();
+
+      const agent = fakeAgent();
+      const res = await request(buildTestApp(agent, userId)).post(`/api/plans/select/${ideaId}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.id).toBe(existingPlan!.id);
+      expect(agent.invoke).not.toHaveBeenCalled();
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+
+  // I/O matrix: "First selection, no plan" -> create_plan runs once, draft
+  // row + ordered steps + plan thread created. The fake agent simulates
+  // `create_plan`'s own write (that write itself is tested directly in
+  // `create_plan.test.ts`) — this proves the route mints a planId, builds
+  // `plan:${planId}` as the thread id, and reports the row `create_plan`
+  // wrote back to the client.
+  it('invokes the agent on a new plan thread and returns the created plan', async () => {
+    const userId = await createTestUser();
+    try {
+      const ideaId = await insertIdea(userId, 'selected');
+
+      const agent = fakeAgent({
+        invoke: vi.fn().mockImplementation(async (_input, config) => {
+          const { planId } = config.configurable;
+          await db.insert(plans).values({ id: planId, ideaId, userId, status: 'draft', threadId: `plan:${planId}` });
+          await db.insert(planSteps).values({ planId, stepOrder: 0, title: 'Step', description: ['Do it.'], dayOffset: 0, status: 'current' });
+          return { messages: [] };
+        }),
+      });
+
+      const res = await request(buildTestApp(agent, userId)).post(`/api/plans/select/${ideaId}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe('draft');
+      expect(res.body.threadId).toBe(`plan:${res.body.id}`);
+      expect(agent.invoke).toHaveBeenCalledTimes(1);
+      const [, config] = (agent.invoke as ReturnType<typeof vi.fn>).mock.calls[0]!;
+      // Perf fix (user-requested): this trigger must skip input moderation
+      // and force tool_choice to create_plan — scoped to this one call site.
+      // Bug fix (user-reported): the trigger itself must run on the
+      // throwaway `plan-create-trigger:` thread, never the real
+      // `plan:${planId}` thread `plan-chat.ts` later reads.
+      expect(config.configurable).toMatchObject({
+        ideaId,
+        userId,
+        thread_id: `plan-create-trigger:${config.configurable.planId}`,
+        skipInputModeration: true,
+        forceToolChoice: 'create_plan',
+      });
+
+      // Bug fix (user-reported): the real plan thread gets seeded with a
+      // fixed welcome message, never the raw trigger text.
+      expect(agent.updateState).toHaveBeenCalledTimes(1);
+      const [updateConfig, updateValues] = (agent.updateState as ReturnType<typeof vi.fn>).mock.calls[0]!;
+      expect(updateConfig.configurable.thread_id).toBe(`plan:${res.body.id}`);
+      expect(updateValues.messages).toHaveLength(1);
+      expect(updateValues.messages[0].content).toMatch(/first step/i);
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+
+  // Review fix: two concurrent requests both pass the "no existing plan"
+  // check and both invoke the agent — the loser's own insert hits the real
+  // `plans_idea_id_unique` constraint. That must resolve to the winner's
+  // plan (200), never a flat 502, since a plan genuinely was created.
+  it('returns the winning plan, not a 502, when two concurrent selects race past the no-existing-plan check', async () => {
+    const userId = await createTestUser();
+    try {
+      const ideaId = await insertIdea(userId, 'selected');
+
+      const agent = fakeAgent({
+        invoke: vi.fn().mockImplementation(async (_input, config) => {
+          const { planId } = config.configurable;
+          // Real insert against real Postgres — the second concurrent call
+          // genuinely hits `plans_idea_id_unique`, not a simulated error.
+          await db.insert(plans).values({ id: planId, ideaId, userId, status: 'draft', threadId: `plan:${planId}` });
+          await db
+            .insert(planSteps)
+            .values({ planId, stepOrder: 0, title: 'Step', description: ['Do it.'], dayOffset: 0, status: 'current' });
+          return { messages: [] };
+        }),
+      });
+      const app = buildTestApp(agent, userId);
+
+      const [resA, resB] = await Promise.all([
+        request(app).post(`/api/plans/select/${ideaId}`),
+        request(app).post(`/api/plans/select/${ideaId}`),
+      ]);
+
+      expect(resA.status).toBe(200);
+      expect(resB.status).toBe(200);
+      expect(resA.body.id).toBe(resB.body.id);
+
+      const rows = await db.select().from(plans).where(eq(plans.ideaId, ideaId));
+      expect(rows).toHaveLength(1);
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+});
+
+describe('createPlansRouter GET /:planId/current-step', () => {
+  // Security-relevant failure branch: a plan id that exists but belongs to
+  // another user is a 404, never another user's step content.
+  it('returns 404 when the plan does not belong to this user', async () => {
+    const userId = await createTestUser();
+    const otherUserId = await createTestUser();
+    try {
+      const ideaId = await insertIdea(otherUserId, 'selected');
+      const [plan] = await db
+        .insert(plans)
+        .values({ ideaId, userId: otherUserId, status: 'draft', threadId: `plan:${randomUUID()}` })
+        .returning();
+
+      const res = await request(buildTestApp(fakeAgent(), userId)).get(`/api/plans/${plan!.id}/current-step`);
+
+      expect(res.status).toBe(404);
+    } finally {
+      await cleanUp(userId);
+      await cleanUp(otherUserId);
+    }
+  });
+
+  // AC: "only the current and immediate-next step are visible."
+  it('returns the current and next step for the plan owner', async () => {
+    const userId = await createTestUser();
+    try {
+      const ideaId = await insertIdea(userId, 'selected');
+      const [plan] = await db
+        .insert(plans)
+        .values({ ideaId, userId, status: 'draft', threadId: `plan:${randomUUID()}` })
+        .returning();
+      await db.insert(planSteps).values([
+        { planId: plan!.id, stepOrder: 0, title: 'Now', description: ['Do this.'], dayOffset: 0, status: 'current' },
+        { planId: plan!.id, stepOrder: 1, title: 'Next', description: ['Then this.'], dayOffset: 2, status: 'pending' },
+      ]);
+
+      const res = await request(buildTestApp(fakeAgent(), userId)).get(`/api/plans/${plan!.id}/current-step`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.current.title).toBe('Now');
+      expect(res.body.next.title).toBe('Next');
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+});
