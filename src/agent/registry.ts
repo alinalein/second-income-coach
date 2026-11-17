@@ -78,6 +78,16 @@ export interface ModelRegistryEntry {
  */
 export const TRANSLATION_MODEL_ID = 'openai/gpt-6-luna';
 
+/**
+ * Story 2.10: the internal-only model `classify-failure-pattern.ts` calls to
+ * classify `failurePattern` for a direct (non-agent-loop) intake save —
+ * reuses `TRANSLATION_MODEL_ID`'s exact registry entry (same id/category:
+ * 'translation', already excluded from `listSelectableModels`), same
+ * never-user-selectable precedent — no new model id, no new env var, no
+ * migration.
+ */
+export const INTAKE_CLASSIFIER_MODEL_ID = TRANSLATION_MODEL_ID;
+
 export const MODEL_REGISTRY: readonly ModelRegistryEntry[] = [
   {
     id: 'openai/gpt-6-luna',

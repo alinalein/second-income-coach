@@ -4,22 +4,21 @@ import session from 'express-session';
 import request from 'supertest';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
-import type { SubmitIntakeToolArgs } from '@app/shared';
+import type { SubmitIntakeToolArgs, FailurePattern } from '@app/shared';
 import { createIntakeRouter, type IntakeRouterDeps } from './intake.js';
 import { createDb } from '../../db/client.js';
 import { users, intake } from '../../db/schema/index.js';
 import { upsertIntake } from '../../tools/plain/submit_intake.js';
+import type { ClassifyText } from '../../agent/moderation.js';
 
-const testEnv: IntakeRouterDeps['env'] = { RATE_LIMIT_WINDOW_MS: 60_000 };
-
-type FakeAgent = IntakeRouterDeps['agent'];
+const testEnv: IntakeRouterDeps['env'] = {
+  RATE_LIMIT_WINDOW_MS: 60_000,
+  OPENROUTER_API_KEY: 'test-key',
+  MISTRAL_API_KEY: 'test-key',
+};
 
 /**
- * Runs against real Postgres (same pattern as `auth.test.ts`): the `intake`
- * row's `userId` is a `NOT NULL` FK to `users`, and this file's "agent
- * actually ran" tests simulate the tool's effect by calling the real
- * `upsertIntake` from a fake `agent.invoke`, so a real `users` row and real
- * db reads are needed either way.
+ * Runs against real Postgres (same pattern as `auth.test.ts`).
  */
 const DATABASE_URL =
   process.env.DATABASE_URL ?? 'postgres://second_income_coach:second_income_coach@localhost:5432/second_income_coach';
@@ -59,18 +58,24 @@ function toolArgs(overrides: Partial<SubmitIntakeToolArgs> = {}): SubmitIntakeTo
   return { ...validBody(), failurePattern: 'overwhelm', ...overrides } as SubmitIntakeToolArgs;
 }
 
-function fakeAgent(overrides: Partial<FakeAgent> = {}): FakeAgent {
-  return {
-    invoke: vi.fn(),
-    getState: vi.fn(),
-    ...overrides,
-  } as unknown as FakeAgent;
+/** Story 2.10: no more `fakeAgent` — the route calls `classifyFailurePattern`/
+ * `classify` directly, never an agent. Default fakes resolve immediately so
+ * a test that doesn't care about classification/moderation behavior doesn't
+ * need to supply either. */
+function fakeClassify(failurePattern: FailurePattern = 'overwhelm'): NonNullable<IntakeRouterDeps['classifyFailurePattern']> {
+  return vi.fn().mockResolvedValue(failurePattern);
+}
+
+function fakeModeration(action: 'pass' | 'reject' | 'redact' = 'pass'): ClassifyText {
+  return vi.fn().mockResolvedValue(
+    action === 'reject' ? { jailbreaking: true } : action === 'redact' ? { pii: true } : {},
+  );
 }
 
 /** Same minimal in-memory-session app shape as `chat.test.ts`/`auth.test.ts`
  * — the router relies entirely on the blanket `requireAuth` gate, so this
  * pre-authenticates the session directly rather than exercising OAuth. */
-function buildTestApp(agent: FakeAgent, userId: string) {
+function buildTestApp(userId: string, overrides: Partial<IntakeRouterDeps> = {}) {
   const app = express();
   app.use(express.json());
   app.use(session({ secret: 'test-secret', resave: false, saveUninitialized: false }));
@@ -78,7 +83,16 @@ function buildTestApp(agent: FakeAgent, userId: string) {
     req.session.userId = userId;
     next();
   });
-  app.use('/api/intake', createIntakeRouter({ env: testEnv, db, agent }));
+  app.use(
+    '/api/intake',
+    createIntakeRouter({
+      env: testEnv,
+      db,
+      classifyFailurePattern: fakeClassify(),
+      classify: fakeModeration(),
+      ...overrides,
+    }),
+  );
   return app;
 }
 
@@ -87,7 +101,7 @@ describe('createIntakeRouter GET /', () => {
   it('returns intake: null when the signed-in user has no row yet', async () => {
     const userId = await createTestUser();
     try {
-      const res = await request(buildTestApp(fakeAgent(), userId)).get('/api/intake');
+      const res = await request(buildTestApp(userId)).get('/api/intake');
 
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ intake: null });
@@ -103,7 +117,7 @@ describe('createIntakeRouter GET /', () => {
     try {
       await upsertIntake(db, userId, toolArgs());
 
-      const res = await request(buildTestApp(fakeAgent(), userId)).get('/api/intake');
+      const res = await request(buildTestApp(userId)).get('/api/intake');
 
       expect(res.status).toBe(200);
       expect(res.body.intake).toMatchObject(validBody());
@@ -116,33 +130,125 @@ describe('createIntakeRouter GET /', () => {
 
 describe('createIntakeRouter POST /', () => {
   // I/O matrix: "Invalid/missing field" -> "Rejected at the Zod boundary
-  // before any write or agent call" -> "400, generic error body".
-  it('rejects a submission missing a field with 400 and never invokes the agent', async () => {
+  // before any write or classify/moderate call" -> "400, generic error body".
+  it('rejects a submission missing a field with 400 and never calls classify or moderation', async () => {
     const userId = await createTestUser();
     try {
-      const agent = fakeAgent();
+      const classifyFailurePattern = fakeClassify();
+      const classify = fakeModeration();
       const incomplete: Record<string, string> = { ...validBody() };
       delete incomplete.riskTolerance;
 
-      const res = await request(buildTestApp(agent, userId)).post('/api/intake').send(incomplete);
+      const res = await request(buildTestApp(userId, { classifyFailurePattern, classify }))
+        .post('/api/intake')
+        .send(incomplete);
 
       expect(res.status).toBe(400);
-      expect(agent.invoke).not.toHaveBeenCalled();
+      expect(classifyFailurePattern).not.toHaveBeenCalled();
+      expect(classify).not.toHaveBeenCalled();
     } finally {
       await cleanUp(userId);
     }
   });
 
-  // I/O matrix: "Agent doesn't call the tool" -> "Row stays unchanged/
-  // absent" -> "Generic error response, no partial row ever saved" —
-  // distinct failure branch from the 400 case above (agent ran, but produced
-  // no persisted effect).
-  it('returns a generic error and saves nothing when the agent turn never calls submit_intake', async () => {
+  // AC2/AC3/AC6: a valid first submit classifies `failurePattern` directly
+  // (no agent), moderates both free-text fields in one combined call, and
+  // persists — 200 + record returned.
+  it('persists the record and returns it, classifying failurePattern directly', async () => {
     const userId = await createTestUser();
     try {
-      const agent = fakeAgent({ invoke: vi.fn().mockResolvedValue({ messages: [] }) });
+      const classifyFailurePattern = fakeClassify('overwhelm');
 
-      const res = await request(buildTestApp(agent, userId)).post('/api/intake').send(validBody());
+      const res = await request(buildTestApp(userId, { classifyFailurePattern }))
+        .post('/api/intake')
+        .send(validBody());
+
+      expect(res.status).toBe(200);
+      expect(res.body.intake).toMatchObject(validBody());
+      expect(res.body.intake.failurePattern).toBe('overwhelm');
+      expect(classifyFailurePattern).toHaveBeenCalledWith(expect.anything(), validBody().stoppedBeforeText, expect.any(AbortSignal));
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+
+  // AC2: classification and moderation must run in parallel, never
+  // sequenced — proven by recording the order each resolves relative to the
+  // other rather than trusting call order alone.
+  it('runs classify and moderation concurrently, not sequenced', async () => {
+    const userId = await createTestUser();
+    try {
+      const order: string[] = [];
+      const classifyFailurePattern: IntakeRouterDeps['classifyFailurePattern'] = vi.fn().mockImplementation(async () => {
+        order.push('classify-start');
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        order.push('classify-end');
+        return 'overwhelm';
+      });
+      const classify: ClassifyText = vi.fn().mockImplementation(async () => {
+        order.push('moderate-start');
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        order.push('moderate-end');
+        return {};
+      });
+
+      const res = await request(buildTestApp(userId, { classifyFailurePattern, classify }))
+        .post('/api/intake')
+        .send(validBody());
+
+      expect(res.status).toBe(200);
+      // Both must have started before either finished.
+      expect(order.slice(0, 2).sort()).toEqual(['classify-start', 'moderate-start']);
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+
+  // I/O matrix: "Jailbreak-flagged free text" -> no row written/changed ->
+  // the same generic 502 the old "tool never called" path already returned.
+  it('rejects with a generic 502 and writes nothing when either free-text field flags jailbreaking', async () => {
+    const userId = await createTestUser();
+    try {
+      const classify = fakeModeration('reject');
+
+      const res = await request(buildTestApp(userId, { classify })).post('/api/intake').send(validBody());
+
+      expect(res.status).toBe(502);
+      expect(res.body).toEqual({ error: 'Intake could not be saved' });
+      const rows = await db.select().from(intake).where(eq(intake.userId, userId));
+      expect(rows).toHaveLength(0);
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+
+  // I/O matrix: "PII-flagged free text" -> redacted fields stored (per-field
+  // `redactPii`) -> save continues, 200, redacted text persisted.
+  it('redacts PII independently per field and still saves, 200', async () => {
+    const userId = await createTestUser();
+    try {
+      const classify = fakeModeration('redact');
+      const body = { ...validBody(), skillsInterests: 'Email me at test@example.com', stoppedBeforeText: 'Call 555-123-4567 please' };
+
+      const res = await request(buildTestApp(userId, { classify })).post('/api/intake').send(body);
+
+      expect(res.status).toBe(200);
+      expect(res.body.intake.skillsInterests).toBe('Email me at [redacted-email]');
+      expect(res.body.intake.stoppedBeforeText).toContain('[redacted-number]');
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+
+  // I/O matrix: "Agent doesn't call the tool" equivalent — any failure in
+  // the classify/moderate/persist path is a generic error, no partial row
+  // ever reported as success.
+  it('returns a generic error and saves nothing when classification fails', async () => {
+    const userId = await createTestUser();
+    try {
+      const classifyFailurePattern: IntakeRouterDeps['classifyFailurePattern'] = vi.fn().mockRejectedValue(new Error('model down'));
+
+      const res = await request(buildTestApp(userId, { classifyFailurePattern })).post('/api/intake').send(validBody());
 
       expect(res.status).toBe(502);
       expect(res.body).toEqual({ error: expect.any(String) });
@@ -153,83 +259,28 @@ describe('createIntakeRouter POST /', () => {
     }
   });
 
-  // Same I/O matrix row as above, but for the other half of the `before`/
-  // `after` check this route does: an existing row that's left untouched
-  // must generic-error too, not be silently reported as this submission's
-  // result (the exact scenario `updatedAt`-comparison guards against).
-  // `stoppedBeforeText` must differ from the existing row's (round 10's
-  // instant-save fast path below takes over otherwise) — this test is
-  // specifically exercising the *full agent path*'s failure handling.
-  it('returns a generic error and leaves an existing row unchanged when the agent turn never calls submit_intake', async () => {
-    const userId = await createTestUser();
-    try {
-      const existing = await upsertIntake(db, userId, toolArgs());
-      const agent = fakeAgent({ invoke: vi.fn().mockResolvedValue({ messages: [] }) });
-      const changedStoppedBefore = { ...validBody(), stoppedBeforeText: 'A different reason than before.' };
-
-      const res = await request(buildTestApp(agent, userId)).post('/api/intake').send(changedStoppedBefore);
-
-      expect(res.status).toBe(502);
-      const [row] = await db.select().from(intake).where(eq(intake.userId, userId));
-      expect(row?.updatedAt).toEqual(new Date(existing.updatedAt));
-    } finally {
-      await cleanUp(userId);
-    }
-  });
-
-  // I/O matrix: "Valid submission" -> "Agent classifies failurePattern, row
-  // upserted, 200 + record returned" (AC2/AC3/AC6). The fake agent's
-  // `invoke` stands in for the model turn by calling the real `upsertIntake`
-  // itself — the tool call's own persistence behavior is covered directly by
-  // `submit_intake.test.ts`.
-  it('persists the record and returns it when the agent calls submit_intake', async () => {
-    const userId = await createTestUser();
-    try {
-      const agent = fakeAgent({
-        invoke: vi.fn().mockImplementation(async () => {
-          await upsertIntake(db, userId, toolArgs());
-          return { messages: [] };
-        }),
-      });
-
-      const res = await request(buildTestApp(agent, userId)).post('/api/intake').send(validBody());
-
-      expect(res.status).toBe(200);
-      expect(res.body.intake).toMatchObject(validBody());
-      expect(res.body.intake.failurePattern).toBe('overwhelm');
-      // Story 2.2 follow-up fix round 3, fix 1: the trigger runs on the
-      // internal-only `intake-trigger:` thread, never the user-visible
-      // `discovery:` one — this is what keeps it out of
-      // GET /api/chat/messages.
-      expect(agent.invoke).toHaveBeenCalledWith(expect.anything(), {
-        configurable: { thread_id: `intake-trigger:${userId}` },
-      });
-    } finally {
-      await cleanUp(userId);
-    }
-  });
-
   // Story 2.2 round 10 (open item, user-approved): `failurePattern` is only
   // ever re-derived from `stoppedBeforeText` — an unchanged value means
   // there's nothing for a model to decide, so this is an instant save, no
-  // agent/model call at all. A changed weeklyTimeAvailability is still
+  // classify/moderate call at all. A changed weeklyTimeAvailability is still
   // persisted; the stored failurePattern is reused, not re-classified.
-  it('saves instantly, without invoking the agent, when stoppedBeforeText is unchanged', async () => {
+  it('saves instantly, without classifying or moderating, when stoppedBeforeText is unchanged', async () => {
     const userId = await createTestUser();
     try {
       await upsertIntake(db, userId, toolArgs({ failurePattern: 'life_disruption' }));
-      const agent = fakeAgent();
+      const classifyFailurePattern = fakeClassify();
+      const classify = fakeModeration();
 
-      const res = await request(buildTestApp(agent, userId))
+      const res = await request(buildTestApp(userId, { classifyFailurePattern, classify }))
         .post('/api/intake')
         .send({ ...validBody(), weeklyTimeAvailability: '20h_plus' });
 
       expect(res.status).toBe(200);
       expect(res.body.intake.weeklyTimeAvailability).toBe('20h_plus');
-      // Reused from the stored row, never re-classified — the fake agent
-      // (which would otherwise need to supply it) is never even invoked.
+      // Reused from the stored row, never re-classified.
       expect(res.body.intake.failurePattern).toBe('life_disruption');
-      expect(agent.invoke).not.toHaveBeenCalled();
+      expect(classifyFailurePattern).not.toHaveBeenCalled();
+      expect(classify).not.toHaveBeenCalled();
     } finally {
       await cleanUp(userId);
     }

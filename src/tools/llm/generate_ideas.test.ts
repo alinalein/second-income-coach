@@ -9,6 +9,7 @@ import { upsertIntake } from '../plain/submit_intake.js';
 import {
   buildNestedAgentPrompt,
   evaluateSourceTrust,
+  extractNumbers,
   handleGenerateIdeas,
   occupationMatchesIdea,
   sourceEvidenceLooksBlockedOrHidden,
@@ -112,6 +113,21 @@ const DEMAND_EVIDENCE_DOMAINS_FOR_TEST = [
 
 function fiveValidDrafts(intakeRow: IntakeResponse, label: string): IdeaDraft[] {
   return Array.from({ length: 5 }, (_, i) =>
+    buildValidDraft(intakeRow, {
+      title: `${label} ${i + 1}`,
+      ideaType: IDEA_TYPES_FOR_TEST[i],
+      baselineRateCitation: CITATION_DOMAINS_FOR_TEST[i],
+      demandEvidenceCitation: DEMAND_EVIDENCE_DOMAINS_FOR_TEST[i],
+    }),
+  );
+}
+
+// AC addition 1 (`IDEAS_PER_BATCH`): same fixture shape as `fiveValidDrafts`
+// above, generalized to any count <=5 — the idea-type/citation-domain
+// variety checks it also reuses are soft-only (round 12: never block), so a
+// smaller batch needs no special-casing there.
+function nValidDrafts(intakeRow: IntakeResponse, label: string, count: number): IdeaDraft[] {
+  return Array.from({ length: count }, (_, i) =>
     buildValidDraft(intakeRow, {
       title: `${label} ${i + 1}`,
       ideaType: IDEA_TYPES_FOR_TEST[i],
@@ -332,6 +348,27 @@ describe('truncateAtWordBoundary', () => {
   });
 });
 
+// Live-bug fix (user-reported): a German-sourced quote's decimal comma
+// ("26,52 €") was silently misparsed as the integer 2652 (comma always
+// treated as an English thousands separator), making `quoteSupportsRate`
+// reject a genuinely-matching German rate on every real run that retrieved
+// a German-language source. These cases are exactly the two numbers from
+// the live failing quote, plus the existing English conventions that must
+// keep working unchanged.
+describe('extractNumbers (locale-aware decimal/thousands separators)', () => {
+  it.each([
+    { name: 'German decimal comma (2 digits after)', text: '26,52 €', expected: [26.52] },
+    { name: 'German thousands dot (3 digits after)', text: '59.751 €', expected: [59751] },
+    { name: 'English decimal point', text: '$24.36 an hour', expected: [24.36] },
+    { name: 'English thousands comma (3 digits after)', text: '$1,500 per month', expected: [1500] },
+    { name: 'English thousands + decimal', text: '$1,234.56', expected: [1234.56] },
+    { name: 'German thousands + decimal', text: '1.234,56 €', expected: [1234.56] },
+    { name: 'a vendor range with two plain numbers', text: '$15-$25 per hour', expected: [15, 25] },
+  ])('$name', ({ text, expected }) => {
+    expect(extractNumbers(text)).toEqual(expected);
+  });
+});
+
 /**
  * Integration tests against real Postgres (same pattern as
  * `submit_intake.test.ts`/`intake.test.ts`) — `handleGenerateIdeas`'s own
@@ -369,7 +406,7 @@ function baseDeps(overrides: Partial<GenerateIdeasDeps> = {}): GenerateIdeasDeps
     db,
     model: {} as never,
     webSearchTool: {} as never,
-    env: { MISTRAL_API_KEY: 'test-key' },
+    env: { MISTRAL_API_KEY: 'test-key', IDEAS_PER_BATCH: 5 },
     ...overrides,
   };
 }
@@ -555,6 +592,33 @@ describe('handleGenerateIdeas (I/O matrix: happy path)', () => {
       }
       const rows = await db.select().from(ideas).where(eq(ideas.userId, userId));
       expect(rows).toHaveLength(5);
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+});
+
+// AC addition 1: `IDEAS_PER_BATCH` controls exactly how many ideas a run
+// persists — table-driven over two distinct configured values, same
+// real-Postgres pattern as the happy-path test above.
+describe('handleGenerateIdeas (IDEAS_PER_BATCH controls the persisted batch size)', () => {
+  it.each([2, 3])('persists exactly %i ideas when IDEAS_PER_BATCH is %i', async (count) => {
+    const userId = await createTestUser();
+    try {
+      const intakeRow = await upsertIntake(db, userId, intakeArgs());
+      const deps = baseDeps({
+        env: { MISTRAL_API_KEY: 'test-key', IDEAS_PER_BATCH: count },
+        generateDrafts: vi.fn().mockResolvedValue({
+          drafts: { ideas: nValidDrafts(intakeRow, 'Idea', count) },
+          searchResultTexts: DEFAULT_SEARCH_RESULT_TEXTS,
+        }),
+      });
+
+      const result = await handleGenerateIdeas(deps, configFor(userId), { replyLanguage: 'en' });
+
+      expect(result).toHaveLength(count);
+      const rows = await db.select().from(ideas).where(eq(ideas.userId, userId));
+      expect(rows).toHaveLength(count);
     } finally {
       await cleanUp(userId);
     }

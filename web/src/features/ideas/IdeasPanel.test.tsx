@@ -383,7 +383,7 @@ describe('IdeasPanel (Story 2.8 AC2/AC6: explanation line)', () => {
 
     render(<IdeasPanel />);
 
-    await screen.findByText("You don't have any ideas yet — let's generate your first 5.");
+    await screen.findByText("You don't have any ideas yet — let's generate your first batch.");
     expect(screen.queryByText(/Choose one idea/)).not.toBeInTheDocument();
   });
 });
@@ -662,7 +662,7 @@ describe('IdeasPanel (Fix1: loading skeleton, never the empty state)', () => {
 
     render(<IdeasPanel />);
 
-    expect(screen.queryByText("You don't have any ideas yet — let's generate your first 5.")).not.toBeInTheDocument();
+    expect(screen.queryByText("You don't have any ideas yet — let's generate your first batch.")).not.toBeInTheDocument();
     // Reviewer fix: the wrapper is `role="status"` with a visually-hidden
     // `t('loading')` text, so a screen reader still gets the same
     // announcement the old plain-text line gave it — the pulsing boxes
@@ -672,7 +672,7 @@ describe('IdeasPanel (Fix1: loading skeleton, never the empty state)', () => {
     expect(document.querySelector('.animate-pulse')).not.toBeNull();
 
     resolveFetch(new Response(JSON.stringify({ ideas: [], currency: 'EUR' }), { status: 200 }));
-    expect(await screen.findByText("You don't have any ideas yet — let's generate your first 5.")).toBeInTheDocument();
+    expect(await screen.findByText("You don't have any ideas yet — let's generate your first batch.")).toBeInTheDocument();
   });
 });
 

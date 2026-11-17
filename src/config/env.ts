@@ -67,6 +67,11 @@ const envSchema = z.object({
   // mode exists for this capability (Boundary) — unlike AD-20's optional
   // registry providers, this is required at startup like every other key.
   TAVILY_API_KEY: z.string().min(1, 'TAVILY_API_KEY is required (see .env.example)'),
+  // Story 2.2: how many ideas `generate_ideas` produces per batch. Bounded
+  // 1-5 (same bounded-int precedent as RATE_LIMIT_MAX/RATE_LIMIT_WINDOW_MS
+  // above) — the UI/evaluation logic only ever expects a batch in this
+  // range. Defaults to 2.
+  IDEAS_PER_BATCH: z.coerce.number().int().min(1).max(5).default(2),
 });
 
 export type Env = z.infer<typeof envSchema>;

@@ -99,21 +99,6 @@ export function buildPlanThreadId(planId: string): string {
   return `plan:${planId}`;
 }
 
-/**
- * Bug fix (user-reported): the lazy-create trigger ("Please create my plan
- * now by calling create_plan...") was running directly on the real
- * `plan:${planId}` thread, so it got checkpointed into — and then rendered
- * from — the same history `plan-chat.ts`'s `GET /:planId/messages` reads,
- * showing the user a raw internal message that was never theirs. Same
- * internal-only-trigger-thread pattern as `buildIdeasTriggerThreadId`/
- * `buildIntakeTriggerThreadId` above: `src/api/routes/plans.ts` invokes the
- * one-time creation trigger here instead, then seeds the real plan thread
- * with a fixed welcome message once the plan is actually created.
- */
-export function buildPlanCreateTriggerThreadId(planId: string): string {
-  return `plan-create-trigger:${planId}`;
-}
-
 const DISCOVERY_THREAD_PREFIX = 'discovery:';
 
 /** Inverse of `buildDiscoveryThreadId` — Story 5.1 needs the `userId` back
@@ -135,7 +120,7 @@ const agentContextSchema = z.object({
 });
 
 export interface CreateCoachAgentDeps {
-  env: Pick<Env, 'OPENROUTER_API_KEY' | 'MISTRAL_API_KEY'>;
+  env: Pick<Env, 'OPENROUTER_API_KEY' | 'MISTRAL_API_KEY' | 'IDEAS_PER_BATCH'>;
   checkpointer: BaseCheckpointSaver;
   /** Test-only seam: a fake chat model instead of a real `ChatOpenAI`. */
   model?: BaseChatModel;

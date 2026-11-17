@@ -2,12 +2,14 @@ import { randomUUID } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
 import { Router } from 'express';
 import { z } from 'zod';
-import { AIMessage, HumanMessage } from '@langchain/core/messages';
+import { AIMessage } from '@langchain/core/messages';
+import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import { planResponseSchema, currentStepResponseSchema, type PlanResponse } from '@app/shared';
 import type { Env } from '../../config/env.js';
 import type { createDb } from '../../db/client.js';
 import type { CoachAgent } from '../../agent/index.js';
-import { buildPlanThreadId, buildPlanCreateTriggerThreadId, buildDiscoveryThreadId } from '../../agent/index.js';
+import { buildPlanThreadId, buildDiscoveryThreadId } from '../../agent/index.js';
+import { handleCreatePlan, type CreatePlanDeps } from '../../tools/llm/create_plan.js';
 import { getCurrentStep } from '../../tools/plain/get_current_step.js';
 import { ideas, plans } from '../../db/schema/index.js';
 import { createStrictRateLimiter } from '../middleware/rateLimit.js';
@@ -16,10 +18,20 @@ import { detectUserReplyLanguage } from './ideas.js';
 export interface PlansRouterDeps {
   env: Pick<Env, 'RATE_LIMIT_WINDOW_MS'>;
   db: ReturnType<typeof createDb>['db'];
-  /** The plans-only compiled agent (`plansAgent`, `src/api/index.ts`) — the
-   * one with `create_plan`/`get_current_step` wired in, never the
-   * discovery/ideas agent. */
+  /** The plans-only compiled agent (`plansAgent`, `src/api/index.ts`) —
+   * Story 2.10: `create_plan` itself is no longer invoked through it
+   * (`handleCreatePlan` is called directly below); still used for
+   * `detectUserReplyLanguage` (`.getState`) and seeding the plan thread's
+   * welcome message (`.updateState`). */
   agent: CoachAgent;
+  /** Story 2.10: the shared chat model `handleCreatePlan` calls directly —
+   * same `Deps`/`Config`/`Args` shape `create_plan.ts`'s own tool wrapper
+   * (`createCreatePlanTool`) already used. */
+  model: BaseChatModel;
+  /** Test-only seam: same DI precedent as `CreatePlanDeps.createDraft`
+   * (`create_plan.ts`) — replaces the real model-backed draft call with a
+   * fake. */
+  createDraft?: CreatePlanDeps['createDraft'];
 }
 
 type PlanRow = typeof plans.$inferSelect;
@@ -61,20 +73,6 @@ function toPlanResponse(row: PlanRow): PlanResponse {
 }
 
 /**
- * Message the plan thread sees the first time a plan is created — same
- * precedent as `ideas.ts`'s `buildGenerateIdeasAgentMessage`: the reply
- * language is stated explicitly (detected server-side), the agent still
- * supplies it as its own tool-call argument (AD-4).
- */
-function buildCreatePlanAgentMessage(replyLanguage: 'de' | 'en'): string {
-  const languageName = replyLanguage === 'de' ? 'German' : 'English';
-  return (
-    `Please create my plan now by calling create_plan. The user's reply language is ${languageName} ` +
-    `("${replyLanguage}") — pass that as replyLanguage.`
-  );
-}
-
-/**
  * Bug fix (user-reported): the real plan thread must never show the raw
  * creation trigger as if the user had typed it. Once the plan actually
  * exists, this fixed (not model-generated — keeps the `returnDirect` speed
@@ -93,11 +91,21 @@ const PLAN_READY_MESSAGE_DE =
  * directly as a plain read here — same Boundary precedent as
  * `ideas.ts`/`get_current_step` never being a second write path).
  */
-export function createPlansRouter({ env, db, agent }: PlansRouterDeps) {
+export function createPlansRouter({ env, db, agent, model, createDraft }: PlansRouterDeps) {
   const router = Router();
   // Intent/Code Map: "create_plan is LLM-backed and cost-bearing like
   // generate_ideas's POST; reuse the same strict tier."
   const strictLimiter = createStrictRateLimiter(env);
+  // Live-bug fix (user-reported, measured live: two real model calls for one
+  // plan selection): the `existingPlan` DB check below has a race window —
+  // two concurrent requests for the same idea can both pass it before
+  // either's `handleCreatePlan` insert commits. `isUniqueViolationError`
+  // (below) already makes the *row* idempotent (the loser's insert fails,
+  // recovered to return the winner's row) but does nothing about the
+  // *model call* — both still ran one. This in-process map makes a second
+  // concurrent request for the same idea await the first's already in-
+  // flight call instead of starting its own.
+  const inFlightCreations = new Map<string, Promise<PlanResponse>>();
 
   router.post('/select/:ideaId', strictLimiter, async (req, res) => {
     const userId = req.session.userId!;
@@ -139,59 +147,52 @@ export function createPlansRouter({ env, db, agent }: PlansRouterDeps) {
         return;
       }
 
-      // I/O matrix: "First selection, no plan" -> `create_plan` runs once,
-      // on its own new plan thread (AD-18) — `planId` is minted here,
-      // before any row exists, so the thread id can be built ahead of the
-      // write `create_plan` itself performs.
-      const planId = randomUUID();
-      // Bug fix (user-reported): the trigger invocation itself runs on a
-      // throwaway internal-only thread, never the real `plan:${planId}`
-      // thread `plan-chat.ts` later reads — otherwise the synthetic
-      // "call create_plan now" message gets checkpointed into, and then
-      // rendered from, that same visible history.
-      const triggerThreadId = buildPlanCreateTriggerThreadId(planId);
-      const replyLanguage = await detectUserReplyLanguage(agent, buildDiscoveryThreadId(userId));
-
-      // Perf fix (user-requested): this trigger message is server-authored
-      // (never user input) and there is exactly one tool this turn can ever
-      // call — `skipInputModeration` (moderation.ts) and `forceToolChoice`
-      // (toolChoice.ts) are both scoped to this one call site, so neither
-      // changes behavior for the plan thread's own later free-form
-      // follow-up questions, which go through `plan-chat.ts` instead and
-      // never set either flag.
-      await agent.invoke(
-        { messages: [new HumanMessage(buildCreatePlanAgentMessage(replyLanguage))] },
-        {
-          configurable: {
-            thread_id: triggerThreadId,
-            planId,
-            ideaId,
-            userId,
-            skipInputModeration: true,
-            forceToolChoice: 'create_plan',
-          },
-          signal: abortController.signal,
-        },
-      );
-
-      const [createdPlan] = await db.select().from(plans).where(eq(plans.id, planId)).limit(1);
-      if (!createdPlan) {
-        // I/O matrix: "LLM output fails Zod validation" / any other
-        // `create_plan` failure -> generic error, no partial row ever
-        // reported as success.
-        res.status(502).json({ error: 'Plan could not be generated' });
+      // Live-bug fix: a second concurrent request for this same idea awaits
+      // the first's already in-flight creation instead of starting its own
+      // model call — and skips seeding the plan thread's welcome message
+      // below entirely, since the first request's own flow already does
+      // that exactly once (doing it twice would insert the fixed welcome
+      // message into the thread history twice, since `AIMessage`s with no
+      // explicit `id` are appended, not deduped, by the checkpointer).
+      const existingCreation = inFlightCreations.get(ideaId);
+      if (existingCreation) {
+        res.json(await existingCreation);
         return;
       }
 
+      // I/O matrix: "First selection, no plan" -> `create_plan` runs once,
+      // on its own new plan thread (AD-18) — `planId` is minted here,
+      // before any row exists, so the real `plan:${planId}` thread id can be
+      // built ahead of the write `create_plan` itself performs.
+      const planId = randomUUID();
+      const replyLanguage = await detectUserReplyLanguage(agent, buildDiscoveryThreadId(userId));
+
+      // Story 2.10: `handleCreatePlan` called directly — the same exported
+      // function `create_plan.ts`'s own tool wrapper calls, same `Deps`/
+      // `Config`/`Args` shape, no `agent.invoke` around it. There is no
+      // server-authored trigger message to moderate/force a tool choice for
+      // anymore (AC3) — `skipInputModeration`/`forceToolChoice` were only
+      // ever needed for the agent-loop trigger this replaces.
+      const creation = handleCreatePlan(
+        { db, model, createDraft },
+        { configurable: { planId, ideaId, userId }, signal: abortController.signal },
+        { replyLanguage },
+      ).finally(() => {
+        inFlightCreations.delete(ideaId);
+      });
+      inFlightCreations.set(ideaId, creation);
+      const createdPlanResponse = await creation;
+
       // Bug fix (user-reported): seed the real plan thread with a fixed
       // welcome message now that the plan actually exists — the user's
-      // first sight of this thread, never the raw trigger text above.
+      // first sight of this thread, never the raw trigger text the old
+      // agent-loop path used to send.
       await agent.updateState(
         { configurable: { thread_id: buildPlanThreadId(planId) } },
         { messages: [new AIMessage(replyLanguage === 'de' ? PLAN_READY_MESSAGE_DE : PLAN_READY_MESSAGE_EN)] },
       );
 
-      res.json(toPlanResponse(createdPlan));
+      res.json(createdPlanResponse);
     } catch (error) {
       if (isUniqueViolationError(error)) {
         // The race above: some other request's `create_plan` won — re-read

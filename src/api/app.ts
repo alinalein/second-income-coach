@@ -2,6 +2,8 @@ import bytes from 'bytes';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import helmet from 'helmet';
 import type { Pool } from 'pg';
+import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
+import type { DynamicStructuredTool } from '@langchain/core/tools';
 import type { Env } from '../config/env.js';
 import type { createDb } from '../db/client.js';
 import type { CoachAgent } from '../agent/index.js';
@@ -33,6 +35,14 @@ export interface AppDeps {
    * `get_current_step` wired in instead of `submit_intake`/`generate_ideas`
    * — used only by the plans/plan-chat routes below. */
   plansAgent: CoachAgent;
+  /** Story 2.10: the shared chat model (`src/api/index.ts`'s own
+   * `chatModel`) — passed to `createIdeasRouter`/`createPlansRouter` so
+   * `POST /generate`/`POST /select/:ideaId` can call `handleGenerateIdeas`/
+   * `handleCreatePlan` directly, with no `agent.invoke` around them. */
+  chatModel: BaseChatModel;
+  /** Story 2.10: the shared `web_search` MCP tool, passed through to
+   * `createIdeasRouter` for the same direct `handleGenerateIdeas` call. */
+  webSearchTool: DynamicStructuredTool;
 }
 
 /**
@@ -47,7 +57,7 @@ export interface AppDeps {
  * Built as a factory (not a top-level `listen()`) so tests can construct the
  * app against injected deps without binding a real port or a real database.
  */
-export function createApp({ env, db, pool, agent, ideasAgent, plansAgent }: AppDeps) {
+export function createApp({ env, db, pool, agent, ideasAgent, plansAgent, chatModel, webSearchTool }: AppDeps) {
   const app = express();
 
   // Behind a reverse proxy (Cloud Run, or any future load balancer), trust the
@@ -98,17 +108,24 @@ export function createApp({ env, db, pool, agent, ideasAgent, plansAgent }: AppD
   app.use('/api/chat', createChatRouter({ env, agent }));
 
   // Story 2.1: structured intake, same auth-gated/post-chat mounting as the
-  // chat router above.
-  app.use('/api/intake', createIntakeRouter({ env, db, agent }));
+  // chat router above. Story 2.10: no `agent` dep anymore — `POST /` stores
+  // directly, no `agent.invoke`.
+  app.use('/api/intake', createIntakeRouter({ env, db }));
 
   // Story 2.2: tailored idea generation, same auth-gated mounting. Uses
-  // `ideasAgent` (longer node timeout, follow-up fix 1), not `agent`.
-  app.use('/api/ideas', createIdeasRouter({ env, db, agent: ideasAgent }));
+  // `ideasAgent` (longer node timeout, follow-up fix 1), not `agent`. Story
+  // 2.10: `POST /generate` now calls `handleGenerateIdeas` directly, so the
+  // shared `chatModel`/`webSearchTool` are threaded in too; `ideasAgent`
+  // stays needed for `detectUserReplyLanguage`.
+  app.use('/api/ideas', createIdeasRouter({ env, db, agent: ideasAgent, model: chatModel, webSearchTool }));
 
   // Story 3.1: lazy draft-plan creation + the sole current-step read path,
   // plus the plan thread's own free-form chat — both use `plansAgent`
-  // (`create_plan`/`get_current_step`), never `agent`/`ideasAgent`.
-  app.use('/api/plans', createPlansRouter({ env, db, agent: plansAgent }));
+  // (`create_plan`/`get_current_step`), never `agent`/`ideasAgent`. Story
+  // 2.10: `POST /select/:ideaId` now calls `handleCreatePlan` directly, so
+  // the shared `chatModel` is threaded in too; `plansAgent` stays needed for
+  // `detectUserReplyLanguage`/`.updateState` (the plan welcome message).
+  app.use('/api/plans', createPlansRouter({ env, db, agent: plansAgent, model: chatModel }));
   app.use('/api/plans', createPlanChatRouter({ env, db, agent: plansAgent }));
 
   // Story 5.1: personality + model settings, same auth gate as /api/chat.

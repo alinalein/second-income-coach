@@ -4,9 +4,11 @@ import session from 'express-session';
 import request from 'supertest';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
+import type { CreatePlanDraft, SubmitIntakeToolArgs } from '@app/shared';
 import { createPlansRouter, isUniqueViolationError, type PlansRouterDeps } from './plans.js';
 import { createDb } from '../../db/client.js';
-import { users, ideas, plans, planSteps } from '../../db/schema/index.js';
+import { users, ideas, plans, planSteps, intake } from '../../db/schema/index.js';
+import { upsertIntake } from '../../tools/plain/submit_intake.js';
 
 // Bug fix (user-reported, live): Drizzle's `node-postgres` driver wraps the
 // real `pg` error — a genuine unique-violation's `.code` lives at
@@ -82,9 +84,31 @@ async function cleanUp(userId: string) {
     await db.delete(planSteps).where(eq(planSteps.planId, planRow.id));
   }
   await db.delete(plans).where(eq(plans.userId, userId));
+  await db.delete(intake).where(eq(intake.userId, userId));
   await db.delete(ideas).where(eq(ideas.userId, userId));
   await db.delete(users).where(eq(users.id, userId));
 }
+
+function intakeArgs(overrides: Partial<SubmitIntakeToolArgs> = {}): SubmitIntakeToolArgs {
+  return {
+    skillsInterests: 'Woodworking, basic bookkeeping',
+    weeklyTimeAvailability: '5_to_10h',
+    startingBudgetRange: 'under_100',
+    riskTolerance: 'low',
+    stoppedBeforeText: 'I got overwhelmed trying to do everything at once.',
+    country: 'other',
+    failurePattern: 'overwhelm',
+    ...overrides,
+  };
+}
+
+const VALID_DRAFT: CreatePlanDraft = {
+  steps: [
+    { title: 'Step 1', description: ['Do it.'], dayOffset: 0 },
+    { title: 'Step 2', description: ['Then this.'], dayOffset: 2 },
+    { title: 'Step 3', description: ['Then that.'], dayOffset: 5 },
+  ],
+};
 
 function fakeAgent(overrides: Partial<FakeAgent> = {}): FakeAgent {
   return {
@@ -95,7 +119,11 @@ function fakeAgent(overrides: Partial<FakeAgent> = {}): FakeAgent {
   } as unknown as FakeAgent;
 }
 
-function buildTestApp(agent: FakeAgent, userId: string) {
+/** Story 2.10: `model` defaults to a never-called stub — `create_plan` is
+ * now called directly via `handleCreatePlan`, with `createDraft` as the
+ * test-only seam replacing the real model call (same DI precedent as
+ * `create_plan.test.ts`). */
+function buildTestApp(agent: FakeAgent, userId: string, overrides: Partial<PlansRouterDeps> = {}) {
   const app = express();
   app.use(express.json());
   app.use(session({ secret: 'test-secret', resave: false, saveUninitialized: false }));
@@ -103,7 +131,7 @@ function buildTestApp(agent: FakeAgent, userId: string) {
     req.session.userId = userId;
     next();
   });
-  app.use('/api/plans', createPlansRouter({ env: testEnv, db, agent }));
+  app.use('/api/plans', createPlansRouter({ env: testEnv, db, agent, model: {} as never, ...overrides }));
   return app;
 }
 
@@ -150,44 +178,28 @@ describe('createPlansRouter POST /select/:ideaId', () => {
   });
 
   // I/O matrix: "First selection, no plan" -> create_plan runs once, draft
-  // row + ordered steps + plan thread created. The fake agent simulates
-  // `create_plan`'s own write (that write itself is tested directly in
-  // `create_plan.test.ts`) — this proves the route mints a planId, builds
-  // `plan:${planId}` as the thread id, and reports the row `create_plan`
-  // wrote back to the client.
-  it('invokes the agent on a new plan thread and returns the created plan', async () => {
+  // row + ordered steps + plan thread created. Story 2.10 (AC1): `agent.invoke`
+  // is gone entirely — `handleCreatePlan` is called directly, with
+  // `createDraft` as the test-only seam replacing the real model call (same
+  // DI precedent as `create_plan.test.ts`). This proves the route mints a
+  // planId, builds `plan:${planId}` as the real thread id, and reports the
+  // row `handleCreatePlan` wrote back to the client.
+  it('calls handleCreatePlan directly (no agent.invoke) and returns the created plan', async () => {
     const userId = await createTestUser();
     try {
       const ideaId = await insertIdea(userId, 'selected');
+      await upsertIntake(db, userId, intakeArgs());
+      const createDraft = vi.fn().mockResolvedValue(VALID_DRAFT);
+      const agent = fakeAgent();
 
-      const agent = fakeAgent({
-        invoke: vi.fn().mockImplementation(async (_input, config) => {
-          const { planId } = config.configurable;
-          await db.insert(plans).values({ id: planId, ideaId, userId, status: 'draft', threadId: `plan:${planId}` });
-          await db.insert(planSteps).values({ planId, stepOrder: 0, title: 'Step', description: ['Do it.'], dayOffset: 0, status: 'current' });
-          return { messages: [] };
-        }),
-      });
-
-      const res = await request(buildTestApp(agent, userId)).post(`/api/plans/select/${ideaId}`);
+      const res = await request(buildTestApp(agent, userId, { createDraft })).post(`/api/plans/select/${ideaId}`);
 
       expect(res.status).toBe(200);
       expect(res.body.status).toBe('draft');
       expect(res.body.threadId).toBe(`plan:${res.body.id}`);
-      expect(agent.invoke).toHaveBeenCalledTimes(1);
-      const [, config] = (agent.invoke as ReturnType<typeof vi.fn>).mock.calls[0]!;
-      // Perf fix (user-requested): this trigger must skip input moderation
-      // and force tool_choice to create_plan — scoped to this one call site.
-      // Bug fix (user-reported): the trigger itself must run on the
-      // throwaway `plan-create-trigger:` thread, never the real
-      // `plan:${planId}` thread `plan-chat.ts` later reads.
-      expect(config.configurable).toMatchObject({
-        ideaId,
-        userId,
-        thread_id: `plan-create-trigger:${config.configurable.planId}`,
-        skipInputModeration: true,
-        forceToolChoice: 'create_plan',
-      });
+      expect(createDraft).toHaveBeenCalledTimes(1);
+      // AC1: no `agent.invoke` anywhere in this route anymore.
+      expect(agent.invoke).not.toHaveBeenCalled();
 
       // Bug fix (user-reported): the real plan thread gets seeded with a
       // fixed welcome message, never the raw trigger text.
@@ -202,27 +214,19 @@ describe('createPlansRouter POST /select/:ideaId', () => {
   });
 
   // Review fix: two concurrent requests both pass the "no existing plan"
-  // check and both invoke the agent — the loser's own insert hits the real
-  // `plans_idea_id_unique` constraint. That must resolve to the winner's
-  // plan (200), never a flat 502, since a plan genuinely was created.
+  // check and both call `handleCreatePlan` — the loser's own insert hits the
+  // real `plans_idea_id_unique` constraint. That must resolve to the
+  // winner's plan (200), never a flat 502, since a plan genuinely was
+  // created. Story 2.10: exercises the real `handleCreatePlan` transaction
+  // (not a fake agent simulating its write) against real Postgres.
   it('returns the winning plan, not a 502, when two concurrent selects race past the no-existing-plan check', async () => {
     const userId = await createTestUser();
     try {
       const ideaId = await insertIdea(userId, 'selected');
-
-      const agent = fakeAgent({
-        invoke: vi.fn().mockImplementation(async (_input, config) => {
-          const { planId } = config.configurable;
-          // Real insert against real Postgres — the second concurrent call
-          // genuinely hits `plans_idea_id_unique`, not a simulated error.
-          await db.insert(plans).values({ id: planId, ideaId, userId, status: 'draft', threadId: `plan:${planId}` });
-          await db
-            .insert(planSteps)
-            .values({ planId, stepOrder: 0, title: 'Step', description: ['Do it.'], dayOffset: 0, status: 'current' });
-          return { messages: [] };
-        }),
-      });
-      const app = buildTestApp(agent, userId);
+      await upsertIntake(db, userId, intakeArgs());
+      const createDraft = vi.fn().mockResolvedValue(VALID_DRAFT);
+      const agent = fakeAgent();
+      const app = buildTestApp(agent, userId, { createDraft });
 
       const [resA, resB] = await Promise.all([
         request(app).post(`/api/plans/select/${ideaId}`),
@@ -235,6 +239,34 @@ describe('createPlansRouter POST /select/:ideaId', () => {
 
       const rows = await db.select().from(plans).where(eq(plans.ideaId, ideaId));
       expect(rows).toHaveLength(1);
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+
+  // Live-bug fix (user-reported, measured live: two real model calls, one
+  // plan selection): the in-process in-flight dedupe map means a second
+  // concurrent request for the same idea awaits the first's already
+  // in-flight `handleCreatePlan` call instead of starting its own — so the
+  // model-call seam itself (not just the DB row) is now idempotent too.
+  it('calls createDraft exactly once when two concurrent selects race for the same idea', async () => {
+    const userId = await createTestUser();
+    try {
+      const ideaId = await insertIdea(userId, 'selected');
+      await upsertIntake(db, userId, intakeArgs());
+      const createDraft = vi.fn().mockResolvedValue(VALID_DRAFT);
+      const agent = fakeAgent();
+      const app = buildTestApp(agent, userId, { createDraft });
+
+      const [resA, resB] = await Promise.all([
+        request(app).post(`/api/plans/select/${ideaId}`),
+        request(app).post(`/api/plans/select/${ideaId}`),
+      ]);
+
+      expect(resA.status).toBe(200);
+      expect(resB.status).toBe(200);
+      expect(resA.body.id).toBe(resB.body.id);
+      expect(createDraft).toHaveBeenCalledTimes(1);
     } finally {
       await cleanUp(userId);
     }

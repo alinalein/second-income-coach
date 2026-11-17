@@ -1,7 +1,9 @@
 import { eq } from 'drizzle-orm';
 import { Router } from 'express';
 import { z } from 'zod';
-import { HumanMessage, type BaseMessage } from '@langchain/core/messages';
+import { type BaseMessage } from '@langchain/core/messages';
+import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
+import type { DynamicStructuredTool } from '@langchain/core/tools';
 import {
   ideasWithPlanResponseSchema,
   currencyCodeSchema,
@@ -19,7 +21,12 @@ import { detectReplyLanguage } from '../../agent/language.js';
 import { createChatModel } from '../../agent/model.js';
 import { TRANSLATION_MODEL_ID } from '../../agent/registry.js';
 import { translateIdeaCards as defaultTranslateIdeaCards } from '../../agent/translate-idea-cards.js';
-import { getIdeasByUserId } from '../../tools/llm/generate_ideas.js';
+import {
+  getIdeasByUserId,
+  handleGenerateIdeas,
+  SearchServiceUnavailableError,
+  type GenerateIdeasDeps,
+} from '../../tools/llm/generate_ideas.js';
 import { setIdeaStatus, IdeaNotFoundError, settableIdeaStatusSchema } from '../../tools/plain/set_idea_status.js';
 import { userSettings, plans } from '../../db/schema/index.js';
 import { createStrictRateLimiter } from '../middleware/rateLimit.js';
@@ -41,9 +48,24 @@ const setIdeaStatusRequestSchema = z.object({ status: settableIdeaStatusSchema }
 const generateIdeasRequestSchema = z.object({ language: replyLanguageSchema }).partial();
 
 export interface IdeasRouterDeps {
-  env: Pick<Env, 'RATE_LIMIT_WINDOW_MS' | 'OPENROUTER_API_KEY' | 'MISTRAL_API_KEY'>;
+  env: Pick<Env, 'RATE_LIMIT_WINDOW_MS' | 'OPENROUTER_API_KEY' | 'MISTRAL_API_KEY' | 'IDEAS_PER_BATCH'>;
   db: ReturnType<typeof createDb>['db'];
+  /** Story 2.10: `generate_ideas` itself is no longer invoked through this —
+   * `handleGenerateIdeas` is called directly below. Still `ideasAgent`
+   * (longer node timeout), used only for `detectUserReplyLanguage`
+   * (`.getState`). */
   agent: CoachAgent;
+  /** Story 2.10: the shared chat model `handleGenerateIdeas` calls directly
+   * — same `Deps`/`Config`/`Args` shape `generate_ideas.ts`'s own tool
+   * wrapper (`createGenerateIdeasTool`) already used. */
+  model: BaseChatModel;
+  /** Story 2.10: the shared `web_search` MCP tool, passed through to the
+   * same direct `handleGenerateIdeas` call. */
+  webSearchTool: DynamicStructuredTool;
+  /** Test-only seam: same DI precedent as `GenerateIdeasDeps.generateDrafts`
+   * (`generate_ideas.ts`) — replaces the real nested-agent draft call with a
+   * fake. */
+  generateDrafts?: GenerateIdeasDeps['generateDrafts'];
   /** Test-only seam — same DI precedent as `GenerateIdeasDeps.generateDrafts`
    * (`generate_ideas.ts`): lets a test replace the real model-backed
    * `translateIdeaCards` call with a fake, so `POST /translate`'s own
@@ -104,34 +126,23 @@ export async function detectUserReplyLanguage(agent: CoachAgent, discoveryThread
 }
 
 /**
- * Message the internal-only `ideas-trigger:` thread sees for a "generate my
- * ideas" request (Boundary: reaches `generate_ideas` only via
- * `agent.invoke()`, same precedent as `intake.ts`'s
- * `buildIntakeAgentMessage` — never calling the tool's persistence logic
- * directly from this HTTP route). The reply language is stated explicitly
- * (detected server-side above) rather than left for the model to infer from
- * "the conversation" — this thread *has* no conversation; it exists only
- * for this one instruction. The agent still supplies `replyLanguage` as its
- * own tool-call argument (AD-4), it is just no longer guessing which value
- * to pass.
- */
-function buildGenerateIdeasAgentMessage(replyLanguage: 'de' | 'en'): string {
-  const languageName = replyLanguage === 'de' ? 'German' : 'English';
-  return (
-    `Please generate my 5 tailored income ideas now by calling generate_ideas. The user's reply language is ` +
-    `${languageName} ("${replyLanguage}") — pass that as replyLanguage.`
-  );
-}
-
-/**
  * `createIdeasRouter`: `GET /` (AC1 — plain read, never a LangChain tool)
- * and `POST /generate` (AC1/AC3/AC9 — strict-limited, invokes the agent on
- * the discovery thread, re-reads the row count before/after). Mirrors
- * `createIntakeRouter`'s shape (Code Map), adapted to a row-count
- * before/after check instead of an `updatedAt` comparison, since this is an
- * insert of new rows rather than an upsert of one row.
+ * and `POST /generate` (AC1/AC3/AC9 — strict-limited; Story 2.10: calls
+ * `handleGenerateIdeas` directly, no `agent.invoke`, then re-reads the id
+ * set before/after). Mirrors `createIntakeRouter`'s shape (Code Map),
+ * adapted to a row-count before/after check instead of an `updatedAt`
+ * comparison, since this is an insert of new rows rather than an upsert of
+ * one row.
  */
-export function createIdeasRouter({ env, db, agent, translateIdeaCards: translateIdeaCardsOverride }: IdeasRouterDeps) {
+export function createIdeasRouter({
+  env,
+  db,
+  agent,
+  model,
+  webSearchTool,
+  generateDrafts,
+  translateIdeaCards: translateIdeaCardsOverride,
+}: IdeasRouterDeps) {
   const router = Router();
   const translateIdeaCardsFn = translateIdeaCardsOverride ?? defaultTranslateIdeaCards;
   // Intent/Code Map: "generate_ideas is LLM-backed and cost-bearing like
@@ -249,13 +260,11 @@ export function createIdeasRouter({ env, db, agent, translateIdeaCards: translat
     // the client disconnects (the browser's own `GENERATE_TIMEOUT_MS`
     // abort, a closed tab, a lost connection), so the server stops doing
     // real work for a caller that's already gone instead of continuing the
-    // run in the background. `agent.invoke`'s `config.signal` propagates
-    // through LangGraph's own node execution (confirmed directly in
-    // `@langchain/langgraph`'s source: `_runWithRetry`/`_initializeAbort
-    // Signals` compose it into every node's own config) and through
-    // `@langchain/core`'s `tool()`/`ToolNode` into `generate_ideas`'s own
-    // `config.signal` (`generate_ideas.ts`'s `GenerateIdeasRunConfig`),
-    // where it's combined with that tool's own per-attempt timeout.
+    // run in the background. Story 2.10: this signal is now passed straight
+    // into `handleGenerateIdeas`'s own `config.signal`
+    // (`generate_ideas.ts`'s `GenerateIdeasRunConfig`) below — no
+    // `agent.invoke`/LangGraph node in between anymore — where it's combined
+    // with that tool's own per-attempt timeout (`withDraftAttemptTimeout`).
     const abortController = new AbortController();
     const onClientDisconnect = () => abortController.abort(new Error('generate_ideas: client disconnected'));
     req.on('close', onClientDisconnect);
@@ -263,15 +272,15 @@ export function createIdeasRouter({ env, db, agent, translateIdeaCards: translat
     try {
       // Round 10 ("Generate new ideas" open item): `generate_ideas` now
       // *replaces* the existing `suggested` batch (deletes old `suggested`
-      // rows, inserts 5 new ones, in one transaction — `generate_ideas.ts`)
-      // rather than only ever appending, so the old before/after row-COUNT
-      // diff (`after.length === before + 5`) can no longer tell "it ran
-      // this turn" apart from "a stale batch of 5 was already there and
-      // this turn failed, leaving it untouched" — both look like "still 5
-      // suggested rows". Comparing the *set of ids* instead: a real
-      // replace always produces entirely new ids (`gen_random_uuid()`), so
-      // any overlap with the pre-call id set means nothing actually
-      // happened this turn.
+      // rows, inserts the configured batch size's worth of new ones, in one
+      // transaction — `generate_ideas.ts`) rather than only ever appending,
+      // so the old before/after row-COUNT diff (`after.length === before +
+      // env.IDEAS_PER_BATCH`) can no longer tell "it ran this turn" apart
+      // from "a stale batch was already there and this turn failed, leaving
+      // it untouched" — both look like "still N suggested rows". Comparing
+      // the *set of ids* instead: a real replace always produces entirely
+      // new ids (`gen_random_uuid()`), so any overlap with the pre-call id
+      // set means nothing actually happened this turn.
       const beforeSuggestedIds = new Set((await getIdeasByUserId(db, userId)).filter((idea) => idea.status === 'suggested').map((idea) => idea.id));
 
       // Story 2.7 (AC4): the button's own request body, when present and
@@ -281,14 +290,19 @@ export function createIdeasRouter({ env, db, agent, translateIdeaCards: translat
       const bodyParseResult = generateIdeasRequestSchema.safeParse(req.body ?? {});
       const explicitLanguage = bodyParseResult.success ? bodyParseResult.data.language : undefined;
       const replyLanguage = explicitLanguage ?? (await detectUserReplyLanguage(agent, buildDiscoveryThreadId(userId)));
-      await agent.invoke(
-        { messages: [new HumanMessage(buildGenerateIdeasAgentMessage(replyLanguage))] },
+
+      // Story 2.10: `handleGenerateIdeas` called directly — the same
+      // exported function `generate_ideas.ts`'s own tool wrapper calls, same
+      // `Deps`/`Config`/`Args` shape, no `agent.invoke` around it.
+      await handleGenerateIdeas(
+        { db, model, webSearchTool, env, generateDrafts },
         { configurable: { thread_id: triggerThreadId }, signal: abortController.signal },
+        { replyLanguage },
       );
 
       const [after, currency] = await Promise.all([getIdeasByUserId(db, userId), getUserCurrency(db, userId)]);
       const afterSuggested = after.filter((idea) => idea.status === 'suggested');
-      const regenerated = afterSuggested.length === 5 && afterSuggested.every((idea) => !beforeSuggestedIds.has(idea.id));
+      const regenerated = afterSuggested.length === env.IDEAS_PER_BATCH && afterSuggested.every((idea) => !beforeSuggestedIds.has(idea.id));
 
       if (!regenerated) {
         // I/O matrix: "Agent doesn't call the tool" / a tool error (e.g. no
@@ -307,6 +321,14 @@ export function createIdeasRouter({ env, db, agent, translateIdeaCards: translat
       const visibleAfterWithPlan = await attachHasPlan(db, userId, visibleAfter);
       res.json(ideasWithPlanResponseSchema.parse({ ideas: visibleAfterWithPlan, currency }));
     } catch (error) {
+      // Fail-fast (every web_search call this round failed): a distinct,
+      // specific error the client maps to a clear message — never the
+      // generic one below — and existing `ideas` rows are left completely
+      // untouched (`handleGenerateIdeas` throws this before any DB write).
+      if (error instanceof SearchServiceUnavailableError) {
+        res.status(503).json({ error: 'search_unavailable' });
+        return;
+      }
       console.error('[ideas] generation failed:', { userId, error: (error as Error)?.message });
       if (!res.headersSent) res.status(502).json({ error: 'Ideas could not be generated' });
     } finally {

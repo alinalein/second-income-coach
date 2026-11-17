@@ -35,30 +35,55 @@ export function PlanWorkspace({ ideaId, ideaTitle, onBack }: PlanWorkspaceProps)
   const { t } = useTranslation('plan');
   const [plan, setPlan] = React.useState<PlanResponse | null>(null);
   const [loadFailed, setLoadFailed] = React.useState(false);
+  // Live-bug fix (user-reported): dev-only React StrictMode synchronously
+  // runs this effect's cleanup and setup twice on mount, to surface exactly
+  // this class of bug. The lazy `create_plan` call behind this fetch is not
+  // idempotent on its own cost (two concurrent `POST /select/:ideaId`s each
+  // trigger their own model call, even though the server-side unique
+  // constraint means only one `plans` row ever persists) — tracking the
+  // in-flight request by `ideaId` here, rather than a plain per-invocation
+  // `let cancelled` flag, means the second (StrictMode-synthetic) effect run
+  // recognizes a request already in flight for this same `ideaId` and
+  // resumes it instead of starting a second real network request. Because
+  // this re-run happens synchronously, before the fetch's own `.then` can
+  // run as a microtask, flipping `cancelled` back here is enough to let the
+  // original request's result through once it resolves. A genuine `ideaId`
+  // change or unmount still starts/cancels exactly as before.
+  const inFlightRef = React.useRef<{ ideaId: string; cancelled: boolean } | null>(null);
 
   React.useEffect(() => {
-    let cancelled = false;
     setPlan(null);
     setLoadFailed(false);
 
+    if (inFlightRef.current?.ideaId === ideaId) {
+      inFlightRef.current.cancelled = false;
+      return () => {
+        if (inFlightRef.current?.ideaId === ideaId) inFlightRef.current.cancelled = true;
+      };
+    }
+
+    const inFlight = { ideaId, cancelled: false };
+    inFlightRef.current = inFlight;
+
     fetch(`/api/plans/select/${ideaId}`, { method: 'POST', credentials: 'include' })
       .then(async (res) => {
-        if (cancelled) return;
+        if (inFlight.cancelled) return;
         if (!res.ok) {
           setLoadFailed(true);
           return;
         }
         const body: unknown = await res.json();
         const result = planResponseSchema.safeParse(body);
+        if (inFlight.cancelled) return;
         if (result.success) setPlan(result.data);
         else setLoadFailed(true);
       })
       .catch(() => {
-        if (!cancelled) setLoadFailed(true);
+        if (!inFlight.cancelled) setLoadFailed(true);
       });
 
     return () => {
-      cancelled = true;
+      inFlight.cancelled = true;
     };
   }, [ideaId]);
 

@@ -625,8 +625,9 @@ function IdeaCard({
             className="h-auto gap-1 px-2 py-1 text-xs"
             // Review fix: every card's toggle otherwise shares the exact
             // same accessible name ("Details"), which is ambiguous the
-            // moment more than one idea renders (the normal case — 5 cards
-            // at once) for screen-reader users and for role-based lookups.
+            // moment more than one idea renders (the normal case — a full
+            // batch at once) for screen-reader users and for role-based
+            // lookups.
             // The visible label stays the plain "Details" text below;
             // `aria-label` is what screen readers announce instead.
             aria-label={t('card.detailsToggleAriaLabel', { title: displayIdea.title })}
@@ -771,6 +772,11 @@ export function IdeasPanel({ onViewPlan, autoGenerate = false }: IdeasPanelProps
   const [currency, setCurrency] = React.useState<CurrencyCode>('EUR');
   const [phase, setPhase] = React.useState<Phase>('loading');
   const [progress, setProgress] = React.useState(0);
+  // Fail-fast (every web_search call in a round failed): distinct from the
+  // generic `generateFailed` message — set alongside `setPhase('generate-
+  // error')`, read only while `phase === 'generate-error'`. Never falls
+  // back to the generic text for this specific case.
+  const [generateErrorKind, setGenerateErrorKind] = React.useState<'generic' | 'searchUnavailable'>('generic');
   // Story 2.8 AC3: which idea the "Select" confirm dialog is open for —
   // `null` means closed. Panel-level (not per-card) since only one dialog
   // can be open at a time.
@@ -1099,12 +1105,21 @@ export function IdeasPanel({ onViewPlan, autoGenerate = false }: IdeasPanelProps
         const result = ideasWithPlanResponseSchema.safeParse(body);
         setProgress(100);
         if (!res.ok || !result.success) {
-          if (isMountedRef.current) setPhase('generate-error');
+          // Fail-fast (every web_search call this round failed): a distinct
+          // 503/`search_unavailable` response gets its own message — never
+          // the generic `generateFailed` one — so the user knows their
+          // existing ideas are unchanged, not just "failed or timed out".
+          const isSearchUnavailable =
+            res.status === 503 || (typeof body === 'object' && body !== null && (body as { error?: unknown }).error === 'search_unavailable');
+          if (isMountedRef.current) {
+            setGenerateErrorKind(isSearchUnavailable ? 'searchUnavailable' : 'generic');
+            setPhase('generate-error');
+          }
           return;
         }
         // Round 13: ideas are swapped into state here directly from the
-        // response — a successful generation already shows the new 5 cards
-        // immediately, with no page reload.
+        // response — a successful generation already shows the new batch's
+        // cards immediately, with no page reload.
         if (isMountedRef.current) {
           setIdeas(result.data.ideas);
           setCurrency(result.data.currency);
@@ -1116,8 +1131,13 @@ export function IdeasPanel({ onViewPlan, autoGenerate = false }: IdeasPanelProps
         // firing at `GENERATE_TIMEOUT_MS` (an AbortError) — either way the
         // client gives up waiting, hence the combined "failed or timed out"
         // copy (`error.generateFailed`) rather than a timeout-specific one.
+        // Never the search-unavailable case (that's a real HTTP response,
+        // handled in `.then` above), so always generic here.
         setProgress(100);
-        if (isMountedRef.current) setPhase('generate-error');
+        if (isMountedRef.current) {
+          setGenerateErrorKind('generic');
+          setPhase('generate-error');
+        }
       })
       .finally(() => {
         window.clearTimeout(timeoutId);
@@ -1169,7 +1189,7 @@ export function IdeasPanel({ onViewPlan, autoGenerate = false }: IdeasPanelProps
           ) : null}
           {phase === 'generate-error' ? (
             <Badge variant="muted" role="alert">
-              {t('error.generateFailed')}
+              {generateErrorKind === 'searchUnavailable' ? t('error.searchUnavailable') : t('error.generateFailed')}
             </Badge>
           ) : null}
           {/* Story 2.3: independent of `phase` — a failed status change never
@@ -1241,7 +1261,7 @@ export function IdeasPanel({ onViewPlan, autoGenerate = false }: IdeasPanelProps
          *
          * Round 23 (user-requested): both buttons now use the same solid
          * `default` style (the `outline` variant for "Generate new ideas"
-         * is gone — same color as "Generate my 5 ideas"). The progress
+         * is gone — same color as "Generate my ideas"). The progress
          * block's wrapper is now always rendered (never unmounted) and
          * fades via `transition-opacity` instead of popping in/out — since
          * it's always present, it also always reserves its own real height,

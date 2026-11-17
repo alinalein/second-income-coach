@@ -241,9 +241,12 @@ export const ideaDraftSchema = z
 export type IdeaDraft = z.infer<typeof ideaDraftSchema>;
 
 /** The nested LLM's full structured-output shape (`createAgent`'s
- * `responseFormat`) — exactly 5 drafts, never a partial batch. */
+ * `responseFormat`) — 1-5 drafts; the exact configured batch size
+ * (`IDEAS_PER_BATCH`, `src/config/env.ts`) is enforced at runtime by
+ * `generate_ideas.ts`'s own `buildDraftsSchema`, not by this shared range
+ * schema. */
 export const generateIdeasDraftsSchema = z.object({
-  ideas: z.array(ideaDraftSchema).length(5),
+  ideas: z.array(ideaDraftSchema).min(1).max(5),
 });
 
 export type GenerateIdeasDrafts = z.infer<typeof generateIdeasDraftsSchema>;

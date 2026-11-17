@@ -308,17 +308,6 @@ export function IntakeForm({ onSaved }: IntakeFormProps) {
               t('submitButton')
             )}
           </Button>
-          {/* UX fix (user-reported: submit "takes long" with no explanation)
-           * — the real cause (moderation + the model's own classification
-           * call, AD-4/AD-11) can't be removed without weakening either, so
-           * this sets honest expectations instead of leaving a bare spinner,
-           * same pattern as `IdeasPanel`'s `generatingHint`/`PlanWorkspace`'s
-           * `loadingHint`. */}
-          {submitting ? (
-            <p aria-live="polite" className="text-xs text-muted-foreground">
-              {t('savingHint')}
-            </p>
-          ) : null}
         </CardFooter>
       </form>
     </Card>

@@ -3,17 +3,25 @@ import express from 'express';
 import session from 'express-session';
 import request from 'supertest';
 import { afterAll, describe, expect, it, vi } from 'vitest';
-import { and, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
+import type { IdeaDraft, IntakeResponse, SubmitIntakeToolArgs } from '@app/shared';
 import { createIdeasRouter, type IdeasRouterDeps } from './ideas.js';
 import { createDb } from '../../db/client.js';
-import { users, ideas, userSettings, plans } from '../../db/schema/index.js';
+import { users, ideas, userSettings, plans, intake } from '../../db/schema/index.js';
+import { upsertIntake } from '../../tools/plain/submit_intake.js';
+import { SearchServiceUnavailableError, type GenerateDraftsResult } from '../../tools/llm/generate_ideas.js';
 
 // Story 2.7: `createIdeasRouter` now also builds a translation chat model
 // at construction time (`createChatModel(env, TRANSLATION_MODEL_ID)`) —
 // these two keys are never actually used by any test below (no test here
 // exercises `POST /translate`'s real model call), just present so
 // construction itself doesn't throw / fails typecheck.
-const testEnv: IdeasRouterDeps['env'] = { RATE_LIMIT_WINDOW_MS: 60_000, OPENROUTER_API_KEY: 'test-key', MISTRAL_API_KEY: 'test-key' };
+const testEnv: IdeasRouterDeps['env'] = {
+  RATE_LIMIT_WINDOW_MS: 60_000,
+  OPENROUTER_API_KEY: 'test-key',
+  MISTRAL_API_KEY: 'test-key',
+  IDEAS_PER_BATCH: 5,
+};
 
 type FakeAgent = IdeasRouterDeps['agent'];
 
@@ -39,6 +47,7 @@ async function createTestUser(): Promise<string> {
 async function cleanUp(userId: string) {
   await db.delete(ideas).where(eq(ideas.userId, userId));
   await db.delete(userSettings).where(eq(userSettings.userId, userId));
+  await db.delete(intake).where(eq(intake.userId, userId));
   await db.delete(users).where(eq(users.id, userId));
 }
 
@@ -50,6 +59,69 @@ function fakeAgent(overrides: Partial<FakeAgent> = {}): FakeAgent {
   } as unknown as FakeAgent;
 }
 
+function intakeArgs(overrides: Partial<SubmitIntakeToolArgs> = {}): SubmitIntakeToolArgs {
+  return {
+    skillsInterests: 'Woodworking, basic bookkeeping',
+    weeklyTimeAvailability: '5_to_10h',
+    startingBudgetRange: 'under_100',
+    riskTolerance: 'low',
+    stoppedBeforeText: 'I got overwhelmed trying to do everything at once.',
+    country: 'other',
+    failurePattern: 'overwhelm',
+    ...overrides,
+  };
+}
+
+// Story 2.10: a minimal hard-valid draft fixture (same shape/precedent as
+// `generate_ideas.test.ts`'s own `buildValidDraft`/`fiveValidDrafts`) — just
+// enough to satisfy `handleGenerateIdeas`'s per-draft hard checks (quote
+// verified against `searchResultTexts`, within intake's limits, not a vendor
+// pricing page, currency-consistent). Idea-type/citation-domain variety are
+// soft-only checks (never block), so every draft can safely share one
+// ideaType/domain here.
+const RATE_QUOTE = 'Tutoring work like this typically pays $25.00 an hour.';
+const DEMAND_QUOTE = 'Demand for freelance tutoring has grown steadily this year.';
+const SEARCH_RESULT_TEXTS = [RATE_QUOTE, DEMAND_QUOTE];
+
+function buildValidDraft(intakeRow: IntakeResponse, overrides: Partial<IdeaDraft> = {}): IdeaDraft {
+  return {
+    title: 'Freelance tutoring',
+    rationale: ['Fits the few hours you have free each week.', 'Start by listing your skills on one platform.'],
+    citedIntakeFields: ['weeklyTimeAvailability', 'riskTolerance', 'startingBudgetRange'],
+    ideaType: 'service',
+    weeklyTimeCommitment: intakeRow.weeklyTimeAvailability,
+    startupCostAmountMinorUnits: 0,
+    riskLevel: intakeRow.riskTolerance,
+    baselineRateQuote: RATE_QUOTE,
+    baselineRateLowAmountMinorUnits: 2500,
+    baselineRateHighAmountMinorUnits: 2500,
+    isVendorSource: false,
+    rateUnit: 'hour',
+    baselineRateCurrency: 'USD',
+    baselineRateCitation: 'https://a.example.com/rates',
+    demandEvidenceNote: 'Demand for tutoring help has been rising lately.',
+    demandEvidenceCitation: 'https://trend.example.com/demand',
+    demandEvidenceQuote: DEMAND_QUOTE,
+    growthPath: 'Raise your rate once you have a few regular clients.',
+    ...overrides,
+  };
+}
+
+function fiveValidDrafts(intakeRow: IntakeResponse, label: string): IdeaDraft[] {
+  return Array.from({ length: 5 }, (_, i) => buildValidDraft(intakeRow, { title: `${label} ${i + 1}` }));
+}
+
+function fakeGenerateDrafts(intakeRow: IntakeResponse, label = 'Idea') {
+  return vi.fn().mockResolvedValue({
+    drafts: { ideas: fiveValidDrafts(intakeRow, label) },
+    searchResultTexts: SEARCH_RESULT_TEXTS,
+  } satisfies GenerateDraftsResult);
+}
+
+/** Story 2.10: `model`/`webSearchTool` default to never-called stubs —
+ * `generate_ideas` is now called directly via `handleGenerateIdeas`, with
+ * `generateDrafts` as the test-only seam replacing the real nested-agent
+ * call (same DI precedent as `generate_ideas.test.ts`'s own `baseDeps`). */
 function buildTestApp(agent: FakeAgent, userId: string, overrides: Partial<IdeasRouterDeps> = {}) {
   const app = express();
   app.use(express.json());
@@ -58,7 +130,7 @@ function buildTestApp(agent: FakeAgent, userId: string, overrides: Partial<Ideas
     req.session.userId = userId;
     next();
   });
-  app.use('/api/ideas', createIdeasRouter({ env: testEnv, db, agent, ...overrides }));
+  app.use('/api/ideas', createIdeasRouter({ env: testEnv, db, agent, model: {} as never, webSearchTool: {} as never, ...overrides }));
   return app;
 }
 
@@ -136,56 +208,44 @@ describe('createIdeasRouter GET /', () => {
 });
 
 describe('createIdeasRouter POST /generate', () => {
-  // I/O matrix: "Happy path" -> 5 ideas returned, 200.
-  it('returns the 5 newly generated ideas when the agent calls generate_ideas', async () => {
+  // I/O matrix: "Happy path" -> 5 ideas returned, 200. Story 2.10 (AC1): no
+  // `agent.invoke` at all anymore — `handleGenerateIdeas` is called
+  // directly, with `generateDrafts` as the test-only seam replacing the real
+  // nested-agent call (same DI precedent as `generate_ideas.test.ts`).
+  it('returns the 5 newly generated ideas, calling handleGenerateIdeas directly (no agent.invoke)', async () => {
     const userId = await createTestUser();
     try {
-      const agent = fakeAgent({
-        invoke: vi.fn().mockImplementation(async () => {
-          await insertFiveIdeas(userId);
-          return { messages: [] };
-        }),
-      });
+      const intakeRow = await upsertIntake(db, userId, intakeArgs());
+      const generateDrafts = fakeGenerateDrafts(intakeRow);
+      const agent = fakeAgent();
 
-      const res = await request(buildTestApp(agent, userId)).post('/api/ideas/generate');
+      const res = await request(buildTestApp(agent, userId, { generateDrafts })).post('/api/ideas/generate');
 
       expect(res.status).toBe(200);
       expect(res.body.ideas).toHaveLength(5);
-      // Story 2.2 follow-up fix 4: the trigger runs on the internal-only
-      // `ideas-trigger:` thread, never the user-visible `discovery:` one —
-      // this is what keeps it out of GET /api/chat/messages. Round 9, fix
-      // (b): a request-scoped `AbortSignal` is now always passed too.
-      expect(agent.invoke).toHaveBeenCalledWith(expect.anything(), {
-        configurable: { thread_id: `ideas-trigger:${userId}` },
-        signal: expect.any(AbortSignal),
-      });
+      expect(generateDrafts).toHaveBeenCalledTimes(1);
+      // AC1: no `agent.invoke` anywhere in this route anymore.
+      expect(agent.invoke).not.toHaveBeenCalled();
     } finally {
       await cleanUp(userId);
     }
   });
 
-  // Story 2.2 round 10 ("Generate new ideas" open item): the route's id-set
-  // success check, not `generate_ideas.ts`'s own delete+insert transaction
-  // (that has its own direct test in `generate_ideas.test.ts`) — this fake
-  // agent simulates a real regenerate's effect (delete old suggested, insert
-  // new 5) to prove the route correctly reports success from entirely new
-  // ids, not the old before+5 row-count formula (which a replace, not an
-  // append, no longer satisfies).
-  it('reports success and returns the new batch when the agent regenerates (replacing the old suggested batch)', async () => {
+  // Story 2.2 round 10 ("Generate new ideas" open item): a regenerate
+  // deletes the old `suggested` batch and inserts a new 5 in one
+  // transaction (`generate_ideas.ts`'s own real write — now exercised
+  // directly, not simulated by a fake agent) — proving the route reports
+  // success from entirely new ids, not the old before+5 row-count formula
+  // (which a replace, not an append, no longer satisfies).
+  it('reports success and returns the new batch when regenerating (replacing the old suggested batch)', async () => {
     const userId = await createTestUser();
     try {
+      const intakeRow = await upsertIntake(db, userId, intakeArgs());
       await insertFiveIdeas(userId);
       const oldIds = (await db.select({ id: ideas.id }).from(ideas).where(eq(ideas.userId, userId))).map((row) => row.id);
+      const generateDrafts = fakeGenerateDrafts(intakeRow, 'New');
 
-      const agent = fakeAgent({
-        invoke: vi.fn().mockImplementation(async () => {
-          await db.delete(ideas).where(and(eq(ideas.userId, userId), eq(ideas.status, 'suggested')));
-          await insertFiveIdeas(userId);
-          return { messages: [] };
-        }),
-      });
-
-      const res = await request(buildTestApp(agent, userId)).post('/api/ideas/generate');
+      const res = await request(buildTestApp(fakeAgent(), userId, { generateDrafts })).post('/api/ideas/generate');
 
       expect(res.status).toBe(200);
       expect(res.body.ideas).toHaveLength(5);
@@ -203,19 +263,13 @@ describe('createIdeasRouter POST /generate', () => {
   it('excludes a previously-rejected idea from the regenerated response, keeping a bookmarked one', async () => {
     const userId = await createTestUser();
     try {
+      const intakeRow = await upsertIntake(db, userId, intakeArgs());
       const ids = await insertFiveIdeas(userId);
       await db.update(ideas).set({ status: 'rejected' }).where(eq(ideas.id, ids[0]!));
       await db.update(ideas).set({ status: 'bookmarked' }).where(eq(ideas.id, ids[1]!));
+      const generateDrafts = fakeGenerateDrafts(intakeRow, 'New');
 
-      const agent = fakeAgent({
-        invoke: vi.fn().mockImplementation(async () => {
-          await db.delete(ideas).where(and(eq(ideas.userId, userId), eq(ideas.status, 'suggested')));
-          await insertFiveIdeas(userId);
-          return { messages: [] };
-        }),
-      });
-
-      const res = await request(buildTestApp(agent, userId)).post('/api/ideas/generate');
+      const res = await request(buildTestApp(fakeAgent(), userId, { generateDrafts })).post('/api/ideas/generate');
 
       expect(res.status).toBe(200);
       const returnedIds = res.body.ideas.map((idea: { id: string }) => idea.id);
@@ -227,15 +281,14 @@ describe('createIdeasRouter POST /generate', () => {
     }
   });
 
-  // I/O matrix: "No intake row" / "Agent doesn't call the tool" -> generic
-  // error, zero rows ever reported as success — same before/after guard as
-  // `intake.ts`'s POST /, adapted to a row-count check.
-  it('returns a generic error and reports nothing when the agent turn never persists ideas', async () => {
+  // I/O matrix: "No intake row" -> generic error, zero rows ever reported as
+  // success — `handleGenerateIdeas` throws before `generateDrafts` is ever
+  // called (same before/after guard precedent as `intake.ts`'s POST /,
+  // adapted to a row-count check).
+  it('returns a generic error and persists nothing when there is no intake row', async () => {
     const userId = await createTestUser();
     try {
-      const agent = fakeAgent({ invoke: vi.fn().mockResolvedValue({ messages: [] }) });
-
-      const res = await request(buildTestApp(agent, userId)).post('/api/ideas/generate');
+      const res = await request(buildTestApp(fakeAgent(), userId)).post('/api/ideas/generate');
 
       expect(res.status).toBe(502);
       expect(res.body).toEqual({ error: expect.any(String) });
@@ -248,22 +301,42 @@ describe('createIdeasRouter POST /generate', () => {
 
   // Story 2.7 (AC4): the button's own explicit `language` wins outright,
   // never overridden by the (unmocked, thus always-fallback-'en')
-  // discovery-thread detection.
+  // discovery-thread detection. Story 2.10: checked via the `generateDrafts`
+  // seam's own `replyLanguage` argument instead of an `agent.invoke` message.
   it('passes an explicit request-body language straight through as replyLanguage, skipping detection', async () => {
     const userId = await createTestUser();
     try {
-      const agent = fakeAgent({
-        invoke: vi.fn().mockImplementation(async () => {
-          await insertFiveIdeas(userId);
-          return { messages: [] };
-        }),
-      });
+      const intakeRow = await upsertIntake(db, userId, intakeArgs());
+      const generateDrafts = fakeGenerateDrafts(intakeRow);
 
-      await request(buildTestApp(agent, userId)).post('/api/ideas/generate').send({ language: 'de' });
+      await request(buildTestApp(fakeAgent(), userId, { generateDrafts })).post('/api/ideas/generate').send({ language: 'de' });
 
-      const [{ messages }, config] = (agent.invoke as ReturnType<typeof vi.fn>).mock.calls[0]!;
-      expect(config).toEqual({ configurable: { thread_id: `ideas-trigger:${userId}` }, signal: expect.any(AbortSignal) });
-      expect(messages[0].content).toContain('German ("de")');
+      expect(generateDrafts).toHaveBeenCalledWith(expect.objectContaining({ id: intakeRow.id }), 'de', expect.any(AbortSignal));
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+
+  // Addition 2 (fail-fast): every web_search call this round failed ->
+  // a distinct 503/`search_unavailable` response, never the generic 502 —
+  // and the pre-existing `suggested` batch is left completely untouched
+  // (no delete, no insert — `handleGenerateIdeas` throws this before its DB
+  // transaction).
+  it('returns 503 with search_unavailable and leaves existing suggested ideas completely unchanged', async () => {
+    const userId = await createTestUser();
+    try {
+      await upsertIntake(db, userId, intakeArgs());
+      const existingIds = await insertFiveIdeas(userId);
+      const existingRowsBefore = await db.select().from(ideas).where(eq(ideas.userId, userId));
+      const generateDrafts = vi.fn().mockRejectedValue(new SearchServiceUnavailableError('generate_ideas: every web_search call in this round failed'));
+
+      const res = await request(buildTestApp(fakeAgent(), userId, { generateDrafts })).post('/api/ideas/generate');
+
+      expect(res.status).toBe(503);
+      expect(res.body).toEqual({ error: 'search_unavailable' });
+      const existingRowsAfter = await db.select().from(ideas).where(eq(ideas.userId, userId));
+      expect(existingRowsAfter).toEqual(existingRowsBefore);
+      expect(existingRowsAfter.map((row) => row.id).sort()).toEqual(existingIds.sort());
     } finally {
       await cleanUp(userId);
     }

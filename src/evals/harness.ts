@@ -130,7 +130,7 @@ function captureRootRunId(): { handler: BaseCallbackHandler; getLastRunId: () =>
  * run of the fixture suite starts from a clean slate with no cross-model or
  * cross-case state leakage.
  */
-export function buildEvalAgent(modelId: string, env: Pick<Env, 'OPENROUTER_API_KEY' | 'MISTRAL_API_KEY'>): EvalAgent {
+export function buildEvalAgent(modelId: string, env: Pick<Env, 'OPENROUTER_API_KEY' | 'MISTRAL_API_KEY' | 'IDEAS_PER_BATCH'>): EvalAgent {
   const model = createChatModel(env, modelId);
   const { db, writes } = createStubDb();
   const { handler, getLastRunId } = captureRootRunId();

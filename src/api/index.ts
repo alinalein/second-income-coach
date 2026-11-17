@@ -123,7 +123,11 @@ try {
     tools: [createCreatePlanTool(db, chatModel), createGetCurrentStepTool(db)],
   });
 
-  const app = createApp({ env, db, pool, agent, ideasAgent, plansAgent });
+  // Story 2.10: the same shared `chatModel`/`webSearchTool` built above —
+  // `ideasAgent`/`plansAgent` stay constructed unchanged (still needed for
+  // `.getState`/`.updateState`), but `createApp`'s ideas/plans routes now
+  // also call `handleGenerateIdeas`/`handleCreatePlan` directly.
+  const app = createApp({ env, db, pool, agent, ideasAgent, plansAgent, chatModel, webSearchTool });
 
   const server = app.listen(env.PORT, () => {
     console.log(`[api] listening on http://localhost:${env.PORT} (${env.NODE_ENV})`);

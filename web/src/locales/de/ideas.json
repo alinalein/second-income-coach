@@ -2,8 +2,8 @@
   "title": "Deine passenden Einkommensideen",
   "explanation": "Wähle eine Idee aus, um daraus einen Plan zu machen, lehne die ab, die nicht zu dir passen, oder generiere eine neue Auswahl.",
   "loading": "Wird geladen…",
-  "empty": "Du hast noch keine Ideen — lass uns deine ersten 5 generieren.",
-  "generateButton": "Meine 5 Ideen generieren",
+  "empty": "Du hast noch keine Ideen — lass uns deine erste Runde generieren.",
+  "generateButton": "Meine Ideen generieren",
   "generateNewButton": "Neue Ideen generieren",
   "generatingButton": "Wird generiert…",
   "generatingStatus": "Deine Ideen werden generiert…",
@@ -12,6 +12,7 @@
   "error": {
     "loadFailed": "Deine Ideen konnten nicht geladen werden. Bitte lade die Seite neu.",
     "generateFailed": "Das Generieren deiner Ideen ist fehlgeschlagen oder hat zu lange gedauert. Bitte versuche es erneut.",
+    "searchUnavailable": "Der Suchdienst ist nicht verfügbar oder das Limit ist erreicht. Deine bestehenden Ideen bleiben unverändert. Bitte versuche es später erneut.",
     "statusUpdateFailed": "Das konnte nicht gespeichert werden. Bitte versuche es erneut.",
     "translateFailed": "Deine Ideen konnten nicht übersetzt werden. Sie werden weiterhin in der ursprünglichen Sprache angezeigt."
   },
