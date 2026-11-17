@@ -726,6 +726,34 @@ So that the app is pleasant to use and does not waste time or money on steps it 
 **When** done
 **Then** all existing acceptance criteria of Stories 2.1, 2.2, 2.5, 3.1 still pass unchanged, and the ones touching `agent.invoke` in the routes are updated to the direct handler calls
 
+### Story 2.11: Search Budget Guard
+
+As the app owner,
+I want web-search usage kept small and predictable,
+So that the free search credits last through development and the demo.
+
+**Acceptance Criteria:**
+
+**Given** the `web_search` tool (AD-5)
+**When** it is called
+**Then** a thin wrapper forces the cheapest search settings (basic depth, no raw page content, a small fixed number of results per search) regardless of what the nested model asks for, and the settings live in one config constant
+
+**Given** one `generate_ideas` run
+**When** it searches
+**Then** a hard cap on the number of searches per run applies (one tunable constant, default 6), the run continues with what it has once the cap is reached, and the cap hit is logged; no quality rule (Stories 2.2/2.5) is weakened to compensate
+
+**Given** an identical normalized query by the same user within a configurable window (default 24 h)
+**When** it is searched again
+**Then** the stored, already moderated result is reused; results are never shared across users, a changed intake invalidates them, and every reused result has passed moderation (AD-7/AD-11)
+
+**Given** development and tests
+**When** the environment sets the search mode to "stub"
+**Then** `web_search` returns fixed canned results with no network call and no credit use; "live" (the default in production and the demo) behaves as normal; the mode is one env variable documented in `.env.example`, validated at startup (CLAUDE.md)
+
+**Given** the guard
+**When** a live run is measured before and after
+**Then** the report shows searches per run and credits used for both, honestly
+
 ### Story 2.6: Faster Idea Generation (optional)
 
 As a user,
