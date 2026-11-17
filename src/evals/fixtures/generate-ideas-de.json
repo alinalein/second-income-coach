@@ -1,0 +1,31 @@
+{
+  "id": "generate-ideas-de",
+  "type": "deterministic",
+  "language": "de",
+  "toolUnderTest": "generate_ideas",
+  "input": [
+    {
+      "role": "human",
+      "content": "Ich habe mein Intake-Formular schon ausgefüllt — kannst du jetzt meine 5 Einkommensideen generieren?"
+    }
+  ],
+  "referenceTrajectory": [
+    { "role": "user", "content": "generate ideas request" },
+    {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+        {
+          "id": "ref-1",
+          "type": "function",
+          "function": {
+            "name": "generate_ideas",
+            "arguments": "{\"replyLanguage\":\"de\"}"
+          }
+        }
+      ]
+    },
+    { "role": "tool", "tool_call_id": "ref-1", "content": "" },
+    { "role": "assistant", "content": "Hier sind deine 5 Einkommensideen." }
+  ]
+}

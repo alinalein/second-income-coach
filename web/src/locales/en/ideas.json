@@ -9,7 +9,18 @@
   "generatingHint": "This can take up to a minute.",
   "error": {
     "loadFailed": "We couldn't load your ideas. Please reload the page.",
-    "generateFailed": "Generating your ideas failed or timed out. Please try again."
+    "generateFailed": "Generating your ideas failed or timed out. Please try again.",
+    "statusUpdateFailed": "That didn't save. Please try again."
+  },
+  "status": {
+    "selected": "selected",
+    "bookmarked": "bookmarked",
+    "rejected": "rejected"
+  },
+  "actions": {
+    "select": "Select",
+    "bookmark": "Bookmark",
+    "reject": "Reject"
   },
   "card": {
     "weeklyTimeLabel": "Weekly time",
@@ -17,7 +28,9 @@
     "riskLevelLabel": "Risk level",
     "baselineRateLabel": "Baseline rate",
     "monthlyPotentialLabel": "Max. potential per month (at full time budget)",
-    "estimateBadge": "estimate",
+    "monthlyPotentialSubLabel": "",
+    "estimateBadge": "(est.)",
+    "estimateBadgeFull": "estimate",
     "vendorSourceLabel": "source: tool vendor",
     "unverifiedLabel": "unverified",
     "demandEvidenceLabel": "Current demand",
@@ -32,6 +45,14 @@
       "hour": "per hour",
       "project": "per project",
       "month": "per month"
+    },
+    "citedFieldsSummary": "Based on {{count}} of your inputs",
+    "detailsToggle": "Details",
+    "detailsToggleAriaLabel": "Details – {{title}}",
+    "rateUnitSuffix": {
+      "hour": "/h",
+      "project": "/project",
+      "month": "/mo"
     },
     "sourceTrustTier": {
       "tier_1": "official statistics",

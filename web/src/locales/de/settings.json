@@ -1,6 +1,5 @@
 {
   "title": "Einstellungen",
-  "description": "Lege fest, wie der Coach mit dir spricht und welches Modell antwortet.",
   "personality": {
     "label": "Persönlichkeit",
     "options": {
@@ -24,6 +23,13 @@
     "options": {
       "English": "English",
       "German": "Deutsch"
+    }
+  },
+  "currency": {
+    "label": "Währung",
+    "options": {
+      "EUR": "Euro (EUR)",
+      "USD": "US-Dollar (USD)"
     }
   },
   "saved": "Gespeichert.",

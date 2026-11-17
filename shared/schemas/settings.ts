@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { currencyCodeSchema, type CurrencyCode } from '../money.js';
 
 /**
  * Story 5.1 / AD-20: the one shared definition of the personality enum
@@ -59,11 +60,28 @@ export const UI_LANGUAGE_TO_I18N_CODE: Record<UiLanguage, 'en' | 'de'> = {
   German: 'de',
 };
 
+/**
+ * Story 5.5 / AD-27: the `user_settings.currency` column's own default
+ * (Story 1.2) — `set_currency` defaults to EUR.
+ */
+export const DEFAULT_CURRENCY: CurrencyCode = 'EUR';
+
+/**
+ * AC: "a first-time visit with no stored preference -> defaults to EUR",
+ * same resolution principle as `resolveUiLanguage`/`resolvePersonality`,
+ * applied to whatever `user_settings.currency` currently holds.
+ */
+export function resolveCurrency(value: string | null | undefined): CurrencyCode {
+  const result = currencyCodeSchema.safeParse(value);
+  return result.success ? result.data : DEFAULT_CURRENCY;
+}
+
 export const settingsResponseSchema = z.object({
   personality: personalitySchema,
   model: z.string().min(1),
   selectableModels: z.array(selectableModelSchema),
   uiLanguage: uiLanguageSchema,
+  currency: currencyCodeSchema,
 });
 
 export type SettingsResponse = z.infer<typeof settingsResponseSchema>;
@@ -85,3 +103,9 @@ export const setUiLanguageRequestSchema = z.object({
 });
 
 export type SetUiLanguageRequest = z.infer<typeof setUiLanguageRequestSchema>;
+
+export const setCurrencyRequestSchema = z.object({
+  currency: currencyCodeSchema,
+});
+
+export type SetCurrencyRequest = z.infer<typeof setCurrencyRequestSchema>;

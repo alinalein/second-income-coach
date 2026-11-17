@@ -1,6 +1,5 @@
 {
   "title": "Settings",
-  "description": "Choose how the coach talks to you and which model answers.",
   "personality": {
     "label": "Personality",
     "options": {
@@ -24,6 +23,13 @@
     "options": {
       "English": "English",
       "German": "Deutsch"
+    }
+  },
+  "currency": {
+    "label": "Currency",
+    "options": {
+      "EUR": "Euro (EUR)",
+      "USD": "US Dollar (USD)"
     }
   },
   "saved": "Saved.",

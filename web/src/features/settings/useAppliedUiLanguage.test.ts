@@ -17,7 +17,7 @@ describe('useAppliedUiLanguage (AC: stored language applied on load)', () => {
       'fetch',
       vi.fn().mockResolvedValue(
         new Response(
-          JSON.stringify({ personality: 'friendly', model: 'openai/gpt-6-luna', selectableModels: [], uiLanguage: 'German' }),
+          JSON.stringify({ personality: 'friendly', model: 'openai/gpt-6-luna', selectableModels: [], uiLanguage: 'German', currency: 'EUR' }),
           { status: 200 },
         ),
       ),

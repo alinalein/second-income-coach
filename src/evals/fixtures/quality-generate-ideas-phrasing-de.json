@@ -1,0 +1,12 @@
+{
+  "id": "quality-generate-ideas-phrasing-de",
+  "type": "quality",
+  "language": "de",
+  "toolUnderTest": "generate_ideas",
+  "input": [
+    {
+      "role": "human",
+      "content": "Also ich hab dieses Formular ja vorhin ausgefüllt, was könnte ich denn jetzt konkret nebenbei machen, um etwas dazuzuverdienen, basierend auf dem was ich dir erzählt hab?"
+    }
+  ]
+}

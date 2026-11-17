@@ -1,0 +1,31 @@
+{
+  "id": "submit-intake-life-disruption-de",
+  "type": "deterministic",
+  "language": "de",
+  "toolUnderTest": "submit_intake",
+  "input": [
+    {
+      "role": "human",
+      "content": "Hier sind meine Angaben: Fähigkeiten/Interessen: 'Nachhilfe in Mathematik geben.' Verfügbare Zeit pro Woche: 20 Stunden oder mehr. Startbudget: 2000 Euro oder mehr. Risikobereitschaft: mittel. Was mich bisher aufgehalten hat: 'Ich hatte das schon mal aufgebaut, aber dann kam ein Umzug und ein Jobwechsel dazwischen und ich musste komplett aufhören.' Bitte trag das für mich ein."
+    }
+  ],
+  "referenceTrajectory": [
+    { "role": "user", "content": "intake answers" },
+    {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+        {
+          "id": "ref-1",
+          "type": "function",
+          "function": {
+            "name": "submit_intake",
+            "arguments": "{\"skillsInterests\":\"Nachhilfe in Mathematik geben.\",\"weeklyTimeAvailability\":\"20h_plus\",\"startingBudgetRange\":\"2000_plus\",\"riskTolerance\":\"medium\",\"stoppedBeforeText\":\"Ich hatte das schon mal aufgebaut, aber dann kam ein Umzug und ein Jobwechsel dazwischen und ich musste komplett aufhören.\",\"failurePattern\":\"life_disruption\"}"
+          }
+        }
+      ]
+    },
+    { "role": "tool", "tool_call_id": "ref-1", "content": "" },
+    { "role": "assistant", "content": "Danke, ich habe deine Angaben gespeichert." }
+  ]
+}

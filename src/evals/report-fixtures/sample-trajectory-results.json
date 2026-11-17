@@ -1,0 +1,70 @@
+{
+  "generatedAt": "2026-11-15T09:30:00.000Z",
+  "trajectoryAccuracyTarget": 0.8,
+  "perModelAccuracy": [
+    { "modelId": "openai/gpt-6-luna", "deterministicCaseCount": 13, "passedCaseCount": 12, "accuracy": 0.923, "meetsTarget": true },
+    { "modelId": "google/gemini-3.8-flash", "deterministicCaseCount": 13, "passedCaseCount": 7, "accuracy": 0.538, "meetsTarget": false },
+    { "modelId": "anthropic/claude-haiku-4.5", "deterministicCaseCount": 13, "passedCaseCount": 13, "accuracy": 1, "meetsTarget": true },
+    { "modelId": "anthropic/claude-sonnet-5.5", "deterministicCaseCount": 13, "passedCaseCount": 10, "accuracy": 0.769, "meetsTarget": false }
+  ],
+  "rows": [
+    { "modelId": "openai/gpt-6-luna", "caseId": "submit-intake-overwhelm-en", "caseType": "deterministic", "language": "en", "toolUnderTest": "submit_intake", "score": true, "langsmithProject": "second-income-coach-evals", "langsmithRunId": "run-1" },
+    { "modelId": "google/gemini-3.8-flash", "caseId": "submit-intake-overwhelm-en", "caseType": "deterministic", "language": "en", "toolUnderTest": "submit_intake", "score": false, "comment": "wrong failurePattern arg", "langsmithProject": "second-income-coach-evals", "langsmithRunId": "run-2" },
+    { "modelId": "anthropic/claude-sonnet-5.5", "caseId": "generate-ideas-en", "caseType": "deterministic", "language": "en", "toolUnderTest": "generate_ideas", "score": true, "langsmithProject": "second-income-coach-evals", "langsmithRunId": "run-3" },
+    {
+      "modelId": "openai/gpt-6-luna",
+      "caseId": "quality-ambiguous-intake-en",
+      "caseType": "quality",
+      "language": "en",
+      "toolUnderTest": "submit_intake",
+      "judgeId": "google/gemini-3.8-flash",
+      "score": 0.9,
+      "comment": "correctly inferred the failure pattern from ambiguous phrasing",
+      "langsmithProject": "second-income-coach-evals",
+      "langsmithRunId": "run-4"
+    },
+    {
+      "modelId": "openai/gpt-6-luna",
+      "caseId": "quality-ambiguous-intake-en",
+      "caseType": "quality",
+      "language": "en",
+      "toolUnderTest": "submit_intake",
+      "judgeId": "deepseek/deepseek-v4.1-flash",
+      "score": 0.8,
+      "comment": "reasonable inference, slightly less confident",
+      "langsmithProject": "second-income-coach-evals",
+      "langsmithRunId": "run-4"
+    },
+    {
+      "modelId": "google/gemini-3.8-flash",
+      "caseId": "quality-generate-ideas-phrasing-en",
+      "caseType": "quality",
+      "language": "en",
+      "toolUnderTest": "generate_ideas",
+      "judgeId": "google/gemini-3.8-flash",
+      "score": null,
+      "error": "judge call failed: 429 rate limited",
+      "langsmithRunId": "run-5"
+    },
+    {
+      "modelId": "google/gemini-3.8-flash",
+      "caseId": "quality-generate-ideas-phrasing-en",
+      "caseType": "quality",
+      "language": "en",
+      "toolUnderTest": "generate_ideas",
+      "judgeId": "deepseek/deepseek-v4.1-flash",
+      "score": 0.7,
+      "comment": "plausible but generic phrasing",
+      "langsmithProject": "second-income-coach-evals",
+      "langsmithRunId": "run-5"
+    }
+  ],
+  "modelCallUsages": [
+    { "modelId": "openai/gpt-6-luna", "caseId": "submit-intake-overwhelm-en", "inputTokens": 820, "outputTokens": 95, "complete": true },
+    { "modelId": "openai/gpt-6-luna", "caseId": "quality-ambiguous-intake-en", "inputTokens": 1100, "outputTokens": 140, "complete": true },
+    { "modelId": "google/gemini-3.8-flash", "caseId": "submit-intake-overwhelm-en", "inputTokens": 790, "outputTokens": 60, "complete": true },
+    { "modelId": "google/gemini-3.8-flash", "caseId": "quality-generate-ideas-phrasing-en", "inputTokens": 1050, "outputTokens": 180, "complete": true },
+    { "modelId": "anthropic/claude-haiku-4.5", "caseId": "submit-intake-overwhelm-en", "inputTokens": 805, "outputTokens": 70, "complete": true },
+    { "modelId": "anthropic/claude-sonnet-5.5", "caseId": "generate-ideas-en", "inputTokens": 900, "outputTokens": 110, "complete": true }
+  ]
+}
