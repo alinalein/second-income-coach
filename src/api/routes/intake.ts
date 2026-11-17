@@ -51,6 +51,7 @@ function buildIntakeAgentMessage(data: SubmitIntakeRequest): string {
     `weeklyTimeAvailability: ${data.weeklyTimeAvailability}`,
     `startingBudgetRange: ${data.startingBudgetRange}`,
     `riskTolerance: ${data.riskTolerance}`,
+    `country: ${data.country}`,
     `What has stopped me before: ${delimited(data.stoppedBeforeText)}`,
   ].join('\n');
 }

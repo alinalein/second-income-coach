@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { countryCodeSchema } from '../region.js';
 
 /**
  * Story 2.1: the structured intake form. `failurePattern` is deliberately
@@ -53,6 +54,7 @@ export const submitIntakeRequestSchema = z.object({
   startingBudgetRange: startingBudgetRangeSchema,
   riskTolerance: riskToleranceSchema,
   stoppedBeforeText: intakeFreeText,
+  country: countryCodeSchema,
 });
 
 export type SubmitIntakeRequest = z.infer<typeof submitIntakeRequestSchema>;

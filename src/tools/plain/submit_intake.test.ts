@@ -7,6 +7,7 @@ import { users, intake } from '../../db/schema/index.js';
 import { buildDiscoveryThreadId, buildIntakeTriggerThreadId } from '../../agent/index.js';
 import {
   deriveUserIdFromThreadId,
+  getIntakeByUserId,
   handleSubmitIntake,
   upsertIntake,
   type SubmitIntakeToolRunConfig,
@@ -19,6 +20,7 @@ function intakeArgs(overrides: Partial<SubmitIntakeToolArgs> = {}): SubmitIntake
     startingBudgetRange: 'under_100',
     riskTolerance: 'low',
     stoppedBeforeText: 'I got overwhelmed trying to do everything at once.',
+    country: 'DE',
     failurePattern: 'overwhelm',
     ...overrides,
   };
@@ -110,6 +112,33 @@ describe('upsertIntake (integration, real Postgres)', () => {
 
       const rows = await db.select().from(intake).where(eq(intake.userId, userId));
       expect(rows).toHaveLength(1);
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+
+  // Story 2.5 (narrowed post-handoff, user-directed): `country` dropped
+  // `CH`/`GB` after this story had already shipped — the column is plain
+  // `text()` with no DB-level check constraint, so an old row can still
+  // hold one. `getIntakeByUserId` must normalize it to `'other'`, never
+  // throw (which would 503 `GET /api/intake` for that user forever).
+  it('reads a legacy row whose stored country is no longer a valid option as "other", without throwing', async () => {
+    const googleId = `test-${randomUUID()}`;
+    const [user] = await db
+      .insert(users)
+      .values({ googleId, email: `${googleId}@example.com`, name: 'Test User', picture: null })
+      .returning();
+    const userId = user!.id;
+
+    try {
+      await upsertIntake(db, userId, intakeArgs());
+      // Simulate a legacy row: bypass the Zod schema entirely, writing a raw
+      // value the enum no longer accepts (same as a real pre-narrowing row).
+      await db.update(intake).set({ country: 'CH' }).where(eq(intake.userId, userId));
+
+      const record = await getIntakeByUserId(db, userId);
+
+      expect(record?.country).toBe('other');
     } finally {
       await cleanUp(userId);
     }

@@ -6,7 +6,7 @@
   "generateNewButton": "Generate new ideas",
   "generatingButton": "Generating…",
   "generatingStatus": "Generating your ideas…",
-  "generatingHint": "This can take a few seconds.",
+  "generatingHint": "This can take up to a minute.",
   "error": {
     "loadFailed": "We couldn't load your ideas. Please reload the page.",
     "generateFailed": "Generating your ideas failed or timed out. Please try again.",
@@ -34,6 +34,19 @@
     "estimateBadgeFull": "estimate",
     "vendorSourceLabel": "source: tool vendor",
     "unverifiedLabel": "unverified",
+    "demandEvidenceLabel": "Current demand",
+    "growthPathLabel": "How this can grow",
+    "foreignSourceLabel": "{{region}} data",
+    "region": {
+      "DE": "German",
+      "AT": "Austrian",
+      "US": "US"
+    },
+    "rateUnit": {
+      "hour": "per hour",
+      "project": "per project",
+      "month": "per month"
+    },
     "citedFieldsSummary": "Based on {{count}} of your inputs",
     "detailsToggle": "Details",
     "detailsToggleAriaLabel": "Details – {{title}}",
@@ -41,12 +54,6 @@
       "hour": "/h",
       "project": "/project",
       "month": "/mo"
-    },
-    "sourceTrustTier": {
-      "tier_1": "official statistics",
-      "tier_2": "pay-data provider",
-      "tier_3": "independent source",
-      "tier_4": "unverified source"
     }
   },
   "weeklyTimeAvailability": {

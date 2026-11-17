@@ -14,6 +14,7 @@ import {
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '../../components/ui/card';
+import { IdeaEvidence, foreignSourceRegion, useViewerCountry, hasDemandEvidence } from './IdeaEvidence';
 
 /**
  * Story 2.2 follow-up fix round 2, fix 2 (amended round 4, fix 4d): "potential
@@ -57,8 +58,14 @@ function computeMonthlyPotential(idea: IdeaResponse): Money | undefined {
  * request the server would have finished. Round 8 (bug fix, found live):
  * raised alongside the server's own 90s->170s recalibration (see that
  * constant's doc comment — post-quality-fixes generation legitimately takes
- * longer than originally measured). */
-const GENERATE_TIMEOUT_MS = 190_000;
+ * longer than originally measured).
+ *
+ * Story 2.5 (bug fix, found live by the user, user-approved — numeric
+ * constant only, no layout/button/status code touched, per this story's own
+ * scope boundary on this file): raised alongside the server's own
+ * 170s->230s recalibration (`src/agent/resilience.ts`'s
+ * `IDEAS_MODEL_NODE_TIMEOUT_MS` doc comment has the measured evidence). */
+const GENERATE_TIMEOUT_MS = 250_000;
 
 /** Round 13 (user-requested): `'load-error'`/`'generate-error'` replace the
  * old single `'error'` phase, which picked its message from `ideas.length`
@@ -179,8 +186,16 @@ const LOCALE_BY_LANGUAGE: Record<string, string> = { en: 'en-US', de: 'de-DE' };
  * claims "almost done" past that point without actually knowing), and the
  * caller forces it to 100% the instant the request settles (success or
  * failure).
+ *
+ * Story 2.5 (bug fix, found live by the user, user-approved — numeric
+ * constant only): the extra required search per idea pushed real attempts
+ * well past this old pacing figure (one live attempt measured ~74s before
+ * even being rejected on an unrelated check). Scaled proportionally with
+ * `DRAFT_ATTEMPT_TIMEOUT_MS`'s own 75s->110s raise (56s * 110/75 ≈ 82s,
+ * rounded) — an estimate, not a fresh measurement of a clean successful
+ * run, since none was available in this environment.
  */
-const TYPICAL_GENERATE_DURATION_MS = 56_000;
+const TYPICAL_GENERATE_DURATION_MS = 82_000;
 const PROGRESS_HOLD_PERCENT = 90;
 const PROGRESS_TICK_MS = 300;
 
@@ -222,16 +237,16 @@ function AmountWithEstimateBadge({
   estimateLabelFull: string;
 }) {
   return (
-    <span className="flex items-center gap-2">
+    <span className="flex items-center gap-1">
       {formatMoney(money, locale)}
-      {/* Review fix: the visible text is a short "(est.)"/"(ca.)" so this
-       * row doesn't wrap onto its own line next to a money value in a
-       * narrow card — but a screen reader shouldn't be left spelling that
-       * out letter by letter, so `aria-label` carries the full word. */}
+      {/* User-requested follow-up: plain muted text, not a bordered pill —
+       * "(est.)"/"(ca.)" is short enough to read as part of the amount
+       * itself rather than a separate chip with its own visual weight.
+       * `aria-label` still carries the full word for screen readers. */}
       {money.isEstimate ? (
-        <Badge variant="muted" aria-label={estimateLabelFull}>
+        <span className="text-xs text-muted-foreground" aria-label={estimateLabelFull}>
           {estimateLabel}
-        </Badge>
+        </span>
       ) : null}
     </span>
   );
@@ -271,18 +286,18 @@ function BaselineRateDisplay({
   const suffix = t(`card.rateUnitSuffix.${idea.rateUnit}`);
 
   return (
-    <span className="flex flex-wrap items-center justify-end gap-2 text-right">
+    <span className="flex flex-wrap items-center justify-end gap-1 text-right">
       <span>
         {idea.isVendorSource
           ? `${formatMoney(low, locale)}–${formatMoney(high, locale)}${suffix}`
           : `${formatMoney(low, locale)}${suffix}`}
       </span>
-      {/* Review fix: same short-badge/full-word-for-AT split as
-       * `AmountWithEstimateBadge` above. */}
+      {/* User-requested follow-up: plain muted text, not a bordered pill —
+       * same treatment as `AmountWithEstimateBadge` above. */}
       {isEstimate ? (
-        <Badge variant="muted" aria-label={estimateLabelFull}>
+        <span className="text-xs text-muted-foreground" aria-label={estimateLabelFull}>
           {estimateLabel}
-        </Badge>
+        </span>
       ) : null}
       {idea.isVendorSource ? <Badge variant="outline">{vendorSourceLabel}</Badge> : null}
     </span>
@@ -437,6 +452,11 @@ function IdeaCard({
   // `aria-controls`, same pattern a native disclosure widget uses.
   const [detailsOpen, setDetailsOpen] = React.useState(false);
   const detailsPanelId = React.useId();
+  // User-requested follow-up (compact citation line): fetched once per
+  // card, shared with both this line and `IdeaEvidence`'s own demand-
+  // evidence line below — not two separate `/api/intake` fetches.
+  const viewerCountry = useViewerCountry();
+  const baselineRegion = foreignSourceRegion(idea.baselineRateCitation, viewerCountry);
 
   return (
     <Card className="grid grid-cols-1 row-span-5 gap-4 p-4 [grid-template-rows:subgrid]">
@@ -525,12 +545,14 @@ function IdeaCard({
             </span>
             {/* Always labeled "estimate" — this figure is an estimate by its
              * nature (a maximum-at-full-time-use projection), not only when
-             * a currency conversion happens to occur. */}
-            <span className="flex items-center gap-2">
+             * a currency conversion happens to occur. User-requested
+             * follow-up: plain muted text, not a bordered pill — same
+             * treatment as `AmountWithEstimateBadge`/`BaselineRateDisplay`. */}
+            <span className="flex items-center gap-1">
               {formatMoney(monthlyPotentialConverted, locale)}
-              <Badge variant="muted" aria-label={estimateLabelFull}>
+              <span className="text-xs text-muted-foreground" aria-label={estimateLabelFull}>
                 {estimateLabel}
-              </Badge>
+              </span>
             </span>
           </div>
         ) : null}
@@ -550,10 +572,13 @@ function IdeaCard({
        * required and verified (AD-4's quote-matches-search-results check),
        * just not displayed. */}
       <div className="flex flex-col gap-2">
+        {/* User-requested follow-up: the always-visible row now teases
+         * "Aktuelle Nachfrage" instead of the cited-fields count (moved
+         * inside the panel, directly above the chips it summarizes) — only
+         * when this idea actually has demand evidence; otherwise the row
+         * holds just the toggle, same as an idea predating this story. */}
         <div className="flex items-center justify-between gap-2">
-          <span className="text-xs text-muted-foreground">
-            {t('card.citedFieldsSummary', { count: idea.citedIntakeFields.length })}
-          </span>
+          {hasDemandEvidence(idea) ? <span className="text-xs text-muted-foreground">{t('card.demandEvidenceLabel')}</span> : <span />}
           <Button
             type="button"
             variant="ghost"
@@ -585,7 +610,18 @@ function IdeaCard({
          * progress block below. `hidden` also removes it from the
          * accessibility tree, which is what makes the closed-by-default
          * tests below able to assert its content isn't reachable. */}
-        <div id={detailsPanelId} hidden={!detailsOpen} className="flex flex-col gap-2">
+        {/* User-requested follow-up: a little more breathing room between
+         * the panel's sections (demand/growth, cited-fields summary +
+         * chips, citation line) than the original `gap-2` — `gap-4` was
+         * tried and was too much. */}
+        <div id={detailsPanelId} hidden={!detailsOpen} className="flex flex-col gap-3">
+          {/* User-requested follow-up: demand evidence + growth path lead
+           * the panel, ahead of the cited-fields chips and the baseline-
+           * rate citation line below. */}
+          <IdeaEvidence idea={idea} viewerCountry={viewerCountry} />
+          <span className="text-xs text-muted-foreground">
+            {t('card.citedFieldsSummary', { count: idea.citedIntakeFields.length })}
+          </span>
           <div className="flex flex-wrap gap-2">
             {idea.citedIntakeFields.map((field) => (
               <Badge key={field} variant="outline">
@@ -593,18 +629,23 @@ function IdeaCard({
               </Badge>
             ))}
           </div>
-          {/* Layout fix: the trust-tier label sits on the left, before the
-           * citation it describes, and renders as plain muted text — same
-           * weight as `Citation`'s own link — instead of a bordered pill;
-           * "unverified" (kept, a trust-tier requirement) follows the same
-           * plain-text treatment. Review fix: separators are plain ", "
-           * text, not a decorative `aria-hidden` dot — a non-URL citation
-           * renders as plain text too (see `Citation`), and a screen
-           * reader reading 3 adjacent spans straight through needs an
-           * actual announced boundary between them, not just a visual one. */}
+          {/* User-requested follow-up: one compact line (citation, then the
+           * source-region label if the source is foreign, then "unverified"
+           * if applicable) — the trust-tier phrase ("Gehaltsdaten-
+           * Anbieter"/"pay-data provider") that used to lead this line is
+           * dropped (the tier *mechanism* is unaffected server-side; this
+           * is display-only, same category of change as round 11's quote
+           * removal) and the region label (previously its own separate
+           * line via `IdeaEvidence`) now lives here instead, right next to
+           * the citation it actually describes. Review fix: separators are
+           * plain ", " text, not a decorative `aria-hidden` dot — a
+           * non-URL citation renders as plain text too (see `Citation`),
+           * and a screen reader reading the adjacent spans straight
+           * through needs an actual announced boundary, not just a visual
+           * one. */}
           <div className="flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
-            <span>{t(`card.sourceTrustTier.${idea.sourceTrustTier}`)},</span>
             <Citation citation={idea.baselineRateCitation} />
+            {baselineRegion ? <span>, {t('card.foreignSourceLabel', { region: t(`card.region.${baselineRegion}`) })}</span> : null}
             {idea.isRateUnverified ? <span>, {t('card.unverifiedLabel')}</span> : null}
           </div>
         </div>

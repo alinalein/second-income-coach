@@ -36,6 +36,13 @@
       "when": 1794923770115,
       "tag": "0004_long_the_initiative",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1794925492048,
+      "tag": "0005_simple_molecule_man",
+      "breakpoints": true
     }
   ]
 }

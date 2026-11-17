@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, cleanup, fireEvent, within, waitFor } from '@testing-library/react';
-import { convertMoney, formatMoney, EUR_USD_RATE, type IdeaResponse } from '@app/shared';
+import { convertMoney, formatMoney, EUR_USD_RATE, type IdeaResponse, type IntakeResponse, type CountryCode } from '@app/shared';
 import { IdeasPanel } from './IdeasPanel';
 import i18n from '../../i18n';
 
@@ -34,9 +34,41 @@ function fakeIdea(): IdeaResponse {
     baselineRateQuote: 'Workers in this field earn $30.00 an hour on average.',
     sourceTrustTier: 'tier_3',
     isRateUnverified: false,
+    demandEvidenceNote: null,
+    demandEvidenceCitation: null,
+    demandEvidenceQuote: null,
+    isDemandEvidenceUnverified: false,
+    growthPath: null,
     createdAt: now,
     updatedAt: now,
   };
+}
+
+/** Story 2.5: `IdeaEvidence` (mounted inside `IdeaCard`) fetches `GET
+ * /api/intake` itself for the viewer's country — every existing
+ * `IdeasPanel` test must mock it too, or `mockFetch`'s own "Unmocked fetch"
+ * guard throws. `{ intake: null }` is enough for these pre-existing tests,
+ * none of which are about country/region labeling. */
+const INTAKE_NULL_RESPONSE = { '/api/intake': () => new Response(JSON.stringify({ intake: null }), { status: 200 }) };
+
+function fakeIntake(country: CountryCode): IntakeResponse {
+  const now = new Date().toISOString();
+  return {
+    id: 'intake-1',
+    skillsInterests: 'Woodworking, basic bookkeeping',
+    weeklyTimeAvailability: '5_to_10h',
+    startingBudgetRange: 'under_100',
+    riskTolerance: 'low',
+    stoppedBeforeText: 'I got overwhelmed trying to do everything at once.',
+    country,
+    failurePattern: 'overwhelm',
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function intakeResponse(country: CountryCode) {
+  return { '/api/intake': () => new Response(JSON.stringify({ intake: fakeIntake(country) }), { status: 200 }) };
 }
 
 afterEach(() => {
@@ -55,7 +87,7 @@ describe('IdeasPanel (regression: startupCost/baselineRate rendered under the co
     const idea = fakeIdea();
     vi.stubGlobal(
       'fetch',
-      mockFetch({
+      mockFetch({ ...INTAKE_NULL_RESPONSE,
         '/api/ideas': () => new Response(JSON.stringify({ ideas: [idea], currency: 'EUR' }), { status: 200 }),
       }),
     );
@@ -98,18 +130,20 @@ describe('IdeasPanel (regression: startupCost/baselineRate rendered under the co
     // never render as the literal, untranslated key path.
     expect(monthlyPotentialRow).not.toHaveTextContent('card.monthlyPotentialSubLabel');
 
-    // Layout fix (progressive disclosure): always-visible summary of how
-    // many intake answers shaped this idea (replaces the old always-visible
-    // chip row), and the citation/source-trust tier collapsed under the
-    // "Details" toggle, closed by default — not reachable via role until
-    // opened (review fix: this is asserted, not just assumed).
-    expect(await screen.findByText('Based on 3 of your inputs')).toBeInTheDocument();
+    // User-requested follow-up: the cited-fields summary moved from the
+    // always-visible row into the collapsed panel itself (above the
+    // chips), alongside the citation/source-trust tier — closed by default.
+    // It's present in the DOM (`hidden`, not unmounted — `getByText` alone
+    // doesn't respect that attribute, `toBeVisible()` does) but not visible
+    // until the toggle opens.
+    expect(await screen.findByText('Based on 3 of your inputs')).not.toBeVisible();
     expect(screen.queryByRole('link', { name: 'example.com' })).not.toBeInTheDocument();
     // Review fix: the toggle's accessible name carries the idea's own title
     // (`aria-label`, not just the visible "Details" text) so every card's
     // toggle isn't indistinguishable from its siblings — assert the exact
     // name, not a loose match that the old shared name would also satisfy.
     fireEvent.click(await screen.findByRole('button', { name: `Details – ${idea.title}` }));
+    expect(screen.getByText('Based on 3 of your inputs')).toBeVisible();
 
     // Story 2.2 follow-up fix round 3, fix 2a: a URL citation renders as a
     // link — visible text is just the hostname, href/title carry the full
@@ -120,14 +154,14 @@ describe('IdeasPanel (regression: startupCost/baselineRate rendered under the co
     expect(citationLink).toHaveAttribute('target', '_blank');
     expect(citationLink).toHaveAttribute('rel', 'noopener noreferrer');
 
-    // Story 2.2 follow-up fix round 6, fix 6: the source-trust tier label
-    // renders directly on the card, next to the citation (behind the
-    // Details toggle opened above). Layout fix: plain text now, with a
-    // trailing "," separator in the same text node, hence the regex. Round
-    // 11 (user-requested removal): the quoted evidence sentence no longer
-    // renders on the card at all.
-    expect(await screen.findByText(/independent source/)).toBeInTheDocument();
+    // Round 11 (user-requested removal): the quoted evidence sentence no
+    // longer renders on the card at all. User-requested follow-up (compact
+    // citation line): the source-trust tier *phrase* ("independent
+    // source"/"pay-data provider") no longer renders either — only the
+    // citation, an optional region label, and "unverified" share that one
+    // line now (the tier mechanism itself is unaffected server-side).
     expect(screen.queryByText(`“${idea.baselineRateQuote}”`)).not.toBeInTheDocument();
+    expect(screen.queryByText('independent source')).not.toBeInTheDocument();
     expect(screen.queryByText('unverified')).not.toBeInTheDocument();
 
     // Review fix: the cited-intake chips (now behind the same toggle) still
@@ -164,7 +198,7 @@ describe('IdeasPanel (vendor-sourced range + non-hourly rate)', () => {
     };
     vi.stubGlobal(
       'fetch',
-      mockFetch({
+      mockFetch({ ...INTAKE_NULL_RESPONSE,
         '/api/ideas': () => new Response(JSON.stringify({ ideas: [idea], currency: 'EUR' }), { status: 200 }),
       }),
     );
@@ -185,14 +219,16 @@ describe('IdeasPanel (vendor-sourced range + non-hourly rate)', () => {
     expect(screen.queryByRole('link', { name: 'example.com' })).not.toBeInTheDocument();
     fireEvent.click(await screen.findByRole('button', { name: `Details – ${idea.title}` }));
 
-    // Story 2.2 follow-up fix round 6, fix 6: tier 1 still renders its own
-    // label, and a tier-3-without-corroboration idea's "unverified" text
-    // shows even when `isVendorSource` is also true — independent flags.
-    // Layout fix: "unverified" is now plain muted text next to its source
-    // (not a separate pill badge), sharing a text node with a "," separator
-    // — hence the regexes.
-    expect(await screen.findByText(/official statistics/)).toBeInTheDocument();
-    expect(screen.getByText(/unverified/)).toBeInTheDocument();
+    // Story 2.2 follow-up fix round 6, fix 6: an unverified idea's
+    // "unverified" text shows even when `isVendorSource` is also true —
+    // independent flags. Layout fix: "unverified" is plain muted text next
+    // to its source, sharing a text node with a "," separator — hence the
+    // regex. User-requested follow-up (compact citation line): the
+    // source-trust tier *phrase* ("official statistics") no longer renders
+    // on this line at all (the tier mechanism itself is unaffected
+    // server-side).
+    expect(await screen.findByText(/unverified/)).toBeInTheDocument();
+    expect(screen.queryByText('official statistics')).not.toBeInTheDocument();
   });
 });
 
@@ -206,7 +242,7 @@ describe('IdeasPanel (round 13: a failed regenerate shows the generate-failure m
     const idea = fakeIdea();
     vi.stubGlobal(
       'fetch',
-      mockFetch({
+      mockFetch({ ...INTAKE_NULL_RESPONSE,
         '/api/ideas/generate': () => new Response(JSON.stringify({ error: 'Ideas could not be generated' }), { status: 502 }),
         '/api/ideas': () => new Response(JSON.stringify({ ideas: [idea], currency: 'EUR' }), { status: 200 }),
       }),
@@ -229,7 +265,7 @@ describe('IdeasPanel (round 13: a failed regenerate shows the generate-failure m
     // here, not before the click.
     const statusRegion = screen.getByRole('status');
     expect(statusRegion).toHaveTextContent('Generating your ideas…');
-    expect(statusRegion).toHaveTextContent('This can take a few seconds.');
+    expect(statusRegion).toHaveTextContent('This can take up to a minute.');
     expect(within(statusRegion).getByRole('progressbar')).toBeInTheDocument();
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Generating your ideas failed or timed out. Please try again.');
@@ -252,7 +288,7 @@ describe('IdeasPanel (AC2: status badge + action buttons on the card)', () => {
     const idea: IdeaResponse = { ...fakeIdea(), status };
     vi.stubGlobal(
       'fetch',
-      mockFetch({ '/api/ideas': () => new Response(JSON.stringify({ ideas: [idea], currency: 'EUR' }), { status: 200 }) }),
+      mockFetch({ ...INTAKE_NULL_RESPONSE, '/api/ideas': () => new Response(JSON.stringify({ ideas: [idea], currency: 'EUR' }), { status: 200 }) }),
     );
 
     render(<IdeasPanel />);
@@ -284,7 +320,7 @@ describe('IdeasPanel (Story 3.1: View plan action)', () => {
     const idea: IdeaResponse = { ...fakeIdea(), status };
     vi.stubGlobal(
       'fetch',
-      mockFetch({ '/api/ideas': () => new Response(JSON.stringify({ ideas: [idea], currency: 'EUR' }), { status: 200 }) }),
+      mockFetch({ ...INTAKE_NULL_RESPONSE, '/api/ideas': () => new Response(JSON.stringify({ ideas: [idea], currency: 'EUR' }), { status: 200 }) }),
     );
     const onViewPlan = vi.fn();
 
@@ -300,7 +336,7 @@ describe('IdeasPanel (Story 3.1: View plan action)', () => {
     const idea: IdeaResponse = { ...fakeIdea(), status: 'suggested' };
     vi.stubGlobal(
       'fetch',
-      mockFetch({ '/api/ideas': () => new Response(JSON.stringify({ ideas: [idea], currency: 'EUR' }), { status: 200 }) }),
+      mockFetch({ ...INTAKE_NULL_RESPONSE, '/api/ideas': () => new Response(JSON.stringify({ ideas: [idea], currency: 'EUR' }), { status: 200 }) }),
     );
 
     render(<IdeasPanel onViewPlan={vi.fn()} />);
@@ -316,7 +352,7 @@ describe('IdeasPanel (Story 3.1: View plan action)', () => {
 describe('IdeasPanel (AC1/AC2: optimistic status update)', () => {
   it('shows the new status badge immediately and POSTs the new status', async () => {
     const idea: IdeaResponse = { ...fakeIdea(), status: 'suggested' };
-    const fetchMock = mockFetch({
+    const fetchMock = mockFetch({ ...INTAKE_NULL_RESPONSE,
       '/api/ideas/idea-1/status': () => new Response(null, { status: 204 }),
       '/api/ideas': () => new Response(JSON.stringify({ ideas: [idea], currency: 'EUR' }), { status: 200 }),
     });
@@ -343,7 +379,7 @@ describe('IdeasPanel (AC2: direct Bookmark on a suggested idea)', () => {
     const idea: IdeaResponse = { ...fakeIdea(), status: 'suggested' };
     vi.stubGlobal(
       'fetch',
-      mockFetch({
+      mockFetch({ ...INTAKE_NULL_RESPONSE,
         '/api/ideas/idea-1/status': () => new Response(null, { status: 204 }),
         '/api/ideas': () => new Response(JSON.stringify({ ideas: [idea], currency: 'EUR' }), { status: 200 }),
       }),
@@ -385,6 +421,7 @@ describe('IdeasPanel (revert-on-failure)', () => {
       vi.fn((input: RequestInfo | URL) => {
         const url = typeof input === 'string' ? input : input.toString();
         if (url.includes('/status')) return statusCall();
+        if (url.includes('/api/intake')) return Promise.resolve(new Response(JSON.stringify({ intake: null }), { status: 200 }));
         if (url.includes('/api/ideas')) {
           return Promise.resolve(new Response(JSON.stringify({ ideas: [idea], currency: 'EUR' }), { status: 200 }));
         }
@@ -427,6 +464,7 @@ describe('IdeasPanel (status actions disable panel-wide while a request is in fl
       vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
         const url = typeof input === 'string' ? input : input.toString();
         if (init?.method === 'POST' && url.includes('/status')) return pendingStatusResponse;
+        if (url.includes('/api/intake')) return Promise.resolve(new Response(JSON.stringify({ intake: null }), { status: 200 }));
         if (url.includes('/api/ideas')) {
           return Promise.resolve(new Response(JSON.stringify({ ideas: [ideaA, ideaB], currency: 'EUR' }), { status: 200 }));
         }
@@ -466,6 +504,7 @@ describe('IdeasPanel (status actions disable panel-wide while a request is in fl
       vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
         const url = typeof input === 'string' ? input : input.toString();
         if (init?.method === 'POST' && url.includes('/status')) return pendingStatusResponse;
+        if (url.includes('/api/intake')) return Promise.resolve(new Response(JSON.stringify({ intake: null }), { status: 200 }));
         if (url.includes('/api/ideas')) {
           return Promise.resolve(new Response(JSON.stringify({ ideas: [ideaA, ideaB], currency: 'EUR' }), { status: 200 }));
         }
@@ -536,7 +575,7 @@ describe('IdeasPanel (Fix2: German compact rate + shortened labels)', () => {
     };
     vi.stubGlobal(
       'fetch',
-      mockFetch({ '/api/ideas': () => new Response(JSON.stringify({ ideas: [idea], currency: 'EUR' }), { status: 200 }) }),
+      mockFetch({ ...INTAKE_NULL_RESPONSE, '/api/ideas': () => new Response(JSON.stringify({ ideas: [idea], currency: 'EUR' }), { status: 200 }) }),
     );
 
     render(<IdeasPanel />);
@@ -564,7 +603,91 @@ describe('IdeasPanel (Fix2: German compact rate + shortened labels)', () => {
     // by the two English tests above.)
     expect(await screen.findByText('Basierend auf 3 deiner Angaben')).toBeInTheDocument();
     fireEvent.click(await screen.findByRole('button', { name: `Details – ${idea.title}` }));
-    expect(await screen.findByText(/unabhängige Quelle/)).toBeInTheDocument();
+    // User-requested follow-up (compact citation line): the source-trust
+    // tier phrase no longer renders here — the citation link does.
+    expect(await screen.findByRole('link', { name: 'example.com' })).toBeInTheDocument();
     expect(screen.getByText('Deine wöchentliche Zeit')).toBeInTheDocument();
+  });
+});
+
+// Story 2.5 (AC: demand/trend evidence note + source URL, translated growth
+// path, shown directly on the card via the new `IdeaEvidence` component).
+describe('IdeasPanel (Story 2.5: demand evidence + growth path)', () => {
+  it('renders the demand evidence note, its citation link, and the growth path note', async () => {
+    const idea: IdeaResponse = {
+      ...fakeIdea(),
+      demandEvidenceNote: 'Demand for this kind of tutoring has grown this year.',
+      demandEvidenceCitation: 'https://trend.example.com/report',
+      demandEvidenceQuote: 'Demand for this kind of tutoring has grown this year.',
+      isDemandEvidenceUnverified: false,
+      growthPath: 'Raise your rate once you have a few regular clients.',
+    };
+    vi.stubGlobal('fetch', mockFetch({ ...INTAKE_NULL_RESPONSE, '/api/ideas': () => new Response(JSON.stringify({ ideas: [idea], currency: 'EUR' }), { status: 200 }) }));
+
+    render(<IdeasPanel />);
+
+    // User-requested follow-up: the always-visible toggle-row teaser says
+    // "Current demand" (not the old cited-fields count) whenever this idea
+    // actually has demand evidence.
+    expect(await screen.findByText('Current demand')).toBeVisible();
+
+    // Evidence lives in the card's collapsed "Details" panel (card layout).
+    fireEvent.click(await screen.findByRole('button', { name: /details/i }));
+    expect(await screen.findByText(idea.demandEvidenceNote!)).toBeInTheDocument();
+    const citationLink = await screen.findByRole('link', { name: 'trend.example.com' });
+    expect(citationLink).toHaveAttribute('href', idea.demandEvidenceCitation);
+    expect(screen.getByText(idea.growthPath!)).toBeInTheDocument();
+  });
+});
+
+// Story 2.5 (AC: "a source for another region is labeled on the card").
+// The reverse case (a matching country, or an unresolvable domain, never
+// gets a label) is covered deterministically by `shared/region.test.ts`'s
+// `classifyCitationRegion` table — this is the integration proof that a
+// foreign, resolvable source actually renders the label end to end.
+describe('IdeasPanel (Story 2.5: foreign-source region label)', () => {
+  // Review fix (verification-gap #13): the baseline-rate region label
+  // (`IdeaEvidence`'s own `baselineRegion`, rendered because the existing
+  // citation row in `IdeaCard`'s footer can't be touched) previously had no
+  // coverage at all — the prior single test only ever varied
+  // `demandEvidenceCitation`, leaving `baselineRateCitation` at `fakeIdea()`'s
+  // unmapped default, so the baseline-region branch was dead code as far as
+  // verification went. Table-driven: one row per evidence type, each
+  // isolating the other evidence type's citation at an unmapped domain so
+  // only the row's own badge can appear.
+  it.each<{ name: string; overrides: Partial<IdeaResponse>; expectLabel: string }>([
+    {
+      name: 'a US-domain demand-evidence source is labeled foreign for a German viewer',
+      overrides: { demandEvidenceCitation: 'https://www.bls.gov/oes/current/report.htm' },
+      expectLabel: 'US data',
+    },
+    {
+      name: 'a US-domain baseline-rate source is labeled foreign for a German viewer',
+      overrides: { baselineRateCitation: 'https://www.bls.gov/oes/current/report.htm' },
+      expectLabel: 'US data',
+    },
+  ])('$name', async ({ overrides, expectLabel }) => {
+    const idea: IdeaResponse = {
+      ...fakeIdea(),
+      demandEvidenceNote: 'Demand for this kind of tutoring has grown this year.',
+      demandEvidenceCitation: 'https://example.com/rates',
+      demandEvidenceQuote: 'Demand for this kind of tutoring has grown this year.',
+      isDemandEvidenceUnverified: false,
+      growthPath: null,
+      ...overrides,
+    };
+    vi.stubGlobal(
+      'fetch',
+      mockFetch({ ...intakeResponse('DE'), '/api/ideas': () => new Response(JSON.stringify({ ideas: [idea], currency: 'EUR' }), { status: 200 }) }),
+    );
+
+    render(<IdeasPanel />);
+    fireEvent.click(await screen.findByRole('button', { name: `Details – ${idea.title}` }));
+
+    // The demand-evidence label renders in its own standalone `Badge`; the
+    // baseline-rate label (user-requested follow-up) renders inline in the
+    // compact citation line instead — a substring match (`exact: false`)
+    // covers both shapes.
+    expect(await screen.findByText(expectLabel, { exact: false })).toBeInTheDocument();
   });
 });

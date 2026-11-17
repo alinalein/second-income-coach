@@ -10,6 +10,7 @@ import {
   buildNestedAgentPrompt,
   evaluateSourceTrust,
   handleGenerateIdeas,
+  occupationMatchesIdea,
   sourceEvidenceLooksBlockedOrHidden,
   truncateAtWordBoundary,
   type GenerateIdeasDeps,
@@ -23,6 +24,7 @@ function intakeArgs(overrides: Partial<SubmitIntakeToolArgs> = {}): SubmitIntake
     startingBudgetRange: 'under_100',
     riskTolerance: 'low',
     stoppedBeforeText: 'I got overwhelmed trying to do everything at once.',
+    country: 'DE',
     failurePattern: 'overwhelm',
     ...overrides,
   };
@@ -43,8 +45,17 @@ function fakeIntakeResponse(overrides: Partial<IntakeResponse> = {}): IntakeResp
 // this exact quote/rate — `DEFAULT_SEARCH_RESULT_TEXTS` below is what
 // `quoteMatchesSearchResults` checks it against, and the number inside it
 // is what `quoteSupportsRate` checks the stored rate against.
-const DEFAULT_RATE_QUOTE = 'Workers in this field earn $25.00 an hour on average.';
-const DEFAULT_SEARCH_RESULT_TEXTS = [`Detailed Results:\n\n${DEFAULT_RATE_QUOTE}\nMore context around it.`];
+// Story 2.5: the quote now mentions "tutoring" (not just "workers") so the
+// default happy-path fixture's title ("Freelance tutoring") genuinely
+// matches via `occupationMatchesIdea` — a more realistic default than an
+// always-mismatched one, with dedicated mismatch coverage in its own table
+// below (`occupationMatchesIdea`).
+const DEFAULT_RATE_QUOTE = 'Tutoring work like this typically pays $25.00 an hour.';
+const DEFAULT_DEMAND_EVIDENCE_QUOTE = 'Demand for freelance tutoring has grown steadily this year.';
+const DEFAULT_SEARCH_RESULT_TEXTS = [
+  `Detailed Results:\n\n${DEFAULT_RATE_QUOTE}\nMore context around it.`,
+  `Detailed Results:\n\n${DEFAULT_DEMAND_EVIDENCE_QUOTE}\nMore context around it.`,
+];
 
 function buildValidDraft(intakeRow: IntakeResponse, overrides: Partial<IdeaDraft> = {}): IdeaDraft {
   return {
@@ -62,8 +73,15 @@ function buildValidDraft(intakeRow: IntakeResponse, overrides: Partial<IdeaDraft
     baselineRateHighAmountMinorUnits: 2500,
     isVendorSource: false,
     rateUnit: 'hour',
-    baselineRateCurrency: 'EUR',
+    // Story 2.5 (user-reported gap): must match the '$' in DEFAULT_RATE_QUOTE
+    // now that `quoteContradictsCurrency` deterministically checks this —
+    // this fixture simulates a genuinely USD-sourced rate.
+    baselineRateCurrency: 'USD',
     baselineRateCitation: 'https://a.example.com/rates',
+    demandEvidenceNote: 'Demand for tutoring help has been rising lately.',
+    demandEvidenceCitation: 'https://trend.example.com/demand',
+    demandEvidenceQuote: DEFAULT_DEMAND_EVIDENCE_QUOTE,
+    growthPath: 'Raise your rate once you have a few regular clients.',
     ...overrides,
   };
 }
@@ -80,12 +98,25 @@ const CITATION_DOMAINS_FOR_TEST = [
   'https://e.example.com/rates',
 ];
 
+// Story 2.5: a distinct domain list (not reused from `CITATION_DOMAINS_FOR_TEST`
+// above) so the baseline-rate and demand-evidence diversity checks are
+// exercised independently by default — a test that wants insufficient
+// diversity for one still has to corrupt it deliberately.
+const DEMAND_EVIDENCE_DOMAINS_FOR_TEST = [
+  'https://trend-a.example.com/demand',
+  'https://trend-b.example.com/demand',
+  'https://trend-c.example.com/demand',
+  'https://trend-d.example.com/demand',
+  'https://trend-e.example.com/demand',
+];
+
 function fiveValidDrafts(intakeRow: IntakeResponse, label: string): IdeaDraft[] {
   return Array.from({ length: 5 }, (_, i) =>
     buildValidDraft(intakeRow, {
       title: `${label} ${i + 1}`,
       ideaType: IDEA_TYPES_FOR_TEST[i],
       baselineRateCitation: CITATION_DOMAINS_FOR_TEST[i],
+      demandEvidenceCitation: DEMAND_EVIDENCE_DOMAINS_FOR_TEST[i],
     }),
   );
 }
@@ -108,6 +139,17 @@ describe('buildNestedAgentPrompt (I/O matrix: two intakes differing >=2 fields)'
     expect(promptA).toContain(a.weeklyTimeAvailability);
     expect(promptB).toContain(b.weeklyTimeAvailability);
     expect(promptB).toContain(b.riskTolerance);
+  });
+
+  // Story 2.5: the intake's `country` steers a concrete regional source
+  // preference (replacing the old reply-language-only heuristic); 'other'
+  // falls back to that same reply-language heuristic.
+  it("prefers the intake's own country's sources, falling back to the reply language only when country is 'other'", () => {
+    const germany = fakeIntakeResponse({ country: 'DE' });
+    const other = fakeIntakeResponse({ country: 'other' });
+
+    expect(buildNestedAgentPrompt(germany, 'en')).toContain('located in Germany');
+    expect(buildNestedAgentPrompt(other, 'en')).toContain("region implied by this reply's language");
   });
 });
 
@@ -230,7 +272,38 @@ describe('sourceEvidenceLooksBlockedOrHidden (hard: login wall, blurred/masked, 
   ])('$name', ({ citation, searchResultTexts, expected }) => {
     const draft = buildValidDraft(fakeIntakeResponse(), citation ? { baselineRateCitation: citation } : {});
 
-    expect(sourceEvidenceLooksBlockedOrHidden(draft, searchResultTexts)).toBe(expected);
+    expect(sourceEvidenceLooksBlockedOrHidden(draft.baselineRateCitation, draft.baselineRateQuote, searchResultTexts)).toBe(expected);
+  });
+});
+
+// Story 2.5 (AC: "its source describes the same activity or occupation as
+// the idea (checked deterministically against the quoted passage),
+// otherwise the card shows it as unverified") — the fix for the observed
+// live problem of a source (e.g. a BLS occupation page) describing a
+// different occupation than the idea it was attached to. Pure-function test
+// — no DB/model needed.
+describe('occupationMatchesIdea (deterministic, non-blocking — labels only)', () => {
+  it.each([
+    {
+      name: 'a quote mentioning a significant word from the title is a match',
+      title: 'Freelance Graphic Design',
+      quote: 'Freelance graphic designers typically charge $35 per hour for logo work.',
+      expected: true,
+    },
+    {
+      name: 'a quote describing a wholly different occupation is a mismatch',
+      title: 'Freelance Graphic Design',
+      quote: 'Data entry clerks earn $15.00 per hour on average.',
+      expected: false,
+    },
+    {
+      name: 'a title with no significant (>=5 letter) word is treated as a match (nothing specific to check)',
+      title: 'Pet Sit',
+      quote: 'Data entry clerks earn $15.00 per hour on average.',
+      expected: true,
+    },
+  ])('$name', ({ title, quote, expected }) => {
+    expect(occupationMatchesIdea(title, quote)).toBe(expected);
   });
 });
 
@@ -319,6 +392,9 @@ function configFor(userId: string): GenerateIdeasRunConfig {
 //   check: >=3 distinct idea types and >=3 distinct citation domains.
 // - "vendor pricing page" and "quote doesn't support the rate" are follow-up
 //   round 4, fix 4(a)/(b)'s new grounding checks.
+// - "demand-evidence quote isn't found"/"demand-evidence source is login-
+//   walled" are Story 2.5's new hard checks, mirroring the baseline rate's
+//   own quote-verification/blocked-source checks exactly.
 describe('handleGenerateIdeas (corrupted batch is rejected and retried, then a clean one persists)', () => {
   it.each<{
     name: string;
@@ -361,6 +437,33 @@ describe('handleGenerateIdeas (corrupted batch is rejected and retried, then a c
       name: "attempt 1 hangs past its own timeout budget — treated as a failed attempt, not left to run forever",
       corrupt: (drafts) => drafts,
       hangFirstAttempt: true,
+    },
+    {
+      // Story 2.5 (AC: "an idea without sourced evidence is retried, not
+      // shown") — the demand-evidence quote gets the exact same hard
+      // verbatim-match check as the baseline-rate quote.
+      name: "the demand-evidence quote isn't found in any retrieved search result",
+      corrupt: (drafts) => drafts.map((draft) => ({ ...draft, demandEvidenceQuote: 'This sentence was never actually retrieved.' })),
+    },
+    {
+      // Story 2.5: same `sourceEvidenceLooksBlockedOrHidden` check as the
+      // baseline rate, applied to the demand-evidence citation/quote too
+      // (AC: "login-walled salary sites ... are never used as a source" —
+      // not scoped to the baseline rate alone).
+      name: 'the demand-evidence source is login-walled',
+      corrupt: (drafts) => drafts,
+      searchResultTexts: [
+        `Detailed Results:\n\n${DEFAULT_RATE_QUOTE}\nMore context around it.`,
+        `Detailed Results:\n\nSign in to see demand data.\n${DEFAULT_DEMAND_EVIDENCE_QUOTE}\nMore context.`,
+      ],
+    },
+    {
+      // Story 2.5 (user-reported gap, AD-27): the quote shows '$' but the
+      // draft reports the rate as EUR — a genuinely-USD source mislabeled,
+      // which would otherwise render as an unconverted, unlabeled "local"
+      // EUR figure.
+      name: 'the quote currency contradicts the reported baselineRateCurrency',
+      corrupt: (drafts) => drafts.map((draft) => ({ ...draft, baselineRateCurrency: 'EUR' as const })),
     },
   ])('$name', async ({ corrupt, searchResultTexts, hangFirstAttempt }) => {
     const userId = await createTestUser();
@@ -553,6 +656,14 @@ describe('handleGenerateIdeas (round 12: soft rules never block — a hard-valid
       name: 'insufficient citation-domain spread/cap is accepted on the first attempt',
       corrupt: (drafts) => drafts.map((draft) => ({ ...draft, baselineRateCitation: 'https://a.example.com/rates' })),
     },
+    {
+      // Story 2.5: the demand-evidence citations' own domain diversity —
+      // same soft (log-only, never-blocking) treatment as the baseline
+      // rate's, consistent with round 12's own lesson and this story's "do
+      // not add retries" instruction.
+      name: 'insufficient demand-evidence citation-domain spread is accepted on the first attempt',
+      corrupt: (drafts) => drafts.map((draft) => ({ ...draft, demandEvidenceCitation: 'https://trend.example.com/demand' })),
+    },
   ])('$name', async ({ corrupt }) => {
     const userId = await createTestUser();
     try {
@@ -620,6 +731,54 @@ describe('handleGenerateIdeas (round 12: soft rules never block — a hard-valid
       expect(generateDrafts).toHaveBeenCalledTimes(2);
       const rows = await db.select().from(ideas).where(eq(ideas.userId, userId));
       expect(rows).toHaveLength(0);
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+});
+
+// Story 2.5 (AC: "its source describes the same activity or occupation as
+// the idea ... otherwise the card shows it as unverified") — the regression
+// test for the observed live problem: a high-trust (tier 1/2) source that
+// describes a *different* occupation than the idea must still be persisted
+// (never rejected for this reason alone), but labeled unverified rather
+// than shown with the same unqualified confidence as a genuinely matching
+// official source.
+describe('handleGenerateIdeas (Story 2.5: an occupation mismatch is persisted, labeled unverified, never blocks)', () => {
+  it('a tier-1 source describing a different occupation than the idea is accepted on the first attempt but marked unverified', async () => {
+    const userId = await createTestUser();
+    try {
+      const intakeRow = await upsertIntake(db, userId, intakeArgs({ startingBudgetRange: 'under_100' }));
+      const mismatchedRateQuote = 'Data entry clerks earn $25.00 an hour on average.';
+      // Review fix (verification-gap #12): also deliberately mismatched on
+      // the demand-evidence side (not just relying on the baseline mismatch
+      // alone) — this is what actually exercises and proves
+      // `isDemandEvidenceUnverified`, which no test previously asserted
+      // `true` for anywhere.
+      const mismatchedDemandQuote = 'Demand for pet-grooming services has grown steadily this year.';
+      const drafts = fiveValidDrafts(intakeRow, 'Mismatch').map((draft) => ({
+        ...draft,
+        title: 'Freelance Graphic Design',
+        baselineRateCitation: 'https://www.bls.gov/oes/current/report.htm',
+        baselineRateQuote: mismatchedRateQuote,
+        demandEvidenceQuote: mismatchedDemandQuote,
+      }));
+      const searchResultTexts = [
+        `Detailed Results:\n\n${mismatchedRateQuote}\nMore context around it.`,
+        `Detailed Results:\n\n${mismatchedDemandQuote}\nMore context around it.`,
+      ];
+      const generateDrafts = vi.fn().mockResolvedValue({ drafts: { ideas: drafts }, searchResultTexts });
+      const deps = baseDeps({ generateDrafts });
+
+      const result = await handleGenerateIdeas(deps, configFor(userId), { replyLanguage: 'en' });
+
+      expect(result).toHaveLength(5);
+      expect(generateDrafts).toHaveBeenCalledTimes(1); // never blocks — accepted immediately
+      for (const idea of result) {
+        expect(idea.sourceTrustTier).toBe('tier_1'); // the domain itself is still genuinely tier 1
+        expect(idea.isRateUnverified).toBe(true); // but labeled unverified due to the occupation mismatch
+        expect(idea.isDemandEvidenceUnverified).toBe(true); // same treatment for the demand-evidence side
+      }
     } finally {
       await cleanUp(userId);
     }

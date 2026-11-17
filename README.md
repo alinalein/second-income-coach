@@ -154,7 +154,7 @@ flowchart TD
     H --> I[9. Show 5 idea cards<br/>evidence and rate with sources on each card]
 ```
 
-An idea that fails the check is rewritten, never saved as it is. Steps 2 and 3 and the "how it can grow" and demand-evidence parts of step 6 are Story 2.5; until it is built, the agent starts at step 4.
+An idea that fails the check is rewritten, never saved as it is.
 
 ## Project status
 

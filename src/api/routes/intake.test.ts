@@ -51,6 +51,7 @@ function validBody() {
     startingBudgetRange: 'under_100',
     riskTolerance: 'low',
     stoppedBeforeText: 'I got overwhelmed trying to do everything at once.',
+    country: 'DE',
   };
 }
 
