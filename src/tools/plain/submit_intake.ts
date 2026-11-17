@@ -3,14 +3,33 @@ import { tool } from 'langchain';
 import {
   submitIntakeToolSchema,
   intakeResponseSchema,
+  countryCodeSchema,
   type SubmitIntakeToolArgs,
   type IntakeResponse,
+  type CountryCode,
 } from '@app/shared';
 import type { createDb } from '../../db/client.js';
 import { intake } from '../../db/schema/index.js';
 
 type Db = ReturnType<typeof createDb>['db'];
 type IntakeRow = typeof intake.$inferSelect;
+
+/**
+ * Story 2.5 (narrowed post-handoff): `country` dropped `CH`/`GB` from its
+ * enum after this story had already shipped and (potentially) persisted
+ * those values — the `country` column is plain `text()` with no DB-level
+ * check constraint (Boundary, same no-`pgEnum` precedent as every other
+ * enum-shaped column), so nothing at the database layer prevents an old row
+ * from still holding one. Falling back to `'other'` here — not throwing —
+ * is what keeps `GET /api/intake` from 503ing for that user forever; it is
+ * the exact same "no regional preference" outcome a genuinely-unmapped
+ * country already gets.
+ */
+const KNOWN_COUNTRY_CODES = new Set<string>(countryCodeSchema.options);
+
+function normalizeCountry(raw: string): CountryCode {
+  return KNOWN_COUNTRY_CODES.has(raw) ? (raw as CountryCode) : 'other';
+}
 
 function toIntakeResponse(row: IntakeRow): IntakeResponse {
   return intakeResponseSchema.parse({
@@ -21,6 +40,7 @@ function toIntakeResponse(row: IntakeRow): IntakeResponse {
     riskTolerance: row.riskTolerance,
     stoppedBeforeText: row.stoppedBeforeText,
     failurePattern: row.failurePattern,
+    country: normalizeCountry(row.country),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   });

@@ -13,6 +13,7 @@ import {
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '../../components/ui/card';
+import { IdeaEvidence } from './IdeaEvidence';
 
 /**
  * Story 2.2 follow-up fix round 2, fix 2 (amended round 4, fix 4d): "potential
@@ -56,8 +57,14 @@ function computeMonthlyPotential(idea: IdeaResponse): Money | undefined {
  * request the server would have finished. Round 8 (bug fix, found live):
  * raised alongside the server's own 90s->170s recalibration (see that
  * constant's doc comment — post-quality-fixes generation legitimately takes
- * longer than originally measured). */
-const GENERATE_TIMEOUT_MS = 190_000;
+ * longer than originally measured).
+ *
+ * Story 2.5 (bug fix, found live by the user, user-approved — numeric
+ * constant only, no layout/button/status code touched, per this story's own
+ * scope boundary on this file): raised alongside the server's own
+ * 170s->230s recalibration (`src/agent/resilience.ts`'s
+ * `IDEAS_MODEL_NODE_TIMEOUT_MS` doc comment has the measured evidence). */
+const GENERATE_TIMEOUT_MS = 250_000;
 
 /** Round 13 (user-requested): `'load-error'`/`'generate-error'` replace the
  * old single `'error'` phase, which picked its message from `ideas.length`
@@ -87,8 +94,16 @@ const LOCALE_BY_LANGUAGE: Record<string, string> = { en: 'en-US', de: 'de-DE' };
  * claims "almost done" past that point without actually knowing), and the
  * caller forces it to 100% the instant the request settles (success or
  * failure).
+ *
+ * Story 2.5 (bug fix, found live by the user, user-approved — numeric
+ * constant only): the extra required search per idea pushed real attempts
+ * well past this old pacing figure (one live attempt measured ~74s before
+ * even being rejected on an unrelated check). Scaled proportionally with
+ * `DRAFT_ATTEMPT_TIMEOUT_MS`'s own 75s->110s raise (56s * 110/75 ≈ 82s,
+ * rounded) — an estimate, not a fresh measurement of a clean successful
+ * run, since none was available in this environment.
  */
-const TYPICAL_GENERATE_DURATION_MS = 56_000;
+const TYPICAL_GENERATE_DURATION_MS = 82_000;
 const PROGRESS_HOLD_PERCENT = 90;
 const PROGRESS_TICK_MS = 300;
 
@@ -347,6 +362,7 @@ function IdeaCard({ idea, currency, locale }: { idea: IdeaResponse; currency: Cu
             {idea.isRateUnverified ? <Badge variant="muted">{t('card.unverifiedLabel')}</Badge> : null}
           </span>
         </div>
+        <IdeaEvidence idea={idea} />
       </CardFooter>
     </Card>
   );

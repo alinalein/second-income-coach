@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, cleanup, fireEvent, within } from '@testing-library/react';
-import { convertMoney, formatMoney, EUR_USD_RATE, type IdeaResponse } from '@app/shared';
+import { convertMoney, formatMoney, EUR_USD_RATE, type IdeaResponse, type IntakeResponse, type CountryCode } from '@app/shared';
 import { IdeasPanel } from './IdeasPanel';
 
 function mockFetch(responses: Record<string, Response | (() => Response)>) {
@@ -33,9 +33,41 @@ function fakeIdea(): IdeaResponse {
     baselineRateQuote: 'Workers in this field earn $30.00 an hour on average.',
     sourceTrustTier: 'tier_3',
     isRateUnverified: false,
+    demandEvidenceNote: null,
+    demandEvidenceCitation: null,
+    demandEvidenceQuote: null,
+    isDemandEvidenceUnverified: false,
+    growthPath: null,
     createdAt: now,
     updatedAt: now,
   };
+}
+
+/** Story 2.5: `IdeaEvidence` (mounted inside `IdeaCard`) fetches `GET
+ * /api/intake` itself for the viewer's country — every existing
+ * `IdeasPanel` test must mock it too, or `mockFetch`'s own "Unmocked fetch"
+ * guard throws. `{ intake: null }` is enough for these pre-existing tests,
+ * none of which are about country/region labeling. */
+const INTAKE_NULL_RESPONSE = { '/api/intake': () => new Response(JSON.stringify({ intake: null }), { status: 200 }) };
+
+function fakeIntake(country: CountryCode): IntakeResponse {
+  const now = new Date().toISOString();
+  return {
+    id: 'intake-1',
+    skillsInterests: 'Woodworking, basic bookkeeping',
+    weeklyTimeAvailability: '5_to_10h',
+    startingBudgetRange: 'under_100',
+    riskTolerance: 'low',
+    stoppedBeforeText: 'I got overwhelmed trying to do everything at once.',
+    country,
+    failurePattern: 'overwhelm',
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function intakeResponse(country: CountryCode) {
+  return { '/api/intake': () => new Response(JSON.stringify({ intake: fakeIntake(country) }), { status: 200 }) };
 }
 
 afterEach(() => {
@@ -54,6 +86,7 @@ describe('IdeasPanel (regression: startupCost/baselineRate rendered under the co
     vi.stubGlobal(
       'fetch',
       mockFetch({
+        ...INTAKE_NULL_RESPONSE,
         '/api/ideas': () => new Response(JSON.stringify({ ideas: [idea], currency: 'EUR' }), { status: 200 }),
       }),
     );
@@ -112,6 +145,13 @@ describe('IdeasPanel (regression: startupCost/baselineRate rendered under the co
     for (const item of rationaleItems) {
       expect(item.tagName).toBe('LI');
     }
+
+    // Story 2.5 (I/O matrix: "legacy idea row missing new fields" — this
+    // fixture's demand-evidence/growth-path fields are all `null`): the new
+    // `IdeaEvidence` block renders nothing extra rather than an empty
+    // section or an error.
+    expect(screen.queryByText('Current demand')).not.toBeInTheDocument();
+    expect(screen.queryByText('How this can grow')).not.toBeInTheDocument();
   });
 });
 
@@ -133,6 +173,7 @@ describe('IdeasPanel (vendor-sourced range + non-hourly rate)', () => {
     vi.stubGlobal(
       'fetch',
       mockFetch({
+        ...INTAKE_NULL_RESPONSE,
         '/api/ideas': () => new Response(JSON.stringify({ ideas: [idea], currency: 'EUR' }), { status: 200 }),
       }),
     );
@@ -166,6 +207,7 @@ describe('IdeasPanel (round 13: a failed regenerate shows the generate-failure m
     vi.stubGlobal(
       'fetch',
       mockFetch({
+        ...INTAKE_NULL_RESPONSE,
         '/api/ideas/generate': () => new Response(JSON.stringify({ error: 'Ideas could not be generated' }), { status: 502 }),
         '/api/ideas': () => new Response(JSON.stringify({ ideas: [idea], currency: 'EUR' }), { status: 200 }),
       }),
@@ -188,7 +230,7 @@ describe('IdeasPanel (round 13: a failed regenerate shows the generate-failure m
     // here, not before the click.
     const statusRegion = screen.getByRole('status');
     expect(statusRegion).toHaveTextContent('Generating your ideas…');
-    expect(statusRegion).toHaveTextContent('This can take a few seconds.');
+    expect(statusRegion).toHaveTextContent('This can take up to a minute.');
     expect(within(statusRegion).getByRole('progressbar')).toBeInTheDocument();
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Generating your ideas failed or timed out. Please try again.');
@@ -196,5 +238,79 @@ describe('IdeasPanel (round 13: a failed regenerate shows the generate-failure m
     // The failed regenerate never replaced state — the original idea (and
     // the retry button) are still on screen, no reload needed to see them.
     expect(screen.getByText(idea.title)).toBeInTheDocument();
+  });
+});
+
+// Story 2.5 (AC: demand/trend evidence note + source URL, translated growth
+// path, shown directly on the card via the new `IdeaEvidence` component).
+describe('IdeasPanel (Story 2.5: demand evidence + growth path)', () => {
+  it('renders the demand evidence note, its citation link, and the growth path note', async () => {
+    const idea: IdeaResponse = {
+      ...fakeIdea(),
+      demandEvidenceNote: 'Demand for this kind of tutoring has grown this year.',
+      demandEvidenceCitation: 'https://trend.example.com/report',
+      demandEvidenceQuote: 'Demand for this kind of tutoring has grown this year.',
+      isDemandEvidenceUnverified: false,
+      growthPath: 'Raise your rate once you have a few regular clients.',
+    };
+    vi.stubGlobal('fetch', mockFetch({ ...INTAKE_NULL_RESPONSE, '/api/ideas': () => new Response(JSON.stringify({ ideas: [idea], currency: 'EUR' }), { status: 200 }) }));
+
+    render(<IdeasPanel />);
+
+    expect(await screen.findByText(idea.demandEvidenceNote!)).toBeInTheDocument();
+    const citationLink = await screen.findByRole('link', { name: 'trend.example.com' });
+    expect(citationLink).toHaveAttribute('href', idea.demandEvidenceCitation);
+    expect(screen.getByText(idea.growthPath!)).toBeInTheDocument();
+  });
+});
+
+// Story 2.5 (AC: "a source for another region is labeled on the card").
+// The reverse case (a matching country, or an unresolvable domain, never
+// gets a label) is covered deterministically by `shared/region.test.ts`'s
+// `classifyCitationRegion` table — this is the integration proof that a
+// foreign, resolvable source actually renders the label end to end.
+describe('IdeasPanel (Story 2.5: foreign-source region label)', () => {
+  // Review fix (verification-gap #13): the baseline-rate region label
+  // (`IdeaEvidence`'s own `baselineRegion`, rendered because the existing
+  // citation row in `IdeaCard`'s footer can't be touched) previously had no
+  // coverage at all — the prior single test only ever varied
+  // `demandEvidenceCitation`, leaving `baselineRateCitation` at `fakeIdea()`'s
+  // unmapped default, so the baseline-region branch was dead code as far as
+  // verification went. Table-driven: one row per evidence type, each
+  // isolating the other evidence type's citation at an unmapped domain so
+  // only the row's own badge can appear.
+  it.each<{ name: string; overrides: Partial<IdeaResponse>; expectLabel: string }>([
+    {
+      name: 'a US-domain demand-evidence source is labeled foreign for a German viewer',
+      overrides: { demandEvidenceCitation: 'https://www.bls.gov/oes/current/report.htm' },
+      expectLabel: 'US data',
+    },
+    {
+      name: 'a US-domain baseline-rate source is labeled foreign for a German viewer',
+      overrides: { baselineRateCitation: 'https://www.bls.gov/oes/current/report.htm' },
+      expectLabel: 'US data',
+    },
+  ])('$name', async ({ overrides, expectLabel }) => {
+    const idea: IdeaResponse = {
+      ...fakeIdea(),
+      demandEvidenceNote: 'Demand for this kind of tutoring has grown this year.',
+      demandEvidenceCitation: 'https://example.com/rates',
+      demandEvidenceQuote: 'Demand for this kind of tutoring has grown this year.',
+      isDemandEvidenceUnverified: false,
+      growthPath: null,
+      ...overrides,
+    };
+    vi.stubGlobal(
+      'fetch',
+      mockFetch({ ...intakeResponse('DE'), '/api/ideas': () => new Response(JSON.stringify({ ideas: [idea], currency: 'EUR' }), { status: 200 }) }),
+    );
+
+    render(<IdeasPanel />);
+
+    // The demand-evidence label renders in its own standalone `Badge`; the
+    // baseline-rate label renders inline as "Baseline rate: {label}" in one
+    // paragraph (since the existing citation row can't be touched) — a
+    // substring match (`exact: false`) covers both shapes.
+    expect(await screen.findByText(expectLabel, { exact: false })).toBeInTheDocument();
   });
 });

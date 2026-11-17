@@ -8,6 +8,7 @@ import {
   weeklyTimeAvailabilitySchema,
   startingBudgetRangeSchema,
   riskToleranceSchema,
+  countryCodeSchema,
   INTAKE_FREE_TEXT_MAX_LENGTH,
   type IntakeResponse,
   type SubmitIntakeRequest,
@@ -31,6 +32,13 @@ const BLANK_FORM: SubmitIntakeRequest = {
   startingBudgetRange: startingBudgetRangeSchema.options[0]!,
   riskTolerance: riskToleranceSchema.options[0]!,
   stoppedBeforeText: '',
+  // Review fix (blind-hunter #5): unlike the other enum defaults above (a
+  // wrong starting guess there is just a slightly-off estimate), defaulting
+  // to a *specific* country would assert a possibly-false fact about the
+  // user that steers real behavior (source-region preference, the "foreign
+  // source" label) — 'other' ("no preference / prefer not to say") is the
+  // only default that makes no unearned claim.
+  country: 'other',
 };
 
 function formFromRecord(record: IntakeResponse): SubmitIntakeRequest {
@@ -40,6 +48,7 @@ function formFromRecord(record: IntakeResponse): SubmitIntakeRequest {
     startingBudgetRange: record.startingBudgetRange,
     riskTolerance: record.riskTolerance,
     stoppedBeforeText: record.stoppedBeforeText,
+    country: record.country,
   };
 }
 
@@ -242,6 +251,17 @@ export function IntakeForm({ onSaved }: IntakeFormProps) {
               {riskToleranceSchema.options.map((option) => (
                 <option key={option} value={option}>
                   {t(`riskTolerance.options.${option}`)}
+                </option>
+              ))}
+            </Select>
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="intake-country">{t('country.label')}</Label>
+            <Select id="intake-country" value={form.country} onChange={handleChange('country')} disabled={disabled}>
+              {countryCodeSchema.options.map((option) => (
+                <option key={option} value={option}>
+                  {t(`country.options.${option}`)}
                 </option>
               ))}
             </Select>

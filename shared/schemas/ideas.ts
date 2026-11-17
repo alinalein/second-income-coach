@@ -188,6 +188,21 @@ function checkBaselineRateInvariants(
  * comparison, never a conversion. `baselineRateCurrency` is free-form
  * (AD-6: persisted once in whatever currency `web_search` sourced it in).
  */
+/**
+ * Story 2.5: the model's own demand/trend evidence note for this idea — a
+ * single short sentence (not the 2-3 bullets `rationale` uses), translated
+ * into the reply language like every other free-text draft field. Shape
+ * only; `generate_ideas.ts`'s `quoteMatchesSearchResults`/
+ * `sourceEvidenceLooksBlockedOrHidden` verify `demandEvidenceQuote` against
+ * the real retrieved discovery-search text the same way `baselineRateQuote`
+ * is verified.
+ */
+export const DEMAND_EVIDENCE_NOTE_MAX_LENGTH = 200;
+
+/** Story 2.5: the translated "how this can grow" note (AC/FR15/AD-25) — one
+ * short sentence, same shape precedent as `demandEvidenceNote`. */
+export const GROWTH_PATH_MAX_LENGTH = 220;
+
 export const ideaDraftSchema = z
   .object({
     title: z.string().min(1).max(200),
@@ -204,6 +219,10 @@ export const ideaDraftSchema = z
     baselineRateHighAmountMinorUnits: z.number().int().nonnegative(),
     isVendorSource: z.boolean(),
     rateUnit: rateUnitSchema,
+    demandEvidenceNote: z.string().trim().min(1).max(DEMAND_EVIDENCE_NOTE_MAX_LENGTH),
+    demandEvidenceCitation: z.string().min(1).max(500),
+    demandEvidenceQuote: z.string().min(1).max(300),
+    growthPath: z.string().trim().min(1).max(GROWTH_PATH_MAX_LENGTH),
   })
   .superRefine(checkBaselineRateInvariants);
 
@@ -250,6 +269,19 @@ export const ideaResponseSchema = z
     baselineRateQuote: z.string().min(1).max(300),
     sourceTrustTier: sourceTrustTierSchema,
     isRateUnverified: z.boolean(),
+    /**
+     * Story 2.5: nullable, unlike every new draft-schema field above — a
+     * row inserted outside this story's `generate_ideas` path (e.g. Lane
+     * A's `src/api/routes/ideas.test.ts` fixtures, frozen/off-limits to
+     * this story) has no value for these columns at all. `IdeaEvidence.tsx`
+     * renders nothing for a `null` value rather than treating it as a
+     * validation failure.
+     */
+    demandEvidenceNote: z.string().min(1).max(DEMAND_EVIDENCE_NOTE_MAX_LENGTH).nullable(),
+    demandEvidenceCitation: z.string().min(1).nullable(),
+    demandEvidenceQuote: z.string().min(1).max(300).nullable(),
+    isDemandEvidenceUnverified: z.boolean(),
+    growthPath: z.string().min(1).max(GROWTH_PATH_MAX_LENGTH).nullable(),
     createdAt: z.iso.datetime(),
     updatedAt: z.iso.datetime(),
   })

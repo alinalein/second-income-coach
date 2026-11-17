@@ -39,8 +39,14 @@ export const MODEL_NODE_TIMEOUT_MS = 30_000;
  * this same outer `'model'` node (Design Notes: the whole turn, not just
  * one LLM call, is this node's body). Chat and `submit_intake` keep
  * `MODEL_NODE_TIMEOUT_MS` unchanged — only ideas generation got slower.
+ *
+ * Story 2.5 (bug fix, found live by the user, user-approved): raised to
+ * 230s alongside `DRAFT_ATTEMPT_TIMEOUT_MS`'s own 75s -> 110s raise (that
+ * constant's doc comment has the measured evidence) — comfortably over 2
+ * attempts at 110s (220s) plus the outer agent's own decision/final-reply
+ * calls.
  */
-export const IDEAS_MODEL_NODE_TIMEOUT_MS = 170_000;
+export const IDEAS_MODEL_NODE_TIMEOUT_MS = 230_000;
 
 /**
  * Story 2.2 round 9, fix (a) (user-required, not a guess): "the ideas path

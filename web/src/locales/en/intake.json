@@ -35,6 +35,15 @@
       "high": "High — I'm comfortable with bigger bets"
     }
   },
+  "country": {
+    "label": "Where are you located?",
+    "options": {
+      "DE": "Germany",
+      "AT": "Austria",
+      "US": "United States",
+      "other": "Other / prefer not to say"
+    }
+  },
   "stoppedBeforeText": {
     "label": "What's stopped you before?",
     "placeholder": "Tell us what's gotten in the way in the past, if anything."

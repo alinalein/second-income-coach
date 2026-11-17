@@ -20,6 +20,8 @@ import {
   type IntakeResponse,
   type StartingBudgetRange,
   type SourceTrustTier,
+  type CountryCode,
+  type CurrencyCode,
 } from '@app/shared';
 import type { Env } from '../../config/env.js';
 import type { createDb } from '../../db/client.js';
@@ -117,8 +119,20 @@ const MAX_DRAFT_ATTEMPTS = 2;
  * (room for one extra search round), while two attempts (150s worst case)
  * still fit under the raised `IDEAS_MODEL_NODE_TIMEOUT_MS` (170s) with
  * margin left for the outer agent's own decision + final-reply calls.
+ *
+ * Story 2.5 (bug fix, found live by the user, user-approved): adding a
+ * second required web_search per idea (discovery/demand-evidence, on top
+ * of the existing baseline-rate search) roughly doubled real search volume
+ * per attempt. Confirmed directly via a live `handleGenerateIdeas` run
+ * against real Tavily/OpenRouter credentials: one attempt measured ~74s
+ * (already within a few seconds of the old 75s budget) before even being
+ * rejected on an unrelated hard check, and a second attempt needed more
+ * search rounds than that and was killed by the timeout before finishing —
+ * 75s was no longer comfortably above a normal attempt's real duration.
+ * Raised to 110s (same reasoning as round 8: comfortably above the ~74s+
+ * observed baseline, room for the extra search round this story adds).
  */
-const DRAFT_ATTEMPT_TIMEOUT_MS = 75_000;
+const DRAFT_ATTEMPT_TIMEOUT_MS = 110_000;
 
 class DraftAttemptTimeoutError extends Error {}
 
@@ -312,6 +326,32 @@ function quoteSupportsRate(draft: IdeaDraft): boolean {
 }
 
 /**
+ * Story 2.5 (user-reported gap). AD-27: "a figure in another currency
+ * region is never presented as a local rate" — this is the check that
+ * makes that true at the source, not just the client's own `convertMoney`/
+ * estimate-badge handling (which only behaves correctly if the *stored*
+ * currency code is honest in the first place). `baselineRateCurrency` is a
+ * model self-report — nothing previously verified the symbol the quote
+ * itself shows actually matches the currency code persisted alongside it,
+ * so a genuinely-USD quote mislabeled `EUR` (or vice versa) would pass
+ * every other check (the *number* still matches) and render with no
+ * conversion/estimate badge at all — silently presented as a local rate.
+ * Deliberately checks for an explicit *contradiction* only (the other
+ * currency's symbol/word appears, the stored one's does not) — a quote
+ * with no recognizable symbol at all is not rejected, since there is
+ * nothing to contradict.
+ */
+const CURRENCY_SYMBOL_PATTERNS: Record<CurrencyCode, RegExp> = {
+  EUR: /€|\beuros?\b/i,
+  USD: /\$|\busd\b|\bdollars?\b/i,
+};
+
+function quoteContradictsCurrency(quote: string, currencyCode: CurrencyCode): boolean {
+  const otherCode: CurrencyCode = currencyCode === 'EUR' ? 'USD' : 'EUR';
+  return CURRENCY_SYMBOL_PATTERNS[otherCode].test(quote) && !CURRENCY_SYMBOL_PATTERNS[currencyCode].test(quote);
+}
+
+/**
  * Fix 4(b): a deterministic rejection of software/subscription pricing
  * pages and similar sources that describe what a *vendor* charges, not
  * what a *worker* earns — distinct from (and stricter than) `isVendorSource`
@@ -502,6 +542,75 @@ function findSourceTextForQuote(quote: string, searchResultTexts: string[]): str
   return searchResultTexts.find((text) => text.includes(quote));
 }
 
+/**
+ * Story 2.5: a deterministic, non-blocking check that a cited source
+ * actually describes the same activity/occupation as the idea (AC: "its
+ * source describes the same activity or occupation as the idea (checked
+ * deterministically against the quoted passage), otherwise the card shows
+ * it as unverified") — the fix for the observed live problem of a source
+ * (e.g. a BLS occupation page) describing a different occupation than the
+ * idea it was attached to.
+ *
+ * Heuristic: a "significant" word (>=5 letters, to skip short/common words
+ * without a stopword list) from the idea's own title must appear, as a
+ * whole word, somewhere in the quoted passage. An idea title with no
+ * significant word at all (nothing specific to check) is treated as a
+ * match rather than a false mismatch. Deliberately lenient — this labels,
+ * it never rejects (Boundary), so under-flagging a genuine mismatch is a
+ * far smaller problem than over-flagging a real match as "unverified".
+ */
+const OCCUPATION_MATCH_MIN_WORD_LENGTH = 5;
+
+/**
+ * Review fix (blind-hunter #10): generic qualifiers that say nothing about
+ * *which* occupation/activity is being described — long enough to pass the
+ * length filter, common enough across unrelated domains to produce a false
+ * match (e.g. a title containing "online tutoring" matching an unrelated
+ * quote about "online grocery delivery" on "online" alone). Deliberately
+ * short and conservative: this does not fix every possible false match
+ * (the heuristic's leniency is intentional, see `occupationMatchesIdea`'s
+ * own doc comment), only the clearest, most common content-free words this
+ * story's own prompt and test fixtures already surfaced.
+ */
+const OCCUPATION_MATCH_STOPWORDS = new Set([
+  'online',
+  'weekly',
+  'monthly',
+  'hourly',
+  'basic',
+  'typically',
+  'average',
+  'current',
+  'market',
+  'service',
+  'services',
+  'client',
+  'clients',
+  'freelance',
+]);
+
+/**
+ * Review fix (blind-hunter #1): the prior hand-maintained Latin-1 range
+ * (`[a-zà-öø-ÿ]`) excludes German `ß` (U+00DF sorts below both `à-ö`
+ * [U+00E0-U+00F6] and `ø-ÿ` [U+00F8-U+00FF]) — confirmed directly:
+ * `'fußpflege'.match(/[a-zà-öø-ÿ]+/g)` -> `['fu','pflege']`, splitting the
+ * word at the ß. `\p{L}` (Unicode "Letter" property, `u` flag) matches any
+ * language's letters correctly, including ß, instead of hand-maintaining
+ * per-language ranges — this heuristic's whole point is working across both
+ * reply languages (en/de), so it must not silently degrade for German text.
+ */
+function significantWords(text: string): string[] {
+  const words = text.toLowerCase().match(/\p{L}+/gu) ?? [];
+  return words.filter((word) => word.length >= OCCUPATION_MATCH_MIN_WORD_LENGTH && !OCCUPATION_MATCH_STOPWORDS.has(word));
+}
+
+export function occupationMatchesIdea(title: string, quote: string): boolean {
+  const titleWords = significantWords(title);
+  if (titleWords.length === 0) return true;
+  const quoteWords = new Set(significantWords(quote));
+  return titleWords.some((word) => quoteWords.has(word));
+}
+
 /** Fix 6: a tier-3 source needs a second, *independent* retrieved result
  * (not the quote's own source text) whose numbers agree with the stored
  * rate within a plausible +/-30% band — a deterministic, generous
@@ -563,21 +672,37 @@ export function evaluateSourceTrust(draft: IdeaDraft, searchResultTexts: string[
  * Round 15 (user-requested): glassdoor.* is treated as always login-walled/
  * masked, regardless of what this specific retrieved page's text says —
  * unlike the general tier-4 rule (round 12: soft, accepted with an honest
- * label), this is a hard, domain-based rejection, never accepted as the
- * baseline-rate source on any attempt.
+ * label), this is a hard, domain-based rejection, never accepted as a
+ * source on any attempt.
+ *
+ * Story 2.5: generalized from `(draft, searchResultTexts)` to a plain
+ * `(citation, quote, searchResultTexts)` so the exact same check applies to
+ * `demandEvidenceCitation`/`demandEvidenceQuote` too (AC: "login-walled
+ * salary sites that mask figures by region are never used as a source" —
+ * not scoped to the baseline rate alone).
  */
-export function sourceEvidenceLooksBlockedOrHidden(draft: IdeaDraft, searchResultTexts: string[]): boolean {
-  if (isGlassdoorDomain(extractCitationDomain(draft.baselineRateCitation))) return true;
-  const ownSourceText = findSourceTextForQuote(draft.baselineRateQuote, searchResultTexts);
+export function sourceEvidenceLooksBlockedOrHidden(citation: string, quote: string, searchResultTexts: string[]): boolean {
+  if (isGlassdoorDomain(extractCitationDomain(citation))) return true;
+  const ownSourceText = findSourceTextForQuote(quote, searchResultTexts);
   return ownSourceText !== undefined && sourceTextLooksBlockedOrHidden(ownSourceText);
 }
 
 /** One draft's full check result — round 12: every check here is hard
  * (blocks every attempt); source-trust *labeling* (`trust`) is always
- * computed but never blocks — see `evaluateBatch`. */
+ * computed but never blocks — see `evaluateBatch`.
+ *
+ * Story 2.5: `trust.isUnverified` is now also true when the baseline-rate
+ * quote describes a different occupation/activity than the idea
+ * (`occupationMatchesIdea`) — OR'd onto the existing tier-based signal, both
+ * still only ever labels, never blocks. `isDemandEvidenceUnverified` is the
+ * same occupation-match check applied to the new demand-evidence quote —
+ * demand evidence has no domain-trust-tier concept of its own (AC scopes
+ * tiers to "a baseline rate" only), so this is its only unverified signal.
+ */
 interface DraftEvaluation {
   hardFailures: string[];
   trust: SourceTrustEvaluation;
+  isDemandEvidenceUnverified: boolean;
 }
 
 function evaluateDraft(draft: IdeaDraft, intakeRow: IntakeResponse, searchResultTexts: string[]): DraftEvaluation {
@@ -592,13 +717,37 @@ function evaluateDraft(draft: IdeaDraft, intakeRow: IntakeResponse, searchResult
     hardFailures.push('quoteNotFoundInSearchResults');
   } else if (!quoteSupportsRate(draft)) {
     hardFailures.push('quoteDoesNotSupportRate');
+  } else if (quoteContradictsCurrency(draft.baselineRateQuote, draft.baselineRateCurrency)) {
+    hardFailures.push('quoteCurrencyMismatch');
   }
   // Round 12: moved back to hard (was bundled into round 9/10's softened
   // "trust tier" concept) — a blocked/hidden page is a correctness problem,
   // not a confidence one.
-  if (sourceEvidenceLooksBlockedOrHidden(draft, searchResultTexts)) hardFailures.push('sourceEvidenceBlockedOrHidden');
+  if (sourceEvidenceLooksBlockedOrHidden(draft.baselineRateCitation, draft.baselineRateQuote, searchResultTexts)) {
+    hardFailures.push('sourceEvidenceBlockedOrHidden');
+  }
 
-  return { hardFailures, trust: evaluateSourceTrust(draft, searchResultTexts) };
+  // Story 2.5 (AC: "an idea without sourced evidence is retried, not
+  // shown") — the demand/trend evidence quote gets the exact same two hard
+  // checks as the baseline rate's own quote (verbatim-in-a-real-result,
+  // never a blocked/hidden page) — never a numeric quoteSupportsRate
+  // equivalent, since demand evidence carries no amount to check.
+  if (!quoteMatchesSearchResults(draft.demandEvidenceQuote, searchResultTexts)) {
+    hardFailures.push('demandEvidenceQuoteNotFoundInSearchResults');
+  }
+  if (sourceEvidenceLooksBlockedOrHidden(draft.demandEvidenceCitation, draft.demandEvidenceQuote, searchResultTexts)) {
+    hardFailures.push('demandEvidenceBlockedOrHidden');
+  }
+
+  const trust = evaluateSourceTrust(draft, searchResultTexts);
+  const baselineOccupationMismatch = !occupationMatchesIdea(draft.title, draft.baselineRateQuote);
+  const demandEvidenceOccupationMismatch = !occupationMatchesIdea(draft.title, draft.demandEvidenceQuote);
+
+  return {
+    hardFailures,
+    trust: { ...trust, isUnverified: trust.isUnverified || baselineOccupationMismatch },
+    isDemandEvidenceUnverified: demandEvidenceOccupationMismatch,
+  };
 }
 
 export interface BatchEvaluation {
@@ -639,24 +788,44 @@ export interface BatchEvaluation {
  * the retrieved text, and (round 12) blocked/hidden source evidence — are
  * the only thing `accepted` depends on.
  */
+function countDomains(drafts: IdeaDraft[], citationOf: (draft: IdeaDraft) => string): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const draft of drafts) {
+    const domain = extractCitationDomain(citationOf(draft));
+    counts.set(domain, (counts.get(domain) ?? 0) + 1);
+  }
+  return counts;
+}
+
 function evaluateBatch(drafts: IdeaDraft[], intakeRow: IntakeResponse, searchResultTexts: string[]): BatchEvaluation {
   const perDraft = drafts.map((draft) => evaluateDraft(draft, intakeRow, searchResultTexts));
   const hardValid = perDraft.every((draft) => draft.hardFailures.length === 0);
 
   const ideaTypeCount = new Set(drafts.map((draft) => draft.ideaType)).size;
-  const domainCounts = new Map<string, number>();
-  for (const draft of drafts) {
-    const domain = extractCitationDomain(draft.baselineRateCitation);
-    domainCounts.set(domain, (domainCounts.get(domain) ?? 0) + 1);
-  }
+  const domainCounts = countDomains(drafts, (draft) => draft.baselineRateCitation);
   const domainSpreadOk = domainCounts.size >= MIN_DISTINCT_CITATION_DOMAINS;
   const domainCapOk = ![...domainCounts.values()].some((count) => count > MAX_IDEAS_PER_CITATION_DOMAIN);
   const ideaTypeOk = ideaTypeCount >= MIN_DISTINCT_IDEA_TYPES;
+
+  // Story 2.5 (AC3: "its evidence comes from at least 3 distinct source
+  // domains") — the discovery/demand-evidence citations' own domain
+  // diversity, same thresholds as the baseline-rate check above but counted
+  // separately (the two evidence types can legitimately share or differ in
+  // domains). Logged-only, never blocking — same round-12 precedent as the
+  // baseline-rate diversity check, and consistent with this story's own
+  // "do not add retries" instruction: a reliability-costly hard gate here
+  // would risk reproducing round 9's whole-attempt-exhaustion failure mode
+  // for a diversity property, not a correctness one.
+  const demandEvidenceDomainCounts = countDomains(drafts, (draft) => draft.demandEvidenceCitation);
+  const demandEvidenceDomainSpreadOk = demandEvidenceDomainCounts.size >= MIN_DISTINCT_CITATION_DOMAINS;
+  const demandEvidenceDomainCapOk = ![...demandEvidenceDomainCounts.values()].some((count) => count > MAX_IDEAS_PER_CITATION_DOMAIN);
 
   const softFailures: string[] = [];
   if (!ideaTypeOk) softFailures.push('ideaTypeVariety');
   if (!domainSpreadOk) softFailures.push('citationDomainSpread');
   if (!domainCapOk) softFailures.push('citationDomainCap');
+  if (!demandEvidenceDomainSpreadOk) softFailures.push('demandEvidenceDomainSpread');
+  if (!demandEvidenceDomainCapOk) softFailures.push('demandEvidenceDomainCap');
 
   return { perDraft, hardValid, softFailures, accepted: hardValid };
 }
@@ -676,6 +845,35 @@ function logBatchEvaluation(attempt: number, evaluation: BatchEvaluation): void 
   });
 }
 
+/**
+ * Story 2.5: descriptive text per `CountryCode` for the nested-agent
+ * prompt's region preference — `'other'` has no fixed text (handled
+ * separately in `buildNestedAgentPrompt`, falling back to the existing
+ * reply-language-based heuristic).
+ */
+const COUNTRY_PREFERENCE_TEXT: Record<Exclude<CountryCode, 'other'>, string> = {
+  DE: 'Germany (e.g. destatis.de, bundesagentur.de/arbeitsagentur.de, stepstone.de)',
+  AT: 'Austria (e.g. statistik.at)',
+  US: 'the United States (e.g. bls.gov, dol.gov)',
+};
+
+function buildRegionPreferenceText(
+  country: IntakeResponse['country'],
+  replyLanguage: GenerateIdeasToolArgs['replyLanguage'],
+): string {
+  if (country === 'other') {
+    return `When available, prefer a source for the region implied by this reply's language (` +
+      `${replyLanguage === 'de' ? 'Germany/Austria/Switzerland' : 'the US/UK'}), but any of the source kinds ` +
+      'above from elsewhere is still acceptable.';
+  }
+  return (
+    `The user is located in ${COUNTRY_PREFERENCE_TEXT[country]}. When available, strongly prefer a baseline-rate ` +
+    'and demand-evidence source for this country/region, but any of the source kinds above from elsewhere is ' +
+    'still acceptable — a source from a different region is still usable, it is just labeled on the card as not ' +
+    'local, never presented as if it were.'
+  );
+}
+
 export function buildNestedAgentPrompt(
   intakeRow: IntakeResponse,
   replyLanguage: GenerateIdeasToolArgs['replyLanguage'],
@@ -689,6 +887,19 @@ export function buildNestedAgentPrompt(
     `riskTolerance: ${intakeRow.riskTolerance}`,
     `stoppedBeforeText: """${intakeRow.stoppedBeforeText}"""`,
     `failurePattern: ${intakeRow.failurePattern}`,
+    `country: ${intakeRow.country}`,
+    'Before sourcing a baseline rate, run at least one discovery web_search per idea (or shared across closely ' +
+      'related ideas) for current demand, growth, or trend signals relevant to the skills/interests above — not ' +
+      'limited to freelance rate pages (e.g. industry/market reports, job-market news, marketplace demand data). ' +
+      'Issue these alongside the baseline-rate searches in the same first batch of parallel tool calls.',
+    'demandEvidenceNote: one short sentence (plain language, translated like the rest of this idea) stating the ' +
+      'current demand/trend signal you found for this idea.',
+    'demandEvidenceQuote: copy the exact sentence from that discovery search result, verbatim — checked against ' +
+      'the real retrieved text, same as baselineRateQuote.',
+    'demandEvidenceCitation: the full URL of that discovery result.',
+    'growthPath: one short sentence (translated) on how this idea could realistically grow over time (e.g. ' +
+      'raising rates once established, adding a service tier, building a repeat-client base) — never implying a ' +
+      'scale that would exceed the time/budget/risk limits below.',
     'For each idea, call the web_search tool at least once to find a real, current rate that states what a ' +
       '*worker* earns for that kind of work — never a software/subscription pricing page or any other source ' +
       'that describes what a vendor charges rather than what a person earns (reject such a source yourself and ' +
@@ -703,9 +914,7 @@ export function buildNestedAgentPrompt(
       'figures behind a sign-in/contribute-your-own-data wall) — use a different pay-data provider instead. ' +
       'Never use a page that requires signing in/subscribing to see the number, or that shows it ' +
       'masked or blurred (e.g. "$**", "sign in to see salaries") — search again for one that shows the real ' +
-      `figure. When available, prefer a source for the region implied by this reply's language (` +
-      `${replyLanguage === 'de' ? 'Germany/Austria/Switzerland' : 'the US/UK'}), but any of the source kinds ` +
-      'above from elsewhere is still acceptable.',
+      `figure. ${buildRegionPreferenceText(intakeRow.country, replyLanguage)}`,
     'baselineRateQuote: copy the exact sentence from the search result that states the figure, verbatim — not ' +
       'paraphrased, not summarized. This is checked against the real retrieved search text and against the ' +
       'number(s) you report, so it must genuinely be the sentence that contains them.',
@@ -936,6 +1145,11 @@ function toIdeaResponse(row: IdeaRow): IdeaResponse {
     baselineRateQuote: row.baselineRateQuote,
     sourceTrustTier: row.sourceTrustTier as SourceTrustTier,
     isRateUnverified: row.isRateUnverified,
+    demandEvidenceNote: row.demandEvidenceNote,
+    demandEvidenceCitation: row.demandEvidenceCitation,
+    demandEvidenceQuote: row.demandEvidenceQuote,
+    isDemandEvidenceUnverified: row.isDemandEvidenceUnverified,
+    growthPath: row.growthPath,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   });
@@ -972,7 +1186,7 @@ export async function handleGenerateIdeas(
     ((row, lang, signal) => defaultGenerateDrafts(deps.model, deps.webSearchTool, deps.env, row, lang, signal));
 
   let validDrafts: IdeaDraft[] | undefined;
-  let validTrustEvaluations: SourceTrustEvaluation[] | undefined;
+  let validEvaluations: DraftEvaluation[] | undefined;
   let lastError: unknown;
 
   for (let attempt = 0; attempt < MAX_DRAFT_ATTEMPTS; attempt += 1) {
@@ -1027,7 +1241,7 @@ export async function handleGenerateIdeas(
 
       if (evaluation.accepted) {
         validDrafts = output.ideas;
-        validTrustEvaluations = evaluation.perDraft.map((draft) => draft.trust);
+        validEvaluations = evaluation.perDraft;
         break;
       }
       lastError = new Error(
@@ -1070,7 +1284,8 @@ export async function handleGenerateIdeas(
           // time instead of re-derived here, since a re-derive via the
           // strict `evaluateSourceTrust` would (correctly) disagree for a
           // draft only accepted via the last attempt's degradation.
-          const trust = validTrustEvaluations![index]!;
+          const evaluation = validEvaluations![index]!;
+          const trust = evaluation.trust;
           return {
             userId,
             status: 'suggested',
@@ -1097,6 +1312,11 @@ export async function handleGenerateIdeas(
             baselineRateCitation: draft.baselineRateCitation,
             sourceTrustTier: trust.tier,
             isRateUnverified: trust.isUnverified,
+            demandEvidenceNote: draft.demandEvidenceNote,
+            demandEvidenceCitation: draft.demandEvidenceCitation,
+            demandEvidenceQuote: draft.demandEvidenceQuote,
+            isDemandEvidenceUnverified: evaluation.isDemandEvidenceUnverified,
+            growthPath: draft.growthPath,
           };
         }),
       )
@@ -1129,9 +1349,11 @@ export function createGenerateIdeasTool(
     {
       name: 'generate_ideas',
       description:
-        'Call this when a user who has already completed intake asks for income ideas (or for their 5 ideas ' +
-        `again). Produces exactly ${IDEA_COUNT} tailored ideas grounded in a real sourced baseline income rate ` +
-        'per idea, persists them, and never needs the user to repeat their intake answers. Supply replyLanguage ' +
+        'Call this whenever you are asked to generate income ideas (or asked for them again) — always call it ' +
+        'directly, never ask the user to resupply skills/time/budget/risk/country/what-stopped-them first: this ' +
+        'tool reads that data itself from storage and fails on its own, loudly, if none exists yet, which you ' +
+        `then relay — it is never your job to guess that in advance. Produces exactly ${IDEA_COUNT} tailored ` +
+        'ideas grounded in a real sourced baseline income rate per idea and persists them. Supply replyLanguage ' +
         "from your own judgment of the conversation's language (\"en\" or \"de\") — same precedent as " +
         'submit_intake.failurePattern: you decide it, the tool itself makes no language judgment.',
       schema: generateIdeasToolSchema,

@@ -6,7 +6,7 @@
   "generateNewButton": "Generate new ideas",
   "generatingButton": "Generating…",
   "generatingStatus": "Generating your ideas…",
-  "generatingHint": "This can take a few seconds.",
+  "generatingHint": "This can take up to a minute.",
   "error": {
     "loadFailed": "We couldn't load your ideas. Please reload the page.",
     "generateFailed": "Generating your ideas failed or timed out. Please try again."
@@ -20,6 +20,14 @@
     "estimateBadge": "estimate",
     "vendorSourceLabel": "source: tool vendor",
     "unverifiedLabel": "unverified",
+    "demandEvidenceLabel": "Current demand",
+    "growthPathLabel": "How this can grow",
+    "foreignSourceLabel": "{{region}} data",
+    "region": {
+      "DE": "German",
+      "AT": "Austrian",
+      "US": "US"
+    },
     "rateUnit": {
       "hour": "per hour",
       "project": "per project",

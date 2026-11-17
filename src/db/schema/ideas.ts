@@ -69,6 +69,20 @@ export const ideas = pgTable('ideas', {
   baselineRateCitation: text('baseline_rate_citation').notNull(),
   sourceTrustTier: text('source_trust_tier').notNull(),
   isRateUnverified: boolean('is_rate_unverified').notNull(),
+  /**
+   * Story 2.5 (AC: demand/trend evidence + growth path). Nullable, unlike
+   * every column above — Lane A's frozen `src/api/routes/ideas.test.ts`
+   * fixture rows insert without these columns at all, and that file is
+   * off-limits to this story, so a `NOT NULL` (with no sensible default for
+   * free text) would break it. `generate_ideas.ts`'s own write path always
+   * populates all four for a real generation; only a row inserted outside
+   * that path (like those test fixtures) ever has them `null`.
+   */
+  demandEvidenceNote: text('demand_evidence_note'),
+  demandEvidenceCitation: text('demand_evidence_citation'),
+  demandEvidenceQuote: text('demand_evidence_quote'),
+  isDemandEvidenceUnverified: boolean('is_demand_evidence_unverified').notNull().default(false),
+  growthPath: text('growth_path'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });

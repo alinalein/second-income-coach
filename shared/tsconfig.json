@@ -1,7 +1,7 @@
 {
   "compilerOptions": {
     "target": "ES2023",
-    "lib": ["ES2023"],
+    "lib": ["ES2023", "DOM"],
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "composite": true,
@@ -20,6 +20,6 @@
     "resolveJsonModule": true,
     "verbatimModuleSyntax": true
   },
-  "include": ["schemas/**/*.ts", "money.ts"],
+  "include": ["schemas/**/*.ts", "money.ts", "region.ts"],
   "exclude": ["**/*.test.ts", "dist", "node_modules"]
 }

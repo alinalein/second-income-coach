@@ -23,6 +23,14 @@ export const intake = pgTable('intake', {
   riskTolerance: text('risk_tolerance').notNull(),
   stoppedBeforeText: text('stopped_before_text').notNull(),
   failurePattern: text('failure_pattern').notNull(),
+  /**
+   * Story 2.5: steers `generate_ideas`'s source-region preference and the
+   * card's "foreign source" labeling. `DEFAULT 'other'` is a migration
+   * safety net only (backfills any pre-existing row with "no regional
+   * preference") — the Zod request schema (`shared/schemas/intake.ts`)
+   * requires every new submission to supply a real value.
+   */
+  country: text('country').notNull().default('other'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });

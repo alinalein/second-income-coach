@@ -6,7 +6,7 @@
   "generateNewButton": "Neue Ideen generieren",
   "generatingButton": "Wird generiert…",
   "generatingStatus": "Deine Ideen werden generiert…",
-  "generatingHint": "Das kann einige Sekunden dauern.",
+  "generatingHint": "Das kann bis zu einer Minute dauern.",
   "error": {
     "loadFailed": "Deine Ideen konnten nicht geladen werden. Bitte lade die Seite neu.",
     "generateFailed": "Das Generieren deiner Ideen ist fehlgeschlagen oder hat zu lange gedauert. Bitte versuche es erneut."
@@ -20,6 +20,14 @@
     "estimateBadge": "Schätzung",
     "vendorSourceLabel": "Quelle: Tool-Anbieter",
     "unverifiedLabel": "unbestätigt",
+    "demandEvidenceLabel": "Aktuelle Nachfrage",
+    "growthPathLabel": "So kann das wachsen",
+    "foreignSourceLabel": "{{region}} Daten",
+    "region": {
+      "DE": "deutsche",
+      "AT": "österreichische",
+      "US": "US-amerikanische"
+    },
     "rateUnit": {
       "hour": "pro Stunde",
       "project": "pro Projekt",

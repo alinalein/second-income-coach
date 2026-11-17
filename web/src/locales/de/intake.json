@@ -35,6 +35,15 @@
       "high": "Hoch — ich bin mit größeren Wetten vertraut"
     }
   },
+  "country": {
+    "label": "Wo lebst du?",
+    "options": {
+      "DE": "Deutschland",
+      "AT": "Österreich",
+      "US": "USA",
+      "other": "Sonstiges / keine Angabe"
+    }
+  },
   "stoppedBeforeText": {
     "label": "Was hat dich bisher aufgehalten?",
     "placeholder": "Erzähl uns, was dir in der Vergangenheit im Weg stand, falls etwas."

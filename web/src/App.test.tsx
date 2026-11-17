@@ -39,6 +39,7 @@ function existingIntakeRecord() {
     startingBudgetRange: 'under_100',
     riskTolerance: 'low',
     stoppedBeforeText: 'I got overwhelmed.',
+    country: 'DE',
     failurePattern: 'overwhelm',
     createdAt: now,
     updatedAt: now,
