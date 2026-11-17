@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 11-14-2026 19:50
-last_updated: 11-17-2026 18:00
+last_updated: 11-17-2026 19:00
 project: Second Income Coach
 project_key: NOKEY
 tracking_system: file-system
@@ -44,15 +44,15 @@ development_status:
   1-6-glass-style-contrast-re-verification: done
   epic-1-retrospective: optional
 
-  epic-2: backlog
+  epic-2: in-progress
   2-1-structured-intake-with-failure-pattern-classification: done
   2-2-tailored-idea-generation: done
   2-3-bookmark-and-reject-ideas: done
   2-4-generate-more-ideas: backlog
   2-5-opportunity-discovery-growth-path: done
   2-7-translate-idea-cards-on-language-change: backlog
-  2-8-guided-flow-from-intake-to-plan: backlog
-  2-9-top-navigation-bar: backlog
+  2-8-guided-flow-from-intake-to-plan: review
+  2-9-app-navigation-sidebar: backlog
   2-6-faster-idea-generation-optional: backlog
   epic-2-retrospective: optional
 

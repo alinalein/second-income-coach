@@ -660,41 +660,41 @@ So that I always know what to do next and never see actions that don't apply yet
 **When** this flow is built
 **Then** they stay unchanged: the idea-selection dialog here confirms the choice of idea, activation in 3.2 still confirms the plan itself, and switching in 3.3 reuses the same select-and-confirm dialog
 
-### Story 2.9: Top Navigation Bar
+### Story 2.9: App Navigation Sidebar
 
 As a signed-in user,
-I want one navigation bar that takes me to my ideas, my plan, my bookmarked ideas and my settings,
-So that I can always find what I need without hunting through the page.
+I want a left sidebar that lists my plans and bookmarked ideas and takes me to my ideas and settings,
+So that I can move between the things I'm working on without hunting through the page.
 
 **Acceptance Criteria:**
 
 **Given** a signed-in user with an intake
 **When** any main screen is shown
-**Then** the top bar shows the product name on the left, four navigation items (Ideas, Plan, Bookmarked, Settings), and the existing theme toggle and sign-out on the right; the active item is visibly marked and every item is keyboard-reachable with an accessible name (DE + EN, AD-24)
+**Then** a left sidebar shows, top to bottom: the product name, a "New ideas" entry (the ideas view of Stories 2.2/2.3/2.8, unchanged), a "My plans" list, a "Bookmarked" list, and at the bottom the user's profile entry with Settings, the theme toggle and sign-out; the active entry is visibly marked and every entry is keyboard-reachable with an accessible name (DE + EN, AD-24)
 
-**Given** the Ideas item
-**When** selected
-**Then** it shows the ideas view of Stories 2.2/2.3/2.8 unchanged
+**Given** the "My plans" list
+**When** the user has plans
+**Then** each entry is one idea with a plan, titled with the idea, sorted by last activity; the active plan is marked, paused plans are dimmed; selecting an entry opens that plan's workspace (Story 3.1) with that plan's own chat thread (AD-18); with no plans the list shows a short localized note, never an error or blank area
 
-**Given** the Plan item
-**When** the user has a selected idea with a plan
-**Then** it opens that plan's workspace (Story 3.1); with no selected idea it shows a short localized note pointing to the Ideas view, never an error or blank screen
+**Given** the "Bookmarked" list
+**When** the user has bookmarked ideas without a plan
+**Then** each entry is one such idea; selecting it opens the confirmation dialog of Story 2.8, and confirming runs the select-and-plan flow (lazy `create_plan`, Story 3.1/3.3) after which the idea moves to "My plans"; switching which plan is active, pausing and resuming stay Story 3.3's behaviour and the 3.2 confirmation gate is never bypassed
 
-**Given** the Bookmarked item
-**When** selected
-**Then** it lists the user's bookmarked ideas (same idea card, Select/Reject available); choosing Select uses the confirm dialog of Story 2.8, and the plan switch itself stays Story 3.3's behaviour
+**Given** the profile entry
+**When** opened
+**Then** it offers Settings (the existing settings page, Stories 5.1/5.4/5.5, shown as its own view and no longer as a card on the main page), the theme toggle and sign-out
 
-**Given** the Settings item
-**When** selected
-**Then** it shows the existing settings page (Stories 5.1/5.4/5.5), which is no longer rendered as a card on the main page
+**Given** the plan workspace of Story 3.1
+**When** shown next to this sidebar
+**Then** its status panel (current and next step, timeline) is a compact header above the chat, not a second sidebar, using the narrow-screen layout Story 3.1 already defines
 
 **Given** a narrow/mobile screen
-**When** the bar is shown
-**Then** it collapses to a compact form (icons or a menu) without horizontal page scroll
+**When** the sidebar is shown
+**Then** it collapses to a menu button that opens the sidebar as an overlay, with no horizontal page scroll
 
 **Given** the page is reloaded
-**When** a navigation item was active
-**Then** the same view is shown (the view is part of the URL or stored locally; the choice is never lost on reload)
+**When** a view or plan was active
+**Then** the same view or plan is shown again (kept in the URL or stored locally; never lost on reload)
 
 ### Story 2.6: Faster Idea Generation (optional)
 
