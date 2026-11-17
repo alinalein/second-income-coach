@@ -211,10 +211,22 @@ function translationKey(ideaId: string, language: string): string {
  * `DRAFT_ATTEMPT_TIMEOUT_MS`'s own 75s->110s raise (56s * 110/75 ≈ 82s,
  * rounded) — an estimate, not a fresh measurement of a clean successful
  * run, since none was available in this environment.
+ *
+ * Story 2.6 (speed rounds 2/3, bug fix): the backend's per-idea parallel
+ * pipeline (no more nested ReAct search loop) now measures 20-45s for a
+ * typical successful run, not 56-82s — this constant was stale from the
+ * slow era, so the bar sat at roughly half when the ideas actually
+ * appeared. Updated to 35s, the middle of the newly measured range.
  */
-const TYPICAL_GENERATE_DURATION_MS = 82_000;
+const TYPICAL_GENERATE_DURATION_MS = 35_000;
 const PROGRESS_HOLD_PERCENT = 90;
 const PROGRESS_TICK_MS = 300;
+/** Story 2.6 (bug fix): matches `DeterminateProgressBar`'s own fill
+ * transition (`transition-[width] duration-300` below) — the delay before
+ * the new ideas replace this view, so the bar's fill is actually visible
+ * reaching 100% instead of being cut off mid-animation by the same render
+ * that swaps the ideas in. */
+const PROGRESS_COMPLETE_DELAY_MS = 300;
 
 function DeterminateProgressBar({ percent, label }: { percent: number; label: string }) {
   return (
@@ -1103,6 +1115,12 @@ export function IdeasPanel({ onViewPlan, autoGenerate = false }: IdeasPanelProps
       .then(async (res) => {
         const body: unknown = await res.json();
         setProgress(100);
+        // Story 2.6 (bug fix): stop the ticking interval the instant a
+        // response arrives — otherwise, during the success branch's own
+        // `PROGRESS_COMPLETE_DELAY_MS` wait below, one more tick would
+        // recompute progress from the hold-percent formula and regress the
+        // bar back down from the 100% just set above.
+        window.clearInterval(progressIntervalId);
 
         // Story 2.11 (AC5/AC6): the server's 429 is a plain limit, never an
         // error — existing ideas stay exactly as they are, and this never
@@ -1132,6 +1150,12 @@ export function IdeasPanel({ onViewPlan, autoGenerate = false }: IdeasPanelProps
           }
           return;
         }
+        // Story 2.6 (bug fix): let the bar's own fill animation actually
+        // reach 100% before swapping the ideas in, instead of cutting it
+        // off mid-animation — `setProgress(100)` above and the reveal
+        // below used to land in the same render.
+        await new Promise((resolve) => window.setTimeout(resolve, PROGRESS_COMPLETE_DELAY_MS));
+
         // Round 13: ideas are swapped into state here directly from the
         // response — a successful generation already shows the new batch's
         // cards immediately, with no page reload.

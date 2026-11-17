@@ -290,6 +290,46 @@ describe('IdeasPanel (round 13: a failed regenerate shows the generate-failure m
   });
 });
 
+// Story 2.6 (bug fix): the bar used to jump to 100% and get replaced by the
+// new ideas in the same render, so it never visibly finished. Now the bar
+// reaches 100% first, and only after a short reveal delay do the new ideas
+// replace the view.
+describe('IdeasPanel (Story 2.6: progress bar reaches 100% before the new ideas replace the view)', () => {
+  it('shows the bar at 100% before the newly generated idea appears', async () => {
+    const newIdea = fakeIdea();
+    vi.stubGlobal(
+      'fetch',
+      mockFetch({
+        ...INTAKE_NULL_RESPONSE,
+        // `mockFetch` matches by `url.includes(key)`, so the more specific
+        // `/api/ideas/generate` key must come before the plain `/api/ideas`
+        // one — otherwise the POST to `/generate` would match the GET
+        // handler first, since `/api/ideas/generate` also contains
+        // `/api/ideas` as a substring.
+        '/api/ideas/generate': () =>
+          new Response(
+            JSON.stringify({ ideas: [newIdea], currency: 'EUR', generateLimit: { blocked: false, reason: null, limit: null, resetsAt: null } }),
+            { status: 200 },
+          ),
+        '/api/ideas': () => new Response(JSON.stringify({ ideas: [], currency: 'EUR' }), { status: 200 }),
+      }),
+    );
+
+    render(<IdeasPanel />);
+
+    const generateButton = await screen.findByRole('button', { name: 'Generate my ideas' });
+    fireEvent.click(generateButton);
+
+    const progressBar = within(screen.getByRole('status')).getByRole('progressbar');
+    await waitFor(() => expect(progressBar).toHaveAttribute('aria-valuenow', '100'));
+    // The bar is at 100%, but the reveal delay hasn't elapsed yet — the new
+    // idea must not be on screen.
+    expect(screen.queryByText(newIdea.title)).not.toBeInTheDocument();
+
+    expect(await screen.findByText(newIdea.title)).toBeInTheDocument();
+  });
+});
+
 // Story 2.11 AC5/AC6: a 429 from POST /generate is a plain limit notice —
 // never worded like an error, button disabled afterwards, existing ideas
 // stay fully usable.
