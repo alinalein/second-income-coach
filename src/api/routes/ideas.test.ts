@@ -6,14 +6,26 @@ import { afterAll, describe, expect, it, vi } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { createIdeasRouter, type IdeasRouterDeps } from './ideas.js';
 import { createDb } from '../../db/client.js';
-import { users, ideas, userSettings, plans } from '../../db/schema/index.js';
+import { users, ideas, userSettings, plans, userGenerationCounts } from '../../db/schema/index.js';
+import { incrementAndGetUserGenerationCount } from '../../tools/plain/usage_limits.js';
 
 // Story 2.7: `createIdeasRouter` now also builds a translation chat model
 // at construction time (`createChatModel(env, TRANSLATION_MODEL_ID)`) —
 // these two keys are never actually used by any test below (no test here
 // exercises `POST /translate`'s real model call), just present so
 // construction itself doesn't throw / fails typecheck.
-const testEnv: IdeasRouterDeps['env'] = { RATE_LIMIT_WINDOW_MS: 60_000, OPENROUTER_API_KEY: 'test-key', MISTRAL_API_KEY: 'test-key' };
+// Story 2.11: generous enough that no existing test's repeated
+// `POST /generate` calls ever trip these — each test uses its own fresh
+// user (`createTestUser`), so the per-user counter never carries over, and
+// these tests mock the agent (`fakeAgent`) so the shared search-budget
+// counter is never touched at all.
+const testEnv: IdeasRouterDeps['env'] = {
+  RATE_LIMIT_WINDOW_MS: 60_000,
+  OPENROUTER_API_KEY: 'test-key',
+  MISTRAL_API_KEY: 'test-key',
+  DAILY_SEARCH_BUDGET: 1_000_000,
+  DAILY_GENERATIONS_PER_USER: 1_000_000,
+};
 
 type FakeAgent = IdeasRouterDeps['agent'];
 
@@ -39,6 +51,7 @@ async function createTestUser(): Promise<string> {
 async function cleanUp(userId: string) {
   await db.delete(ideas).where(eq(ideas.userId, userId));
   await db.delete(userSettings).where(eq(userSettings.userId, userId));
+  await db.delete(userGenerationCounts).where(eq(userGenerationCounts.userId, userId));
   await db.delete(users).where(eq(users.id, userId));
 }
 
@@ -264,6 +277,64 @@ describe('createIdeasRouter POST /generate', () => {
       const [{ messages }, config] = (agent.invoke as ReturnType<typeof vi.fn>).mock.calls[0]!;
       expect(config).toEqual({ configurable: { thread_id: `ideas-trigger:${userId}` }, signal: expect.any(AbortSignal) });
       expect(messages[0].content).toContain('German ("de")');
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+});
+
+// Story 2.11 AC5/AC6: "the route returns a clear 429-style response the UI
+// turns into the message" — the server enforces the limit itself, never
+// relying on the UI's own disabled button, and reports which of the two
+// reasons applies.
+describe('createIdeasRouter POST /generate (Story 2.11: limits)', () => {
+  it.each([
+    { case: 'the shared daily search budget is already used up', envOverride: { DAILY_SEARCH_BUDGET: 0 }, expectedReason: 'shared_budget' },
+    { case: "the user's own daily generation limit is already reached", envOverride: { DAILY_GENERATIONS_PER_USER: 0 }, expectedReason: 'user_limit' },
+  ])('returns 429 with reason "$expectedReason" when $case', async ({ envOverride, expectedReason }) => {
+    const userId = await createTestUser();
+    try {
+      const agent = fakeAgent({ invoke: vi.fn() });
+
+      const res = await request(buildTestApp(agent, userId, { env: { ...testEnv, ...envOverride } })).post('/api/ideas/generate');
+
+      expect(res.status).toBe(429);
+      expect(res.body).toMatchObject({ error: 'limit_reached', reason: expectedReason });
+      expect(res.body.resetsAt).toEqual(expect.any(String));
+      // The agent is never even invoked — the server gates before doing any
+      // of the real (cost-bearing) work.
+      expect(agent.invoke).not.toHaveBeenCalled();
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+});
+
+// Story 2.11 AC5: the generate button must be disabled *before* the user
+// ever clicks it — `GET /` reflects the same blocked state read-only.
+describe('createIdeasRouter GET / (Story 2.11: generateLimit)', () => {
+  it('reports generateLimit.blocked when the per-user daily limit is already reached, without incrementing anything', async () => {
+    const userId = await createTestUser();
+    try {
+      await incrementAndGetUserGenerationCount(db, userId);
+      const agent = fakeAgent();
+      const res = await request(buildTestApp(agent, userId, { env: { ...testEnv, DAILY_GENERATIONS_PER_USER: 1 } })).get('/api/ideas');
+
+      expect(res.status).toBe(200);
+      expect(res.body.generateLimit).toMatchObject({ blocked: true, reason: 'user_limit', limit: 1 });
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+
+  it('reports generateLimit.blocked: false under the generous default limits', async () => {
+    const userId = await createTestUser();
+    try {
+      const agent = fakeAgent();
+      const res = await request(buildTestApp(agent, userId)).get('/api/ideas');
+
+      expect(res.status).toBe(200);
+      expect(res.body.generateLimit).toEqual({ blocked: false, reason: null, limit: null, resetsAt: null });
     } finally {
       await cleanUp(userId);
     }

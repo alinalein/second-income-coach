@@ -3,6 +3,7 @@ import { ChevronDown, Loader2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
   ideasWithPlanResponseSchema,
+  generateLimitStatusSchema,
   translateIdeasResponseSchema,
   convertMoney,
   formatMoney,
@@ -13,6 +14,7 @@ import {
   type CurrencyCode,
   type WeeklyTimeAvailability,
   type Money,
+  type GenerateLimitStatus,
 } from '@app/shared';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
@@ -769,6 +771,10 @@ export function IdeasPanel({ onViewPlan, autoGenerate = false }: IdeasPanelProps
   const { t, i18n } = useTranslation('ideas');
   const [ideas, setIdeas] = React.useState<IdeaWithPlanResponse[]>([]);
   const [currency, setCurrency] = React.useState<CurrencyCode>('EUR');
+  // Story 2.11 (AC5/AC6): server-computed, read fresh on every load and
+  // after every generate response — `null` only until the first `GET
+  // /api/ideas` response lands.
+  const [generateLimit, setGenerateLimit] = React.useState<GenerateLimitStatus | null>(null);
   const [phase, setPhase] = React.useState<Phase>('loading');
   const [progress, setProgress] = React.useState(0);
   // Story 2.8 AC3: which idea the "Select" confirm dialog is open for —
@@ -840,6 +846,7 @@ export function IdeasPanel({ onViewPlan, autoGenerate = false }: IdeasPanelProps
         }
         setIdeas(result.data.ideas);
         setCurrency(result.data.currency);
+        setGenerateLimit(result.data.generateLimit);
         setPhase('idle');
       })
       .catch(() => {
@@ -1096,8 +1103,23 @@ export function IdeasPanel({ onViewPlan, autoGenerate = false }: IdeasPanelProps
     })
       .then(async (res) => {
         const body: unknown = await res.json();
-        const result = ideasWithPlanResponseSchema.safeParse(body);
         setProgress(100);
+
+        // Story 2.11 (AC5/AC6): the server's 429 is a plain limit, never an
+        // error — existing ideas stay exactly as they are, and this never
+        // sets `generate-error`. `generateLimitStatusSchema` already
+        // carries the fields this 429 body also uses (`reason`/`limit`/
+        // `resetsAt`), so it's reused directly rather than a second schema.
+        if (res.status === 429) {
+          const limitResult = generateLimitStatusSchema.safeParse({ ...(body as object), blocked: true });
+          if (isMountedRef.current) {
+            setGenerateLimit(limitResult.success ? limitResult.data : { blocked: true, reason: null, limit: null, resetsAt: null });
+            setPhase('idle');
+          }
+          return;
+        }
+
+        const result = ideasWithPlanResponseSchema.safeParse(body);
         if (!res.ok || !result.success) {
           if (isMountedRef.current) setPhase('generate-error');
           return;
@@ -1108,6 +1130,7 @@ export function IdeasPanel({ onViewPlan, autoGenerate = false }: IdeasPanelProps
         if (isMountedRef.current) {
           setIdeas(result.data.ideas);
           setCurrency(result.data.currency);
+          setGenerateLimit(result.data.generateLimit);
           setPhase('idle');
         }
       })
@@ -1132,14 +1155,24 @@ export function IdeasPanel({ onViewPlan, autoGenerate = false }: IdeasPanelProps
   // generate/regenerate changes `phase` away from `idle`+empty and back.
   const autoGenerateFiredRef = React.useRef(false);
   React.useEffect(() => {
-    if (phase === 'idle' && ideas.length === 0 && autoGenerate && !autoGenerateFiredRef.current) {
+    // Story 2.11: never auto-fires into a known-blocked limit — same as
+    // the button itself being disabled, this never "fails after the fact"
+    // when the state was already known.
+    if (phase === 'idle' && ideas.length === 0 && autoGenerate && !autoGenerateFiredRef.current && !(generateLimit?.blocked ?? false)) {
       autoGenerateFiredRef.current = true;
       handleGenerate();
     }
-  }, [phase, ideas.length, autoGenerate, handleGenerate]);
+  }, [phase, ideas.length, autoGenerate, handleGenerate, generateLimit]);
 
   const locale = LOCALE_BY_LANGUAGE[i18n.language] ?? 'en-US';
   const generating = phase === 'generating';
+  // Story 2.11 (AC5/AC6/AC7): the counters reset at a fixed UTC time, but
+  // the client shows that moment in the viewer's own local time — still
+  // the exact same instant, just legible without the viewer doing math.
+  const generateLimitResetTime =
+    generateLimit?.resetsAt != null
+      ? new Intl.DateTimeFormat(locale, { hour: '2-digit', minute: '2-digit' }).format(new Date(generateLimit.resetsAt))
+      : '';
 
   return (
     <>
@@ -1170,6 +1203,17 @@ export function IdeasPanel({ onViewPlan, autoGenerate = false }: IdeasPanelProps
           {phase === 'generate-error' ? (
             <Badge variant="muted" role="alert">
               {t('error.generateFailed')}
+            </Badge>
+          ) : null}
+          {/* Story 2.11 (AC5/AC6): a plain limit notice, never worded like
+           * an error — `role="status"`, not `role="alert"`, same treatment
+           * as the `translating` badge below. Independent of `phase`:
+           * existing ideas stay visible and usable either way. */}
+          {generateLimit?.blocked ? (
+            <Badge variant="muted" role="status">
+              {generateLimit.reason === 'shared_budget'
+                ? t('limit.sharedBudgetExhausted')
+                : t('limit.userLimitReached', { limit: generateLimit.limit, resetTime: generateLimitResetTime })}
             </Badge>
           ) : null}
           {/* Story 2.3: independent of `phase` — a failed status change never
@@ -1250,7 +1294,7 @@ export function IdeasPanel({ onViewPlan, autoGenerate = false }: IdeasPanelProps
          */}
         {phase !== 'loading' ? (
           <CardFooter className="flex flex-row items-start gap-4">
-            <Button type="button" onClick={handleGenerate} disabled={generating} className="shrink-0">
+            <Button type="button" onClick={handleGenerate} disabled={generating || (generateLimit?.blocked ?? false)} className="shrink-0">
               {generating ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />

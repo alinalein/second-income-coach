@@ -290,6 +290,73 @@ describe('IdeasPanel (round 13: a failed regenerate shows the generate-failure m
   });
 });
 
+// Story 2.11 AC5/AC6: a 429 from POST /generate is a plain limit notice —
+// never worded like an error, button disabled afterwards, existing ideas
+// stay fully usable.
+describe('IdeasPanel (Story 2.11: generate limit reached)', () => {
+  it.each([
+    {
+      reason: 'user_limit' as const,
+      body: { error: 'limit_reached', reason: 'user_limit', limit: 5, resetsAt: '2099-01-02T00:00:00.000Z' },
+      expectedText: /reached today's limit of 5 idea generations/i,
+    },
+    {
+      reason: 'shared_budget' as const,
+      body: { error: 'limit_reached', reason: 'shared_budget', limit: null, resetsAt: '2099-01-02T00:00:00.000Z' },
+      expectedText: "Today's shared search budget of the app is used up. New ideas are available again tomorrow.",
+    },
+  ])('shows the $reason message (never role="alert") and disables the button after a 429', async ({ body, expectedText }) => {
+    const idea = fakeIdea();
+    vi.stubGlobal(
+      'fetch',
+      mockFetch({
+        ...INTAKE_NULL_RESPONSE,
+        '/api/ideas/generate': () => new Response(JSON.stringify(body), { status: 429 }),
+        '/api/ideas': () => new Response(JSON.stringify({ ideas: [idea], currency: 'EUR' }), { status: 200 }),
+      }),
+    );
+
+    render(<IdeasPanel />);
+
+    const regenerateButton = await screen.findByRole('button', { name: 'Generate new ideas' });
+    fireEvent.click(regenerateButton);
+
+    // Wait for the request to settle (past the "generating" progress state,
+    // which also briefly renders its own `role="status"`) before asserting
+    // on the limit notice itself.
+    await waitFor(() => expect(regenerateButton).toBeDisabled());
+
+    const notice = await screen.findByText(expectedText);
+    expect(notice.getAttribute('role')).toBe('status');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    // Existing ideas stay fully usable — never replaced by the 429.
+    expect(screen.getByText(idea.title)).toBeInTheDocument();
+  });
+
+  // AC5: disabled *before* the user ever clicks, straight from GET /'s own
+  // `generateLimit` — the server enforces this, the UI is only a
+  // convenience that reflects it.
+  it('disables the generate button on initial load when GET / already reports generateLimit.blocked', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockFetch({
+        ...INTAKE_NULL_RESPONSE,
+        '/api/ideas': () =>
+          new Response(
+            JSON.stringify({ ideas: [], currency: 'EUR', generateLimit: { blocked: true, reason: 'shared_budget', limit: null, resetsAt: '2099-01-02T00:00:00.000Z' } }),
+            { status: 200 },
+          ),
+      }),
+    );
+
+    render(<IdeasPanel />);
+
+    const generateButton = await screen.findByRole('button', { name: 'Generate my 5 ideas' });
+    expect(generateButton).toBeDisabled();
+    expect(screen.getByText("Today's shared search budget of the app is used up. New ideas are available again tomorrow.")).toBeInTheDocument();
+  });
+});
+
 // Story 2.3 AC2: Select/Bookmark/Reject render directly on every card (never
 // behind a menu), with a status badge once the idea has left `suggested`,
 // and the action matching the card's current status renders as primary.

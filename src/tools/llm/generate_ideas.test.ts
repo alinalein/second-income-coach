@@ -369,7 +369,7 @@ function baseDeps(overrides: Partial<GenerateIdeasDeps> = {}): GenerateIdeasDeps
     db,
     model: {} as never,
     webSearchTool: {} as never,
-    env: { MISTRAL_API_KEY: 'test-key' },
+    env: { MISTRAL_API_KEY: 'test-key', DAILY_SEARCH_BUDGET: 500 },
     ...overrides,
   };
 }

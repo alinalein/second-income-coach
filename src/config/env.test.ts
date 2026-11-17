@@ -46,6 +46,25 @@ describe('loadEnv (I/O matrix: fresh checkout, missing env)', () => {
     expect(env.PORT).toBe(3000);
     expect(env.NODE_ENV).toBe('development');
     expect(env.BODY_LIMIT).toBe('100kb');
+    // Story 2.11 AC4/AC7: "live" is the default in production/the demo;
+    // the two daily limits default generous enough that dev never hits them.
+    expect(env.WEB_SEARCH_MODE).toBe('live');
+    expect(env.DAILY_SEARCH_BUDGET).toBe(500);
+    expect(env.DAILY_GENERATIONS_PER_USER).toBe(50);
+  });
+
+  // Story 2.11 AC4: "the mode is one env variable documented in
+  // .env.example, validated at startup" (CLAUDE.md).
+  it('rejects a WEB_SEARCH_MODE value that is neither "live" nor "stub"', () => {
+    expect(() =>
+      loadEnv({
+        DATABASE_URL: 'postgres://user:pass@localhost:5432/db',
+        ...requiredStory12Vars,
+        ...requiredStory13Vars,
+        ...requiredStory22Vars,
+        WEB_SEARCH_MODE: 'turbo',
+      }),
+    ).toThrow(EnvValidationError);
   });
 
   it('rejects a non-numeric PORT with a clear issue', () => {

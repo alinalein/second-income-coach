@@ -67,6 +67,18 @@ const envSchema = z.object({
   // mode exists for this capability (Boundary) — unlike AD-20's optional
   // registry providers, this is required at startup like every other key.
   TAVILY_API_KEY: z.string().min(1, 'TAVILY_API_KEY is required (see .env.example)'),
+  // Story 2.11 (AC4): "stub" returns fixed canned results with no network
+  // call or credit use — used in dev/test so no test ever spends real
+  // Tavily credits. "live" (default) is the real `tavily-mcp` call.
+  WEB_SEARCH_MODE: z.enum(['live', 'stub'], {
+    error: 'WEB_SEARCH_MODE must be "live" or "stub" (see .env.example)',
+  }).default('live'),
+  // Story 2.11 (AC6/AC7): the app-wide shared daily search-count budget and
+  // the per-user daily generation-count limit — generous defaults so normal
+  // dev/testing never hits them; the demo sets lower values (.env.example).
+  // Both counters live in Postgres and reset at UTC midnight.
+  DAILY_SEARCH_BUDGET: z.coerce.number().int().positive().default(500),
+  DAILY_GENERATIONS_PER_USER: z.coerce.number().int().positive().default(50),
 });
 
 export type Env = z.infer<typeof envSchema>;

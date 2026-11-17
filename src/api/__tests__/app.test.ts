@@ -24,6 +24,9 @@ function testEnv(overrides: Partial<Env> = {}): Env {
     LANGSMITH_API_KEY: 'test-langsmith-key',
     LANGSMITH_PROJECT: 'test-project',
     TAVILY_API_KEY: 'test-tavily-key',
+    WEB_SEARCH_MODE: 'stub',
+    DAILY_SEARCH_BUDGET: 500,
+    DAILY_GENERATIONS_PER_USER: 50,
     ...overrides,
   };
 }

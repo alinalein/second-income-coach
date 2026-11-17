@@ -53,7 +53,7 @@ describe('createCoachAgent (tools override seam: Story 6.2, AD-23)', () => {
     });
 
     const agent = createCoachAgent({
-      env: { OPENROUTER_API_KEY: 'test-key', MISTRAL_API_KEY: 'test-key' },
+      env: { OPENROUTER_API_KEY: 'test-key', MISTRAL_API_KEY: 'test-key', DAILY_SEARCH_BUDGET: 500 },
       checkpointer: new MemorySaver(),
       db: fakeDb(undefined),
       webSearchTool: {} as never,
@@ -72,7 +72,7 @@ describe('createCoachAgent (tools override seam: Story 6.2, AD-23)', () => {
     const boundToolNames = captureBoundToolNames(model);
 
     const agent = createCoachAgent({
-      env: { OPENROUTER_API_KEY: 'test-key', MISTRAL_API_KEY: 'test-key' },
+      env: { OPENROUTER_API_KEY: 'test-key', MISTRAL_API_KEY: 'test-key', DAILY_SEARCH_BUDGET: 500 },
       checkpointer: new MemorySaver(),
       db: fakeDb(undefined),
       webSearchTool: {} as never,
@@ -112,7 +112,7 @@ describe('createCoachAgent (hook integration: personality flows from user_settin
   it("uses the signed-in user's stored personality, not the default, when db is supplied", async () => {
     const model = fakeModel().respond(new AIMessage('Sure, happy to help!'));
     const agent = createCoachAgent({
-      env: { OPENROUTER_API_KEY: 'test-key', MISTRAL_API_KEY: 'test-key' },
+      env: { OPENROUTER_API_KEY: 'test-key', MISTRAL_API_KEY: 'test-key', DAILY_SEARCH_BUDGET: 500 },
       checkpointer: new MemorySaver(),
       db: fakeDb({ personality: 'terse', model: null }),
       model,
@@ -144,7 +144,7 @@ describe('createCoachAgent (hook integration: personality flows from user_settin
   it('still rejects a jailbreak attempt regardless of which personality is selected', async () => {
     const model = fakeModel().respond(new AIMessage('this should never be reached'));
     const agent = createCoachAgent({
-      env: { OPENROUTER_API_KEY: 'test-key', MISTRAL_API_KEY: 'test-key' },
+      env: { OPENROUTER_API_KEY: 'test-key', MISTRAL_API_KEY: 'test-key', DAILY_SEARCH_BUDGET: 500 },
       checkpointer: new MemorySaver(),
       db: fakeDb({ personality: 'terse', model: null }),
       webSearchTool: {} as never,
@@ -187,7 +187,7 @@ describe('createCoachAgent (progress middleware ordering: AC1, I/O matrix happy/
   it('emits checking_message, generating_response, checking_answer in order for a normal turn', async () => {
     const model = fakeModel().respond(new AIMessage('Sure, happy to help!'));
     const agent = createCoachAgent({
-      env: { OPENROUTER_API_KEY: 'test-key', MISTRAL_API_KEY: 'test-key' },
+      env: { OPENROUTER_API_KEY: 'test-key', MISTRAL_API_KEY: 'test-key', DAILY_SEARCH_BUDGET: 500 },
       db: fakeDb({ personality: 'friendly', model: null }),
       webSearchTool: {} as never,
       checkpointer: new MemorySaver(),
@@ -210,7 +210,7 @@ describe('createCoachAgent (progress middleware ordering: AC1, I/O matrix happy/
   it('emits only checking_message for a jailbreak-rejected turn, never calling the model', async () => {
     const model = fakeModel().respond(new AIMessage('should never be reached'));
     const agent = createCoachAgent({
-      env: { OPENROUTER_API_KEY: 'test-key', MISTRAL_API_KEY: 'test-key' },
+      env: { OPENROUTER_API_KEY: 'test-key', MISTRAL_API_KEY: 'test-key', DAILY_SEARCH_BUDGET: 500 },
       db: fakeDb({ personality: 'friendly', model: null }),
       webSearchTool: {} as never,
       checkpointer: new MemorySaver(),
@@ -237,7 +237,7 @@ describe('createCoachAgent (progress middleware ordering: AC1, I/O matrix happy/
   it('still emits the full progress sequence when afterModel replaces an unsafe reply with the fixed fallback', async () => {
     const model = fakeModel().respond(new AIMessage('a flagged reply'));
     const agent = createCoachAgent({
-      env: { OPENROUTER_API_KEY: 'test-key', MISTRAL_API_KEY: 'test-key' },
+      env: { OPENROUTER_API_KEY: 'test-key', MISTRAL_API_KEY: 'test-key', DAILY_SEARCH_BUDGET: 500 },
       db: fakeDb({ personality: 'friendly', model: null }),
       webSearchTool: {} as never,
       checkpointer: new MemorySaver(),
@@ -267,7 +267,7 @@ describe('createCoachAgent (progress middleware ordering: AC1, I/O matrix happy/
   it('tuple-wraps chunks as [mode, payload] when streamMode is the array chat.ts actually requests', async () => {
     const model = fakeModel().respond(new AIMessage('Sure, happy to help!'));
     const agent = createCoachAgent({
-      env: { OPENROUTER_API_KEY: 'test-key', MISTRAL_API_KEY: 'test-key' },
+      env: { OPENROUTER_API_KEY: 'test-key', MISTRAL_API_KEY: 'test-key', DAILY_SEARCH_BUDGET: 500 },
       db: fakeDb({ personality: 'friendly', model: null }),
       webSearchTool: {} as never,
       checkpointer: new MemorySaver(),
