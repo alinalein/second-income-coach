@@ -13,7 +13,9 @@ import {
 import { loadEvalEnv } from './env.js';
 import { buildEvalAgent, runFixtureTurn } from './harness.js';
 import { createJudgeModels } from './judges.js';
+import { sumUsage } from './usage.js';
 import { EVAL_MODEL_IDS, JUDGE_MODEL_IDS, TRAJECTORY_ACCURACY_TARGET, type JudgeModelId } from './constants.js';
+import type { ModelCallUsageRow } from './cost.js';
 
 /**
  * Story 6.2 (AC1): the committed, versioned fixture shape every file under
@@ -110,6 +112,15 @@ interface ResultRow {
 
 const resultRows: ResultRow[] = [];
 
+/** Story 6.3 (AC: cost "against the actual calls the eval run itself
+ * made"): one entry per real model call this run makes — pushed only on
+ * the success path, right where each `outputs` trajectory is obtained, so
+ * it's never duplicated (quality cases share one memoized call across both
+ * judges, Design Notes) and never recorded for a call that didn't happen
+ * (a construction/invoke error already has its own `error` field on the
+ * `ResultRow`, no usage row to match). */
+const modelCallUsages: ModelCallUsageRow[] = [];
+
 async function runDeterministicCase(modelId: string, fixture: Fixture): Promise<ResultRow> {
   const base = { modelId, caseId: fixture.id, caseType: fixture.type, language: fixture.language, toolUnderTest: fixture.toolUnderTest };
 
@@ -120,6 +131,7 @@ async function runDeterministicCase(modelId: string, fixture: Fixture): Promise<
     const evalAgent = buildEvalAgent(modelId, env);
     const threadId = `discovery:eval-${fixture.id}-${modelId}`;
     const outputs = await runFixtureTurn(evalAgent, threadId, [new HumanMessage(fixture.input[0]!.content)]);
+    modelCallUsages.push({ modelId, caseId: fixture.id, ...sumUsage(outputs) });
     // Boundaries: "createTrajectoryMatchEvaluator with toolArgsMatchMode:
     // 'exact'" — trajectoryMatchMode left at its library default (strict),
     // no judge model involved (AC2).
@@ -161,6 +173,7 @@ function getOrGenerateQualityTrajectory(modelId: string, fixture: Fixture): Prom
       const evalAgent = buildEvalAgent(modelId, env);
       const threadId = `discovery:eval-${fixture.id}-${modelId}`;
       const outputs = await runFixtureTurn(evalAgent, threadId, [new HumanMessage(fixture.input[0]!.content)]);
+      modelCallUsages.push({ modelId, caseId: fixture.id, ...sumUsage(outputs) });
       return { outputs, langsmithRunId: evalAgent.getLastRunId() };
     } catch (error) {
       return { error: error instanceof Error ? error.message : String(error) };
@@ -270,6 +283,24 @@ describe('trajectory eval suite (Story 6.2, AD-23)', () => {
   // combination above has already pushed its row — an interrupted run
   // never reaches this point, so it never leaves a stale/partial file (I/O
   // matrix).
+  // Review Triage Log (verification-gap): proves the memoization in
+  // `getOrGenerateQualityTrajectory` actually dedupes — a regression that
+  // moved the `modelCallUsages` push into the per-judge loop instead
+  // would silently double-count real cost for every quality fixture, with
+  // nothing else here catching it.
+  it('records exactly one modelCallUsages row per (model, fixture), even for quality cases scored by two judges', () => {
+    const qualityFixtureIds = new Set(fixtures.filter((fixture) => fixture.type === 'quality').map((fixture) => fixture.id));
+    const countsByKey = new Map<string, number>();
+    for (const usage of modelCallUsages) {
+      const key = `${usage.modelId}::${usage.caseId}`;
+      countsByKey.set(key, (countsByKey.get(key) ?? 0) + 1);
+    }
+    for (const [key, count] of countsByKey) {
+      const caseId = key.split('::')[1]!;
+      if (qualityFixtureIds.has(caseId)) expect(count).toBe(1);
+    }
+  });
+
   it('writes the aggregated per-model results file', () => {
     fs.mkdirSync(path.dirname(resultsPath), { recursive: true });
     fs.writeFileSync(
@@ -280,6 +311,7 @@ describe('trajectory eval suite (Story 6.2, AD-23)', () => {
           trajectoryAccuracyTarget: TRAJECTORY_ACCURACY_TARGET,
           perModelAccuracy: aggregatePerModelAccuracy(resultRows),
           rows: resultRows,
+          modelCallUsages,
         },
         null,
         2,
