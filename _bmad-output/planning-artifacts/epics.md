@@ -810,7 +810,11 @@ So that I can read the whole answer to my question without scrolling by hand.
 
 **Acceptance Criteria:**
 
-**Given** a chat (discovery or plan thread) long enough to scroll
+**Given** a chat (discovery or plan thread) whose messages still fit comfortably in the visible area (the content is less than about 70% of the visible height before the new message)
+**When** the user sends a message
+**Then** the chat behaves normally: the new message and the reply are appended and the view only follows the newest content as needed; the user's message is NOT pushed to the top
+
+**Given** a chat (discovery or plan thread) that is almost full (the new message plus room for its reply would no longer fit without scrolling)
 **When** the user sends a message
 **Then** the view scrolls so the user's new message sits at the top of the visible area and the assistant's reply appears below it, fully visible as it arrives, with spare room after it (a bottom spacer of about one viewport so the reply is never cut off by the input)
 
