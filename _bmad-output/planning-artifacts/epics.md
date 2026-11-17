@@ -17,7 +17,7 @@ This document provides the complete epic and story breakdown for Second Income C
 
 FR1: User can complete a structured intake capturing skills, interests, available time, risk tolerance, and starting budget, plus a free-text answer about what has stopped them from starting/following through before; that free-text answer is classified into one of five known failure patterns (overwhelm, loses interest once routine, gets stuck with no next step, life disruption, forgets/deprioritizes) and persisted alongside the rest of the intake.
 
-FR2: System generates exactly 3 tailored (one batch-size constant; a batch is 3 ideas everywhere) second-income ideas from a completed intake. Each idea includes a rationale citing at least 3 different intake fields and structured info on weekly time required, startup cost, and risk level. No idea exceeds the user's stated time/budget/risk; two intakes differing in at least two fields yield different idea sets.
+FR2: System generates exactly 3 tailored (one batch-size setting `IDEAS_PER_BATCH`, default 3, which a developer may lower to 2 for cheap test runs; a batch is that many ideas everywhere) second-income ideas from a completed intake. Each idea includes a rationale citing at least 3 different intake fields and structured info on weekly time required, startup cost, and risk level. No idea exceeds the user's stated time/budget/risk; two intakes differing in at least two fields yield different idea sets.
 
 FR3: User can select one of the shown ideas to work on; the others are retained as "bookmarked" (not discarded); the user can mark any idea "rejected," removing it from the visible list.
 
@@ -761,6 +761,10 @@ So that the free search credits last through development and the demo.
 **Given** the limits
 **When** configured
 **Then** the per-user generations per day and the shared daily search budget are separate env constants with generous defaults for development (so normal testing never hits them) and documented lower values for the live demo; the counters live in Postgres and reset at a fixed time; and a developer can lower them to see the messages on purpose (documented in the README, Story 7.1)
+
+**Given** a generation in which every web search fails (service unreachable, key or quota rejected)
+**When** the first round of searches comes back with only errors
+**Then** the run stops at once, without retries or draft writing, and the user sees a clear localized message that the search service is unavailable or its limit is reached; existing ideas stay usable and no count is spent against the user's daily generations
 
 **Given** the guard
 **When** a live run is measured before and after
