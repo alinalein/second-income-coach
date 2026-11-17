@@ -5,7 +5,13 @@ import type { CreatePlanDraft, SubmitIntakeToolArgs } from '@app/shared';
 import { createDb } from '../../db/client.js';
 import { users, intake, ideas, plans, planSteps } from '../../db/schema/index.js';
 import { upsertIntake } from '../plain/submit_intake.js';
-import { handleCreatePlan, createCreatePlanTool, type CreatePlanDeps, type CreatePlanRunConfig } from './create_plan.js';
+import {
+  handleCreatePlan,
+  handleRegeneratePlanDraft,
+  createCreatePlanTool,
+  type CreatePlanDeps,
+  type CreatePlanRunConfig,
+} from './create_plan.js';
 
 function intakeArgs(overrides: Partial<SubmitIntakeToolArgs> = {}): SubmitIntakeToolArgs {
   return {
@@ -270,6 +276,62 @@ describe('handleCreatePlan (integration, real Postgres)', () => {
       await db.insert(plans).values({ ideaId, userId, status: 'draft', threadId: `plan:${randomUUID()}` });
 
       await expect(db.insert(plans).values({ ideaId, userId, status: 'draft', threadId: `plan:${randomUUID()}` })).rejects.toThrow();
+    } finally {
+      await cleanUp(userId, ideaId);
+    }
+  });
+});
+
+// AC/AD-13: "Reject with feedback ... create_plan runs again, updating the
+// same plan row in place with a revised draft — never a new row." Story 3.2
+// calls this from `activate_plan`'s reject branch; it's defined and tested
+// here, alongside `handleCreatePlan`, since it's the same LLM-backed
+// generator reused, not a third one (AD-4).
+describe('handleRegeneratePlanDraft (integration, real Postgres)', () => {
+  it('updates the same plan row in place instead of inserting a new one', async () => {
+    const { userId, ideaId } = await createTestUserWithIdeaAndIntake();
+    const planId = randomUUID();
+    const REVISED_DRAFT: CreatePlanDraft = {
+      steps: [
+        { title: 'Revised step 1', description: ['Different action.'], dayOffset: 0 },
+        { title: 'Revised step 2', description: ['Another one.'], dayOffset: 3 },
+        { title: 'Revised step 3', description: ['Last one.'], dayOffset: 6 },
+      ],
+    };
+
+    try {
+      await handleCreatePlan(
+        baseDeps({ createDraft: async () => VALID_DRAFT }),
+        { configurable: { thread_id: `plan:${planId}`, planId, ideaId, userId } },
+        { replyLanguage: 'en' },
+      );
+
+      let receivedFeedback: string | undefined;
+      const result = await handleRegeneratePlanDraft(
+        baseDeps({
+          createDraft: async (_idea, _intake, _lang, _signal, feedback) => {
+            receivedFeedback = feedback;
+            return REVISED_DRAFT;
+          },
+        }),
+        planId,
+        ideaId,
+        userId,
+        'en',
+        'Too many steps, make it simpler.',
+        undefined,
+      );
+
+      expect(result.id).toBe(planId);
+      expect(result.status).toBe('draft');
+      expect(receivedFeedback).toBe('Too many steps, make it simpler.');
+
+      const planRows = await db.select().from(plans).where(eq(plans.ideaId, ideaId));
+      expect(planRows).toHaveLength(1);
+
+      const steps = await db.select().from(planSteps).where(eq(planSteps.planId, planId)).orderBy(planSteps.stepOrder);
+      expect(steps.map((step) => step.title)).toEqual(REVISED_DRAFT.steps.map((step) => step.title));
+      expect(steps[0]!.status).toBe('current');
     } finally {
       await cleanUp(userId, ideaId);
     }

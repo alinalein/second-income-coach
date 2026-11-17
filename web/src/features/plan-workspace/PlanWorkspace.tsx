@@ -5,6 +5,7 @@ import { planResponseSchema, type PlanResponse } from '@app/shared';
 import { Button } from '../../components/ui/button';
 import { ChatThread } from '../../chat/ChatThread';
 import { StatusPanel } from './StatusPanel';
+import { PlanActivationPanel } from './PlanActivationPanel';
 
 export interface PlanWorkspaceProps {
   ideaId: string;
@@ -111,14 +112,22 @@ export function PlanWorkspace({ ideaId, ideaTitle, onBack }: PlanWorkspaceProps)
           <p className="text-xs text-muted-foreground">{t('loadingHint')}</p>
         </div>
       ) : (
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
-          <div className="flex flex-col gap-4 sm:w-64 sm:shrink-0">
-            <StatusPanel planId={plan.id} ideaTitle={ideaTitle} />
-            {/* Code Map: "projection card extension point (a slot in the
-             * sidebar/header) ... renders nothing until 4.4". */}
-          </div>
-          <div className="flex-1">
-            <ChatThread endpoint={`/api/plans/${plan.id}/messages`} />
+        <div className="flex flex-col gap-4">
+          {/* Story 3.2 (AD-14): the draft review/confirm/modify/reject panel
+           * — only a `draft` plan needs human confirmation before it can
+           * become `active`; once confirmed/already active, it's gone. */}
+          {plan.status === 'draft' ? (
+            <PlanActivationPanel planId={plan.id} onActivated={(activatedPlan) => setPlan(activatedPlan)} />
+          ) : null}
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
+            <div className="flex flex-col gap-4 sm:w-64 sm:shrink-0">
+              <StatusPanel planId={plan.id} ideaTitle={ideaTitle} />
+              {/* Code Map: "projection card extension point (a slot in the
+               * sidebar/header) ... renders nothing until 4.4". */}
+            </div>
+            <div className="flex-1">
+              <ChatThread endpoint={`/api/plans/${plan.id}/messages`} />
+            </div>
           </div>
         </div>
       )}

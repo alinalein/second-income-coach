@@ -1,4 +1,5 @@
-import { pgTable, uuid, text, integer, timestamp } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
+import { pgTable, uuid, text, integer, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
 import { users } from './users.js';
 import { ideas } from './ideas.js';
 
@@ -15,20 +16,31 @@ import { ideas } from './ideas.js';
  * `src/agent/index.ts`) — stored (not recomputed from `id` everywhere) so a
  * row's own thread is explicit at the DB layer too.
  */
-export const plans = pgTable('plans', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  ideaId: uuid('idea_id')
-    .notNull()
-    .unique()
-    .references(() => ideas.id),
-  userId: uuid('user_id')
-    .notNull()
-    .references(() => users.id),
-  status: text('status').notNull().default('draft'),
-  threadId: text('thread_id').notNull(),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-});
+export const plans = pgTable(
+  'plans',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    ideaId: uuid('idea_id')
+      .notNull()
+      .unique()
+      .references(() => ideas.id),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id),
+    status: text('status').notNull().default('draft'),
+    threadId: text('thread_id').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  // Story 3.2 (AD-14): "exactly one plan is active per user" enforced at the
+  // DB layer via a partial unique index, never only in application code —
+  // the `activate_plan` transaction (`src/tools/plain/activate_plan.ts`)
+  // pauses any previously-active plan *before* activating the new one in the
+  // same transaction, so this index is never hit as a real conflict in the
+  // normal confirm path; it's the backstop against a logic bug, not the
+  // primary mechanism.
+  (table) => [uniqueIndex('plans_one_active_per_user_idx').on(table.userId).where(sql`${table.status} = 'active'`)],
+);
 
 /**
  * One row per ordered step of a plan (Code Map: "ordered steps with a
