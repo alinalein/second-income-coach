@@ -802,6 +802,30 @@ So that I never see a button flicker, a second wait or an abrupt text swap.
 **When** a request fails
 **Then** the existing neutral error and retry behaviours stay unchanged
 
+### Story 2.13: Chat Scroll Behaviour
+
+As a user,
+I want a long chat to scroll the way Claude's does,
+So that I can read the whole answer to my question without scrolling by hand.
+
+**Acceptance Criteria:**
+
+**Given** a chat (discovery or plan thread) long enough to scroll
+**When** the user sends a message
+**Then** the view scrolls so the user's new message sits at the top of the visible area and the assistant's reply appears below it, fully visible as it arrives, with spare room after it (a bottom spacer of about one viewport so the reply is never cut off by the input)
+
+**Given** the assistant's reply is longer than the visible area
+**When** it arrives
+**Then** the user's message stays at the top, the start of the reply is what the user sees first, and the user scrolls down to read the rest; the view never jumps to the end of the reply on its own
+
+**Given** the user has scrolled up manually to read earlier messages
+**When** a reply arrives
+**Then** the view is not moved against their will
+
+**Given** reduced-motion settings
+**When** the scroll happens
+**Then** it is instant instead of animated; the chat input is never covered and keeps working as before (Story 1.3/5.3)
+
 ### Story 2.6: Faster Idea Generation (optional)
 
 As a user,
