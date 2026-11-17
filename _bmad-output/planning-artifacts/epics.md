@@ -750,6 +750,10 @@ So that the free search credits last through development and the demo.
 **When** the environment sets the search mode to "stub"
 **Then** `web_search` returns fixed canned results with no network call and no credit use; "live" (the default in production and the demo) behaves as normal; the mode is one env variable documented in `.env.example`, validated at startup (CLAUDE.md)
 
+**Given** a live deployment with many users
+**When** total search credits used today reach a configurable daily budget (one env constant), or one user exceeds a configurable number of idea generations per day
+**Then** further generations are refused with a neutral localized message ("try again later"), never a hard error or a charge beyond the budget; the counters live in Postgres, and the limits are documented in the README (Story 7.1)
+
 **Given** the guard
 **When** a live run is measured before and after
 **Then** the report shows searches per run and credits used for both, honestly
