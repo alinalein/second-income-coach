@@ -43,6 +43,13 @@
       "when": 1794925492048,
       "tag": "0005_simple_molecule_man",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1794930775512,
+      "tag": "0006_amusing_kate_bishop",
+      "breakpoints": true
     }
   ]
 }

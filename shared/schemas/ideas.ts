@@ -13,6 +13,18 @@ export const ideaStatusSchema = z.enum(['suggested', 'selected', 'bookmarked', '
 export type IdeaStatus = z.infer<typeof ideaStatusSchema>;
 
 /**
+ * Story 2.7: extracted from `generateIdeasToolSchema`'s own inline
+ * `replyLanguage` field (previously defined only there) so it can also be
+ * the language stored per idea (`ideaResponseSchema.language` below) and
+ * the one `translateIdeasRequestSchema`/`translateIdeasResponseSchema`
+ * (`shared/schemas/idea-translations.ts`) validate against — one shared
+ * enum, never hand-copied (AD-16).
+ */
+export const replyLanguageSchema = z.enum(['en', 'de']);
+
+export type ReplyLanguage = z.infer<typeof replyLanguageSchema>;
+
+/**
  * Story 2.2 follow-up fix 3: the intake fields a rationale is allowed to
  * cite, as structured ids — not the rationale's own prose. Keeps the
  * ">=3 distinct fields" check (AC) a deterministic Zod rule instead of a
@@ -282,6 +294,14 @@ export const ideaResponseSchema = z
     demandEvidenceQuote: z.string().min(1).max(300).nullable(),
     isDemandEvidenceUnverified: z.boolean(),
     growthPath: z.string().min(1).max(GROWTH_PATH_MAX_LENGTH).nullable(),
+    /**
+     * Story 2.7: the language this idea's text fields were originally
+     * generated/written in — never nullable (the DB column defaults to
+     * `'en'` for a pre-Story-2.7 row, its own real write language in every
+     * case so far). Drives `IdeasPanel.tsx`'s own "does this card need
+     * translating for the current UI language" check.
+     */
+    language: replyLanguageSchema,
     createdAt: z.iso.datetime(),
     updatedAt: z.iso.datetime(),
   })
@@ -305,7 +325,7 @@ export type IdeaResponse = z.infer<typeof ideaResponseSchema>;
  * (AD-4): the model supplies it from its own reasoning, never the client.
  */
 export const generateIdeasToolSchema = z.object({
-  replyLanguage: z.enum(['en', 'de']),
+  replyLanguage: replyLanguageSchema,
 });
 
 export type GenerateIdeasToolArgs = z.infer<typeof generateIdeasToolSchema>;

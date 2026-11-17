@@ -8,10 +8,12 @@
   "generatingButton": "Generating…",
   "generatingStatus": "Generating your ideas…",
   "generatingHint": "This can take up to a minute.",
+  "translating": "Translating your ideas…",
   "error": {
     "loadFailed": "We couldn't load your ideas. Please reload the page.",
     "generateFailed": "Generating your ideas failed or timed out. Please try again.",
-    "statusUpdateFailed": "That didn't save. Please try again."
+    "statusUpdateFailed": "That didn't save. Please try again.",
+    "translateFailed": "We couldn't translate your ideas. They're still shown in their original language."
   },
   "status": {
     "selected": "selected",
@@ -22,6 +24,7 @@
     "select": "Select",
     "bookmark": "Bookmark",
     "reject": "Reject",
+    "retryTranslation": "Retry translation",
     "viewPlan": "View plan"
   },
   "confirmSelect": {

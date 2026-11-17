@@ -521,9 +521,11 @@ describe('handleGenerateIdeas (I/O matrix: no intake row)', () => {
 });
 
 // I/O matrix: "Happy path" -> "Exactly 5 ideas inserted atomically, each
-// citing >=3 fields" (AC1).
+// citing >=3 fields" (AC1). Table-driven over `replyLanguage` (Story 2.7
+// AC4: written once at generation time from the tool's own argument) — the
+// 'en'/'de' cases are otherwise identical, so they share this one test.
 describe('handleGenerateIdeas (I/O matrix: happy path)', () => {
-  it('persists exactly 5 ideas atomically, each citing at least 3 intake fields', async () => {
+  it.each(['en', 'de'] as const)('persists exactly 5 ideas atomically, each citing at least 3 intake fields (replyLanguage=%s)', async (replyLanguage) => {
     const userId = await createTestUser();
     try {
       const intakeRow = await upsertIntake(db, userId, intakeArgs());
@@ -534,7 +536,7 @@ describe('handleGenerateIdeas (I/O matrix: happy path)', () => {
         }),
       });
 
-      const result = await handleGenerateIdeas(deps, configFor(userId), { replyLanguage: 'en' });
+      const result = await handleGenerateIdeas(deps, configFor(userId), { replyLanguage });
 
       expect(result).toHaveLength(5);
       for (const idea of result) {
@@ -548,6 +550,8 @@ describe('handleGenerateIdeas (I/O matrix: happy path)', () => {
         // citedIntakeFields), not a prose substring count.
         expect(idea.citedIntakeFields.length).toBeGreaterThanOrEqual(3);
         expect(new Set(idea.citedIntakeFields).size).toBe(idea.citedIntakeFields.length);
+        // Story 2.7 (AC4): persisted straight from the tool's own argument.
+        expect(idea.language).toBe(replyLanguage);
       }
       const rows = await db.select().from(ideas).where(eq(ideas.userId, userId));
       expect(rows).toHaveLength(5);

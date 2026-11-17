@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, cleanup, fireEvent, within, waitFor } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent, within, waitFor, act } from '@testing-library/react';
 import {
   convertMoney,
   formatMoney,
@@ -12,7 +12,12 @@ import {
 import { IdeasPanel } from './IdeasPanel';
 import i18n from '../../i18n';
 
-function mockFetch(responses: Record<string, Response | (() => Response)>) {
+// Story 2.7: widened to also accept a function returning a `Promise<Response>`
+// (not just a synchronous one) — `IdeasPanel.test.tsx`'s own translate tests
+// need an entry that's a `vi.fn()` mock returning a still-pending/deferred
+// promise, which `Promise.resolve(...)` below already handles correctly at
+// runtime either way.
+function mockFetch(responses: Record<string, Response | (() => Response | Promise<Response>)>) {
   return vi.fn((input: RequestInfo | URL) => {
     const url = typeof input === 'string' ? input : input.toString();
     const match = Object.keys(responses).find((key) => url.includes(key));
@@ -47,6 +52,7 @@ function fakeIdea(): IdeaResponse {
     demandEvidenceQuote: null,
     isDemandEvidenceUnverified: false,
     growthPath: null,
+    language: 'en',
     createdAt: now,
     updatedAt: now,
   };
@@ -803,5 +809,170 @@ describe('IdeasPanel (Story 2.5: foreign-source region label)', () => {
     // compact citation line instead — a substring match (`exact: false`)
     // covers both shapes.
     expect(await screen.findByText(expectLabel, { exact: false })).toBeInTheDocument();
+  });
+});
+
+// Story 2.7 (AC1/AC2): a stored-language card translates once on a UI
+// language switch (loading state, no mixed-language flash, atomic swap),
+// and a later switch back to an already-cached language never re-calls the
+// model (I/O matrix: "Toggle back and forth" -> "2nd+ switch instant").
+describe('IdeasPanel (Story 2.7: translate idea cards on language change)', () => {
+  it('translates once with a loading state and no stale/mixed text, then serves a repeat switch from cache', async () => {
+    const idea = fakeIdea(); // language: 'en'
+    let resolveTranslate!: (value: Response) => void;
+    const pendingTranslate = new Promise<Response>((resolve) => {
+      resolveTranslate = resolve;
+    });
+    const translateFetch = vi.fn(() => pendingTranslate);
+
+    vi.stubGlobal(
+      'fetch',
+      mockFetch({
+        ...INTAKE_NULL_RESPONSE,
+        '/api/ideas/translate': translateFetch,
+        '/api/ideas': () => new Response(JSON.stringify({ ideas: [idea], currency: 'EUR' }), { status: 200 }),
+      }),
+    );
+
+    render(<IdeasPanel />);
+    expect(await screen.findByText(idea.title)).toBeInTheDocument();
+
+    await act(async () => {
+      await i18n.changeLanguage('de');
+    });
+
+    // Still the stored-language title — no flash, no blank card — plus the
+    // localized loading notice, while the request is still in flight.
+    expect(screen.getByText('Deine Ideen werden übersetzt…')).toBeInTheDocument();
+    expect(screen.getByText(idea.title)).toBeInTheDocument();
+
+    resolveTranslate(
+      new Response(
+        JSON.stringify({
+          translations: [{ ideaId: idea.id, language: 'de', title: 'DE Titel', rationale: 'Zeile 1.\nZeile 2.', demandEvidenceNote: null, growthPath: null }],
+        }),
+        { status: 200 },
+      ),
+    );
+
+    expect(await screen.findByText('DE Titel')).toBeInTheDocument();
+    expect(screen.queryByText(idea.title)).not.toBeInTheDocument();
+    expect(translateFetch).toHaveBeenCalledTimes(1);
+
+    // Switching back needs no call — the original idea already has this
+    // language's text (its own stored language).
+    await act(async () => {
+      await i18n.changeLanguage('en');
+    });
+    expect(await screen.findByText(idea.title)).toBeInTheDocument();
+    expect(translateFetch).toHaveBeenCalledTimes(1);
+
+    // Switching to German a second time reads the client-side cache —
+    // never a second model call.
+    await act(async () => {
+      await i18n.changeLanguage('de');
+    });
+    expect(await screen.findByText('DE Titel')).toBeInTheDocument();
+    expect(translateFetch).toHaveBeenCalledTimes(1);
+  });
+
+  // I/O matrix: "Timeout/abort/moderation-reject -> stays stored-language,
+  // notice + retry" — never blank.
+  it('shows a neutral notice with a working retry on translate failure, keeping the stored-language text', async () => {
+    const idea = fakeIdea();
+    const translateFetch = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: 'Translation failed' }), { status: 502 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: 'Translation failed' }), { status: 502 }))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            translations: [{ ideaId: idea.id, language: 'de', title: 'DE Titel', rationale: 'Zeile 1.\nZeile 2.', demandEvidenceNote: null, growthPath: null }],
+          }),
+          { status: 200 },
+        ),
+      );
+
+    vi.stubGlobal(
+      'fetch',
+      mockFetch({
+        ...INTAKE_NULL_RESPONSE,
+        '/api/ideas/translate': translateFetch,
+        '/api/ideas': () => new Response(JSON.stringify({ ideas: [idea], currency: 'EUR' }), { status: 200 }),
+      }),
+    );
+
+    render(<IdeasPanel />);
+    expect(await screen.findByText(idea.title)).toBeInTheDocument();
+
+    // Live fix: a background prefetch for German already starts as soon as
+    // ideas load (before any language switch) and fails here — invisible
+    // while still viewing English (no banner, no alert).
+    await waitFor(() => expect(translateFetch).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+    await act(async () => {
+      await i18n.changeLanguage('de');
+    });
+
+    // Switching to a language whose background prefetch already failed
+    // triggers one real foreground attempt — which also fails here, and
+    // only now does the user see anything.
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      "Deine Ideen konnten nicht übersetzt werden. Sie werden weiterhin in der ursprünglichen Sprache angezeigt.",
+    );
+    expect(screen.getByText(idea.title)).toBeInTheDocument(); // never blank
+    expect(translateFetch).toHaveBeenCalledTimes(2);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Übersetzung erneut versuchen' }));
+
+    expect(await screen.findByText('DE Titel')).toBeInTheDocument();
+    expect(translateFetch).toHaveBeenCalledTimes(3);
+  });
+
+  // Live fix (post-handoff, user-reported: "the moment the user clicks from
+  // English to German, the translation should already be there"): the
+  // background prefetch populates the cache before any switch, so the
+  // *first* switch into a never-before-seen language is also an instant
+  // cache hit, not just a repeat one.
+  it('pre-translates in the background so the first language switch is also instant, with no visible loading banner before it', async () => {
+    const idea = fakeIdea(); // language: 'en'
+    const translateFetch = vi.fn(
+      () =>
+        new Response(
+          JSON.stringify({
+            translations: [{ ideaId: idea.id, language: 'de', title: 'DE Titel', rationale: 'Zeile 1.\nZeile 2.', demandEvidenceNote: null, growthPath: null }],
+          }),
+          { status: 200 },
+        ),
+    );
+
+    vi.stubGlobal(
+      'fetch',
+      mockFetch({
+        ...INTAKE_NULL_RESPONSE,
+        '/api/ideas/translate': translateFetch,
+        '/api/ideas': () => new Response(JSON.stringify({ ideas: [idea], currency: 'EUR' }), { status: 200 }),
+      }),
+    );
+
+    render(<IdeasPanel />);
+    expect(await screen.findByText(idea.title)).toBeInTheDocument();
+
+    // The prefetch fires and completes entirely on its own, before any
+    // switch — never shown, since the user is still viewing English.
+    await waitFor(() => expect(translateFetch).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+    await act(async () => {
+      await i18n.changeLanguage('de');
+    });
+
+    // Already cached from the prefetch — shows immediately, no loading
+    // banner ever appears for this switch, and no second call was made.
+    expect(screen.getByText('DE Titel')).toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(translateFetch).toHaveBeenCalledTimes(1);
   });
 });

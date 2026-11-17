@@ -21,7 +21,7 @@ export type ModelProvider = 'openrouter' | 'mistral';
  * future transcription entry (AD-9's voice pipeline isn't built yet) needs no
  * change to that filter, only a new entry with `category: 'transcription'`.
  */
-export type ModelCategory = 'chat' | 'moderation' | 'transcription';
+export type ModelCategory = 'chat' | 'moderation' | 'transcription' | 'translation';
 
 export interface ModelRegistryEntry {
   readonly id: string;
@@ -55,6 +55,29 @@ export interface ModelRegistryEntry {
  * consistently slow/absent response relative to the other (presumably GA)
  * entries. Re-add it once it's confirmed stable.
  */
+/**
+ * Story 2.7: the internal-only model `translate-idea-cards.ts` calls for
+ * idea-card translation — same never-user-selectable precedent as
+ * `MODERATION_MODEL_NAME` (category !== 'chat' excludes it from
+ * `listSelectableModels`). Defined here, not hand-copied at its one call
+ * site, same AD-16 "no raw literal duplicated" discipline. Declared before
+ * `MODEL_REGISTRY` (not after, like `MODERATION_MODEL_NAME`'s own import)
+ * since the registry entry below references it.
+ *
+ * **Live-bug fix (post-handoff):** originally `'openai/gpt-6-mini'`, an id
+ * invented by analogy with the existing chat entries' naming and never
+ * actually verified against this account's real OpenRouter catalog — every
+ * real translate call failed immediately with `400 ... is not a valid model
+ * ID` (reproduced live, from the running dev server's own error log, not a
+ * guess). Pointed at the exact same id as `DEFAULT_MODEL_ID` instead — the
+ * one entry already proven live-working by every `generate_ideas`/chat
+ * call — since "never in the user-selectable registry" is a `category`
+ * property (this entry's own `category: 'translation'` already satisfies
+ * it, same mechanism as the moderation entry below), not a constraint on
+ * which literal id the underlying call may use.
+ */
+export const TRANSLATION_MODEL_ID = 'openai/gpt-6-luna';
+
 export const MODEL_REGISTRY: readonly ModelRegistryEntry[] = [
   {
     id: 'openai/gpt-6-luna',
@@ -110,6 +133,22 @@ export const MODEL_REGISTRY: readonly ModelRegistryEntry[] = [
     pricePerMillionInputTokens: 0,
     pricePerMillionOutputTokens: 0,
     priceAsOf: '2026-11-01',
+  },
+  {
+    // Story 2.7: idea-card translation — `category: 'translation'` keeps
+    // this out of `listSelectableModels`'s existing `chat`-only filter
+    // without widening that filter itself, same mechanism the moderation
+    // entry above already relies on.
+    id: TRANSLATION_MODEL_ID,
+    provider: 'openrouter',
+    displayName: 'GPT-6 Luna (translation)',
+    category: 'translation',
+    // Never priced per-token in practice and never displayed (category !==
+    // 'chat' is filtered out before reaching any UI) — 0 is a placeholder,
+    // same precedent as the moderation entry above.
+    pricePerMillionInputTokens: 0,
+    pricePerMillionOutputTokens: 0,
+    priceAsOf: '2026-11-17',
   },
 ] as const;
 

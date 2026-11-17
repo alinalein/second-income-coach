@@ -2,12 +2,23 @@ import { eq } from 'drizzle-orm';
 import { Router } from 'express';
 import { z } from 'zod';
 import { HumanMessage, type BaseMessage } from '@langchain/core/messages';
-import { ideasWithPlanResponseSchema, currencyCodeSchema, type CurrencyCode, type IdeaResponse } from '@app/shared';
+import {
+  ideasWithPlanResponseSchema,
+  currencyCodeSchema,
+  replyLanguageSchema,
+  translateIdeasRequestSchema,
+  translateIdeasResponseSchema,
+  type CurrencyCode,
+  type IdeaResponse,
+} from '@app/shared';
 import type { Env } from '../../config/env.js';
 import type { createDb } from '../../db/client.js';
 import type { CoachAgent } from '../../agent/index.js';
 import { buildDiscoveryThreadId, buildIdeasTriggerThreadId } from '../../agent/index.js';
 import { detectReplyLanguage } from '../../agent/language.js';
+import { createChatModel } from '../../agent/model.js';
+import { TRANSLATION_MODEL_ID } from '../../agent/registry.js';
+import { translateIdeaCards as defaultTranslateIdeaCards } from '../../agent/translate-idea-cards.js';
 import { getIdeasByUserId } from '../../tools/llm/generate_ideas.js';
 import { setIdeaStatus, IdeaNotFoundError, settableIdeaStatusSchema } from '../../tools/plain/set_idea_status.js';
 import { userSettings, plans } from '../../db/schema/index.js';
@@ -18,10 +29,27 @@ import { createStrictRateLimiter } from '../middleware/rateLimit.js';
  * UUID below. */
 const setIdeaStatusRequestSchema = z.object({ status: settableIdeaStatusSchema });
 
+/** Story 2.7 (AC4): `POST /generate`'s optional body — when the client
+ * supplies `language` (the UI's own `i18n.language`, the button-triggered
+ * path), it is used directly as `replyLanguage`, skipping
+ * `detectUserReplyLanguage` below entirely. `.partial()` keeps this
+ * backward-compatible with a bodyless/pre-Story-2.7 call (falls back to the
+ * old detection), and a malformed value is treated the same as "not
+ * supplied" rather than a 400 — this is a UX nicety, not a security
+ * boundary, so a client bug degrades to the old behavior instead of
+ * failing the request. */
+const generateIdeasRequestSchema = z.object({ language: replyLanguageSchema }).partial();
+
 export interface IdeasRouterDeps {
-  env: Pick<Env, 'RATE_LIMIT_WINDOW_MS'>;
+  env: Pick<Env, 'RATE_LIMIT_WINDOW_MS' | 'OPENROUTER_API_KEY' | 'MISTRAL_API_KEY'>;
   db: ReturnType<typeof createDb>['db'];
   agent: CoachAgent;
+  /** Test-only seam — same DI precedent as `GenerateIdeasDeps.generateDrafts`
+   * (`generate_ideas.ts`): lets a test replace the real model-backed
+   * `translateIdeaCards` call with a fake, so `POST /translate`'s own
+   * routing/ownership-check/error-mapping logic is exercised without a real
+   * OpenRouter call. Defaults to the real implementation. */
+  translateIdeaCards?: typeof defaultTranslateIdeaCards;
 }
 
 type Db = IdeasRouterDeps['db'];
@@ -103,11 +131,18 @@ function buildGenerateIdeasAgentMessage(replyLanguage: 'de' | 'en'): string {
  * before/after check instead of an `updatedAt` comparison, since this is an
  * insert of new rows rather than an upsert of one row.
  */
-export function createIdeasRouter({ env, db, agent }: IdeasRouterDeps) {
+export function createIdeasRouter({ env, db, agent, translateIdeaCards: translateIdeaCardsOverride }: IdeasRouterDeps) {
   const router = Router();
+  const translateIdeaCardsFn = translateIdeaCardsOverride ?? defaultTranslateIdeaCards;
   // Intent/Code Map: "generate_ideas is LLM-backed and cost-bearing like
   // intake's POST; reuse the same strict tier."
   const strictLimiter = createStrictRateLimiter(env);
+  // Story 2.7: built once (same precedent as `src/api/index.ts`'s own
+  // `chatModel`, shared across turns rather than reconstructed per
+  // request) — never user-selectable (`TRANSLATION_MODEL_ID`'s own
+  // `category: 'translation'`), reuses the already-required
+  // `OPENROUTER_API_KEY`, no new env var.
+  const translationModel = createChatModel(env, TRANSLATION_MODEL_ID);
 
   router.get('/', async (req, res) => {
     const userId = req.session.userId!;
@@ -156,6 +191,53 @@ export function createIdeasRouter({ env, db, agent }: IdeasRouterDeps) {
     }
   });
 
+  // Story 2.7: batch-translates a set of the caller's own ideas into
+  // `language`, backed by `translateIdeaCards`'s own immutable
+  // per-(idea, language) cache. No rate-limit tier beyond the general one
+  // (`createGeneralRateLimiter`, applied app-wide) — unlike `generate_ideas`/
+  // `create_plan`, this reuses a never-displayed, zero-priced registry
+  // entry and is itself cached after the first call per idea+language, so
+  // it doesn't need the strict/cost-bearing tier those do.
+  router.post('/translate', async (req, res) => {
+    const userId = req.session.userId!;
+
+    const parseResult = translateIdeasRequestSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      res.status(400).json({ error: 'Bad request' });
+      return;
+    }
+    const { ideaIds, language } = parseResult.data;
+
+    // Ownership check (Code Map): every requested id must be one of this
+    // user's own ideas — same 404 vocabulary as `POST /:id/status`'s
+    // `IdeaNotFoundError`, never silently filtered or 200'd for a foreign id.
+    const ownIds = new Set((await getIdeasByUserId(db, userId)).map((idea) => idea.id));
+    if (!ideaIds.every((id) => ownIds.has(id))) {
+      res.status(404).json({ error: 'Idea not found' });
+      return;
+    }
+
+    // Same request-scoped abort-on-disconnect pattern as `POST /generate`
+    // below (`:161-163`) — `translateIdeaCards` combines this with its own
+    // fixed per-call timeout internally.
+    const abortController = new AbortController();
+    const onClientDisconnect = () => abortController.abort(new Error('translate_idea_cards: client disconnected'));
+    req.on('close', onClientDisconnect);
+
+    try {
+      const translations = await translateIdeaCardsFn(db, translationModel, env, ideaIds, language, abortController.signal);
+      res.json(translateIdeasResponseSchema.parse({ translations }));
+    } catch (error) {
+      // Boundary: "Failure/abort/moderation-reject persists nothing; cards
+      // keep their stored language" — a generic 502 either way, same
+      // vocabulary as `POST /generate`'s own failure path.
+      console.error('[ideas] translate failed:', { userId, error: (error as Error)?.message });
+      if (!res.headersSent) res.status(502).json({ error: 'Translation failed' });
+    } finally {
+      req.off('close', onClientDisconnect);
+    }
+  });
+
   router.post('/generate', strictLimiter, async (req, res) => {
     const userId = req.session.userId!;
     // Story 2.2 follow-up fix 4: the trigger runs on its own internal-only
@@ -192,7 +274,13 @@ export function createIdeasRouter({ env, db, agent }: IdeasRouterDeps) {
       // happened this turn.
       const beforeSuggestedIds = new Set((await getIdeasByUserId(db, userId)).filter((idea) => idea.status === 'suggested').map((idea) => idea.id));
 
-      const replyLanguage = await detectUserReplyLanguage(agent, buildDiscoveryThreadId(userId));
+      // Story 2.7 (AC4): the button's own request body, when present and
+      // valid, wins outright — never overridden by the discovery thread's
+      // detected language. Only a bodyless/invalid request falls back to
+      // the pre-Story-2.7 detection.
+      const bodyParseResult = generateIdeasRequestSchema.safeParse(req.body ?? {});
+      const explicitLanguage = bodyParseResult.success ? bodyParseResult.data.language : undefined;
+      const replyLanguage = explicitLanguage ?? (await detectUserReplyLanguage(agent, buildDiscoveryThreadId(userId)));
       await agent.invoke(
         { messages: [new HumanMessage(buildGenerateIdeasAgentMessage(replyLanguage))] },
         { configurable: { thread_id: triggerThreadId }, signal: abortController.signal },
