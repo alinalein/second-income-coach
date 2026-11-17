@@ -191,6 +191,40 @@ describe('createPlanChatRouter (ownership check against plans.userId)', () => {
   });
 });
 
+// Bug fix (user-reported): `create_plan` (wired into this same `plansAgent`)
+// threw "planId/ideaId/userId are not derivable from the current server
+// context" on every turn of an existing plan thread whenever its tool call
+// got invoked/retried here — this router's own `agent.stream` call passed
+// only `thread_id`, never the rest `create_plan` requires (the lazy-create
+// route, `src/api/routes/plans.ts`, does supply it). Once that invocation
+// failed, the whole turn fell back to the generic error reply, which is also
+// why no cost line showed: `src/api/routes/plan-chat.ts`'s cost-persistence
+// block only runs for a successful reply.
+describe('createPlanChatRouter (bug fix: create_plan tool context missing on this thread)', () => {
+  it('POST /:planId/messages passes planId/ideaId/userId into configurable, not just thread_id', async () => {
+    const userId = await createTestUser();
+    try {
+      const ideaId = await insertIdea(userId);
+      const [plan] = await db
+        .insert(plans)
+        .values({ ideaId, userId, status: 'draft', threadId: `plan:${randomUUID()}` })
+        .returning();
+
+      const agent = fakeAgent({ stream: vi.fn().mockResolvedValue([['values', { messages: [new AIMessage('Sure.')] }]]) });
+
+      const res = await request(buildTestApp(agent, userId)).post(`/api/plans/${plan!.id}/messages`).send({ content: 'hi' });
+
+      expect(res.status).toBe(200);
+      expect(agent.stream).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ configurable: { thread_id: `plan:${plan!.id}`, planId: plan!.id, ideaId, userId } }),
+      );
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+});
+
 // Bug fix (user-reported): a plan-chat reply showed the thumbs footer item
 // but no cost line at all — not even a token count. Root cause: production
 // (`src/api/index.ts`) passes a shared, pre-built `model` into every

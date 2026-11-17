@@ -70,6 +70,22 @@ async function assertPlanOwnership(db: Db, userId: string, planId: string): Prom
 }
 
 /**
+ * Bug fix (user-reported): the POST handler below needs `ideaId` too, to
+ * pass into the agent's `configurable` — `create_plan` (wired into this
+ * same `plansAgent`, `src/api/index.ts`) throws "planId/ideaId/userId are
+ * not derivable" whenever its tool call is retried on this thread (e.g. a
+ * pending call left over from the lazy-create invocation in
+ * `src/api/routes/plans.ts`, which does supply this config) without it —
+ * crashing every turn on this thread from then on, never just the one that
+ * first retried it. The other three routes below only need the boolean
+ * check, so they keep using `assertPlanOwnership`.
+ */
+async function loadOwnedPlanIdeaId(db: Db, userId: string, planId: string): Promise<string | undefined> {
+  const [plan] = await db.select({ userId: plans.userId, ideaId: plans.ideaId }).from(plans).where(eq(plans.id, planId)).limit(1);
+  return plan?.userId === userId ? plan.ideaId : undefined;
+}
+
+/**
  * `createPlanChatRouter`: mirrors `chat.ts`'s SSE pattern exactly (Code
  * Map) — the only difference is the thread id it resolves (`plan:${planId}`
  * instead of `discovery:${userId}`) and the ownership check that gates it.
@@ -93,15 +109,15 @@ export function createPlanChatRouter({ env, db, agent }: PlanChatRouterDeps) {
     // try/catch-to-503 pattern for a DB read — not be swallowed into an
     // un-logged 404 that looks identical to a genuine "not found/not
     // owned" result.
-    let owned: boolean;
+    let ideaId: string | undefined;
     try {
-      owned = await assertPlanOwnership(db, userId, planId);
+      ideaId = await loadOwnedPlanIdeaId(db, userId, planId);
     } catch (error) {
       console.error('[plan-chat] ownership check failed:', { planId, error: (error as Error)?.message });
       res.status(503).json({ error: 'Service unavailable' });
       return;
     }
-    if (!owned) {
+    if (!ideaId) {
       res.status(404).json({ error: 'Plan not found' });
       return;
     }
@@ -151,7 +167,7 @@ export function createPlanChatRouter({ env, db, agent }: PlanChatRouterDeps) {
     try {
       const stream = await agent.stream(
         { messages: [userMessage] },
-        { configurable: { thread_id: threadId }, streamMode: ['custom', 'values'] },
+        { configurable: { thread_id: threadId, planId, ideaId, userId }, streamMode: ['custom', 'values'] },
       );
 
       let lastValuesPayload: { messages?: BaseMessage[]; turnUsage?: TurnUsageWithModel } | undefined;

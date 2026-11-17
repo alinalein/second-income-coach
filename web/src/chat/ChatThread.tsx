@@ -26,6 +26,23 @@ const DEFAULT_CHAT_ENDPOINT = '/api/chat/messages';
  * nothing was on screen yet to transition from. */
 const PROGRESS_LABEL_FADE_MS = 200;
 
+/** Story 2.13 refinement: pinning (scroll the new message to the top, keep a
+ * one-viewport bottom spacer) only kicks in once the conversation window is
+ * actually full — measured on send as the scroll region's content height
+ * (`scrollHeight`, before the new message is appended, bottom spacer
+ * collapsed first — see `handleSubmit`) against this fraction of its own
+ * visible height (`clientHeight`). Below the threshold the thread behaves
+ * like a plain, unpinned list (AC: "behaves normally ... NO pinning, NO
+ * bottom spacer").
+ *
+ * Bug fix (user-reported, screenshots): a single short exchange with
+ * plenty of blank space still below it was pinning — "not full" by the
+ * user's own example. 1.0 means the existing content must already fill (or
+ * overflow) the window on its own, with nothing to spare, before pinning —
+ * matching their "full" example (a scrollbar already showing). Previously
+ * 0.85, before that 0.7. */
+const ALMOST_FULL_THRESHOLD_RATIO = 1;
+
 function makeLocalMessage(role: ChatMessageType['role'], kind: ChatMessageType['kind'], content: string): ChatMessageType {
   return {
     id: `local-${Math.random().toString(36).slice(2)}-${Date.now()}`,
@@ -111,6 +128,12 @@ export function ChatThread({ endpoint = DEFAULT_CHAT_ENDPOINT, footerItems = [],
   // expires is the user's own.
   const programmaticScrollUntilRef = React.useRef(0);
   const userScrolledAwayRef = React.useRef(false);
+  // Story 2.13 refinement: whether the *last sent* turn crossed the
+  // almost-full threshold — unlike `pinToTopMessageIdRef` (cleared once the
+  // turn settles, so the one-time scroll-to-top never re-fires on an
+  // unrelated later scroll), this stays put so the bottom spacer keeps that
+  // turn's reply clear of the input for as long as it's the latest exchange.
+  const almostFullRef = React.useRef(false);
 
   React.useEffect(() => {
     const node = scrollRegionRef.current;
@@ -197,6 +220,13 @@ export function ChatThread({ endpoint = DEFAULT_CHAT_ENDPOINT, footerItems = [],
     const spacer = bottomSpacerRef.current;
     if (!node || !spacer) return;
 
+    // Story 2.13 refinement AC: "while the conversation still fits
+    // comfortably ... NO bottom spacer" — only the almost-full turn gets one.
+    if (!almostFullRef.current) {
+      spacer.style.minHeight = '0px';
+      return;
+    }
+
     const lastUserMessage = [...messages].reverse().find((message) => message.role === 'user');
     const pairStart = lastUserMessage ? node.querySelector<HTMLElement>(`[data-message-id="${lastUserMessage.id}"]`) : null;
     if (!pairStart) {
@@ -257,8 +287,26 @@ export function ChatThread({ endpoint = DEFAULT_CHAT_ENDPOINT, footerItems = [],
       const content = draft.trim();
       if (!content || sending) return;
 
+      // Story 2.13 refinement: measured against the content height *before*
+      // this message is appended — the "would no longer fit" check is about
+      // the room left, not the room this message itself will take up.
+      //
+      // Bug fix (user-reported): a previous turn's bottom spacer (sized to
+      // ~one viewport once pinned) stays in the DOM and counts toward
+      // `scrollHeight`, so every later send kept reading as "almost full"
+      // forever, even for a short follow-up. Collapsing it first measures
+      // only the real message content; the spacer effect below (keyed on
+      // `messages`/`displayedStep`) re-sizes it right after, from this
+      // turn's own `almostFullRef`.
+      const scrollNode = scrollRegionRef.current;
+      const spacerNode = bottomSpacerRef.current;
+      if (spacerNode) spacerNode.style.minHeight = '0px';
+      const isAlmostFull =
+        !!scrollNode && scrollNode.clientHeight > 0 && scrollNode.scrollHeight >= scrollNode.clientHeight * ALMOST_FULL_THRESHOLD_RATIO;
+      almostFullRef.current = isAlmostFull;
+
       const userMessage = makeLocalMessage('user', 'message', content);
-      pinToTopMessageIdRef.current = userMessage.id;
+      pinToTopMessageIdRef.current = isAlmostFull ? userMessage.id : null;
       // A fresh turn always re-pins to *its own* new message — any scroll-
       // away the user did during a previous turn never carries over.
       userScrolledAwayRef.current = false;
