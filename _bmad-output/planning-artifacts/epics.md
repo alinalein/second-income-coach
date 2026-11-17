@@ -17,7 +17,7 @@ This document provides the complete epic and story breakdown for Second Income C
 
 FR1: User can complete a structured intake capturing skills, interests, available time, risk tolerance, and starting budget, plus a free-text answer about what has stopped them from starting/following through before; that free-text answer is classified into one of five known failure patterns (overwhelm, loses interest once routine, gets stuck with no next step, life disruption, forgets/deprioritizes) and persisted alongside the rest of the intake.
 
-FR2: System generates exactly 2 tailored (one batch-size setting `IDEAS_PER_BATCH`, default 2, range 1-5; a batch is that many ideas everywhere) second-income ideas from a completed intake. Each idea includes a rationale citing at least 3 different intake fields and structured info on weekly time required, startup cost, and risk level. No idea exceeds the user's stated time/budget/risk; two intakes differing in at least two fields yield different idea sets.
+FR2: System generates exactly 3 tailored (one batch-size setting `IDEAS_PER_BATCH`, default 3 = the product and demo value, range 1-5; during development a developer sets 2 in the local `.env` for cheaper runs; a batch is that many ideas everywhere) second-income ideas from a completed intake. Each idea includes a rationale citing at least 3 different intake fields and structured info on weekly time required, startup cost, and risk level. No idea exceeds the user's stated time/budget/risk; two intakes differing in at least two fields yield different idea sets.
 
 FR3: User can select one of the shown ideas to work on; the others are retained as "bookmarked" (not discarded); the user can mark any idea "rejected," removing it from the visible list.
 
@@ -121,7 +121,7 @@ Users can sign in with Google and exchange at least one safe, moderated message 
 **Covers:** FR18, FR19, NFR4, UX-DR1-4, and the Additional Requirements (stack wiring, auth, persistence plumbing, moderation baseline, observability, Express/React shell, i18n foundation, web/API security baseline per AD-30).
 
 ### Epic 2: Tailored Idea Discovery
-Users complete an intake and receive 2 second-income ideas matched to their own skills, time, budget, and risk tolerance - not a generic list - and can curate that list by bookmarking or rejecting ideas.
+Users complete an intake and receive 3 second-income ideas matched to their own skills, time, budget, and risk tolerance - not a generic list - and can curate that list by bookmarking or rejecting ideas.
 **FRs covered:** FR1, FR2, FR3.
 
 ### Epic 3: Plan Creation & Activation
@@ -418,7 +418,7 @@ So that the app matches UX-DR3 and Story 1.1's acceptance criterion, which was a
 
 ## Epic 2: Tailored Idea Discovery
 
-Users complete an intake and receive 2 second-income ideas matched to their own skills, time, budget, and risk tolerance - not a generic list - and can curate that list by bookmarking or rejecting ideas.
+Users complete an intake and receive 3 second-income ideas matched to their own skills, time, budget, and risk tolerance - not a generic list - and can curate that list by bookmarking or rejecting ideas.
 
 ### Story 2.1: Structured Intake with Failure-Pattern Classification
 
@@ -466,7 +466,7 @@ So that I'm not stuck with a generic list.
 
 **Given** a completed intake
 **When** the user requests ideas
-**Then** `generate_ideas` produces exactly `IDEAS_PER_BATCH` ideas (default 2)
+**Then** `generate_ideas` produces exactly `IDEAS_PER_BATCH` ideas (default 3)
 
 **Given** each idea
 **When** displayed
