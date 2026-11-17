@@ -596,6 +596,34 @@ So that the suggestions are current and worth acting on, not generic.
 **When** it runs
 **Then** it reuses the same `web_search` provider key (no new external service, no new variable), uses the AD-7 cache, and keeps generation inside the ideas path's own timeout with the progress feedback from Story 2.2
 
+### Story 2.7: Translate Idea Cards on Language Change
+
+As a user,
+I want the text on my idea cards to switch language when I switch the UI language,
+So that the cards never show a language I didn't choose.
+
+**Acceptance Criteria:**
+
+**Given** idea cards stored in one language
+**When** the UI language changes (Story 5.4) to the other one
+**Then** the generated text of every visible card (title, rationale bullets, demand note, growth path, caveat) is shown in the new language without a new search and without changing any number, currency, source, URL, citation quote or trust label
+
+**Given** a translation
+**When** it is produced
+**Then** one batched model call translates all visible cards together (internal model, never in the user-selectable registry), the result passes output moderation (AD-11), and it is persisted per idea and language so switching back and forth is instant and never calls the model twice for the same text
+
+**Given** the translation is running
+**When** the user waits
+**Then** the cards show a localized loading state (no flash of mixed languages); on failure the cards stay in their stored language with a neutral notice and a retry, never blank
+
+**Given** "Generate new ideas" or any later generation
+**When** it runs from a button
+**Then** the ideas are written in the current UI language (a button click is not a written message); chat-triggered generation keeps following the language the user wrote in (AD-25)
+
+**Given** a source quote
+**When** the card is translated
+**Then** the quote stays in its original language and is shown as such; only the surrounding card text is translated
+
 ### Story 2.6: Faster Idea Generation (optional)
 
 As a user,
