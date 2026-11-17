@@ -17,7 +17,7 @@ This document provides the complete epic and story breakdown for Second Income C
 
 FR1: User can complete a structured intake capturing skills, interests, available time, risk tolerance, and starting budget, plus a free-text answer about what has stopped them from starting/following through before; that free-text answer is classified into one of five known failure patterns (overwhelm, loses interest once routine, gets stuck with no next step, life disruption, forgets/deprioritizes) and persisted alongside the rest of the intake.
 
-FR2: System generates exactly 3 tailored (one batch-size setting `IDEAS_PER_BATCH`, default 3 = the product and demo value, range 1-5; during development a developer sets 2 in the local `.env` for cheaper runs; a batch is that many ideas everywhere) second-income ideas from a completed intake. Each idea includes a rationale citing at least 3 different intake fields and structured info on weekly time required, startup cost, and risk level. No idea exceeds the user's stated time/budget/risk; two intakes differing in at least two fields yield different idea sets.
+FR2: System generates exactly 3 tailored (one batch-size setting `IDEAS_PER_BATCH`, range 1-5, default 2 during development for cheap test runs and switched to 3 (the product and demo value) shortly before the demo - see the before-demo checklist in build-sessions.md; a batch is that many ideas everywhere) second-income ideas from a completed intake. Each idea includes a rationale citing at least 3 different intake fields and structured info on weekly time required, startup cost, and risk level. No idea exceeds the user's stated time/budget/risk; two intakes differing in at least two fields yield different idea sets.
 
 FR3: User can select one of the shown ideas to work on; the others are retained as "bookmarked" (not discarded); the user can mark any idea "rejected," removing it from the visible list.
 
@@ -466,7 +466,7 @@ So that I'm not stuck with a generic list.
 
 **Given** a completed intake
 **When** the user requests ideas
-**Then** `generate_ideas` produces exactly `IDEAS_PER_BATCH` ideas (default 3)
+**Then** `generate_ideas` produces exactly `IDEAS_PER_BATCH` ideas (default 2 in development, 3 for the demo)
 
 **Given** each idea
 **When** displayed

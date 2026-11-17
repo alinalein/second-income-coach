@@ -14,7 +14,7 @@ Stories stay tracked one by one in `sprint-status.yaml`. A session builds one or
 ## Next (each session = one /bmad-build prompt, one codebase read)
 | Session | Stories | Why together | Starts after |
 |---|---|---|---|
-| 3 | 2.4 Generate more ideas (adds another batch of IDEAS_PER_BATCH, default 3; never repeats shown ideas) | generate_ideas + ideas route | 2.10, 2.11 |
+| 3 | 2.4 Generate more ideas (adds another batch of IDEAS_PER_BATCH, default 2 until the demo; never repeats shown ideas) | generate_ideas + ideas route | 2.10, 2.11 |
 | 4 | 3.2 Plan activation (interrupt, one active plan) | plan routes + agent graph | 2.10 |
 | 5 | 2.9 + 3.3 Sidebar + plan switching | sidebar is the UI for switching | 3.2 |
 | 6 | 4.1 + 4.2 Text check-in + missed check-in | same tools and time logic | 3.2 |
@@ -34,7 +34,7 @@ After 2.10 and 2.11: A = session 3, B = session 4, C = session 9. Then 5, 6, 7 /
 Name the files to read and say "no other exploration". No design/UX skill. One review pass. Fix defects until the ACs work. Report the tokens used.
 
 ## Before the demo (checklist)
-- Remove `IDEAS_PER_BATCH=2` from the local `.env` so the default 3 applies (set to 2 only for cheap test runs).
+- Switch the `IDEAS_PER_BATCH` default from 2 to 3 (one line in `src/config/env.ts` and the `.env.example` comment), run the affected tests, and do one live generation to confirm 3 ideas.
 - Set the shared daily search budget and the per-user generations per day for the demo; `UNLIMITED_USER_EMAILS` holds only the owner's address (local `.env`, never in the repo).
 - `WEB_SEARCH_MODE=live` for the demo, `stub` only for tests.
 - One live idea generation after the last merge, then one full click-through (intake, ideas, select, plan, chat).

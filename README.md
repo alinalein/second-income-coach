@@ -16,7 +16,7 @@ Idea-generation quizzes already solve half of this. None pair tailored ideas wit
 | # | Capability |
 |---|---|
 | CAP-1 | Structured intake (skills, interests, time, risk tolerance, budget) that also classifies *why* past attempts stalled, into one of five failure patterns |
-| CAP-2 | 3 tailored income ideas per batch (more on request), each with a rationale tied to at least 3 intake fields; bookmark, reject, or request more |
+| CAP-2 | 3 tailored income ideas per batch (more on request; 2 during development), each with a rationale tied to at least 3 intake fields; bookmark, reject, or request more |
 | CAP-3 | A draft plan of small, sequenced steps — sized to the user's failure pattern — revealing only the current + next step |
 | CAP-4 | Ongoing check-ins by text or voice (recorded → transcribed → user-confirmed); missed check-ins auto-reshuffle the timeline, no shame |
 | CAP-5 | A live income/opportunity projection that updates with real progress |
