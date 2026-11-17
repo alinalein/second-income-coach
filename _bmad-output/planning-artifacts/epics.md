@@ -624,6 +624,42 @@ So that the cards never show a language I didn't choose.
 **When** the card is translated
 **Then** the quote stays in its original language and is shown as such; only the surrounding card text is translated
 
+### Story 2.8: Guided Flow from Intake to Plan
+
+As a user,
+I want the app to walk me from my answers to my ideas to my plan in clear steps,
+So that I always know what to do next and never see actions that don't apply yet.
+
+**Acceptance Criteria:**
+
+**Given** a user who submits the intake form for the first time
+**When** the submission succeeds
+**Then** idea generation starts automatically, with the same real-step progress display as today (no extra click); a returning user with ideas goes straight to their ideas
+
+**Given** the ideas are shown
+**When** the user looks under the "Your tailored income ideas" heading
+**Then** a short localized explanation tells them what to do: choose the idea they like most, reject the ones they don't want, and press "Generate new ideas" to see more
+
+**Given** the user presses "Select" on an idea
+**When** the action is triggered
+**Then** a confirmation dialog states that this idea becomes their chosen one and the remaining ideas are kept as bookmarks they can view later; only on confirm does the status change (Story 2.3 behaviour) and the plan get created (Story 3.1, lazily); cancel changes nothing
+
+**Given** the user confirms the selection
+**When** the plan has been generated
+**Then** the plan workspace (Story 3.1) opens with the draft plan and the plan chat
+
+**Given** the idea cards
+**When** an idea has no plan (every idea except the selected one)
+**Then** the card shows no "View plan" action; only the selected idea's card links to its plan
+
+**Given** the empty space under the ideas heading and any reserved-height placeholders
+**When** the ideas are loaded
+**Then** no blank bands remain; the explanation text or nothing occupies that space
+
+**Given** Story 3.2 (draft plan review and activation) and Story 3.3 (switching plans)
+**When** this flow is built
+**Then** they stay unchanged: the idea-selection dialog here confirms the choice of idea, activation in 3.2 still confirms the plan itself, and switching in 3.3 reuses the same select-and-confirm dialog
+
 ### Story 2.6: Faster Idea Generation (optional)
 
 As a user,
