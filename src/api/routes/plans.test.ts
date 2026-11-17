@@ -2,11 +2,13 @@ import { randomUUID } from 'node:crypto';
 import express from 'express';
 import session from 'express-session';
 import request from 'supertest';
-import { afterAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import type { CreatePlanDraft, SubmitIntakeToolArgs } from '@app/shared';
 import { createPlansRouter, isUniqueViolationError, type PlansRouterDeps } from './plans.js';
 import { createDb } from '../../db/client.js';
+import { createCheckpointer } from '../../agent/checkpointer.js';
+import { createActivatePlanGraph } from '../../tools/plain/activate_plan.js';
 import { users, ideas, plans, planSteps, intake } from '../../db/schema/index.js';
 import { upsertIntake } from '../../tools/plain/submit_intake.js';
 
@@ -36,6 +38,12 @@ const DATABASE_URL =
   process.env.DATABASE_URL ?? 'postgres://second_income_coach:second_income_coach@localhost:5432/second_income_coach';
 
 const { db, pool } = createDb({ DATABASE_URL });
+const checkpointer = createCheckpointer({ DATABASE_URL });
+const activatePlanGraph = createActivatePlanGraph({ checkpointer, db, model: {} as never });
+
+beforeAll(async () => {
+  await checkpointer.setup();
+});
 
 afterAll(async () => {
   await pool.end();
@@ -131,7 +139,7 @@ function buildTestApp(agent: FakeAgent, userId: string, overrides: Partial<Plans
     req.session.userId = userId;
     next();
   });
-  app.use('/api/plans', createPlansRouter({ env: testEnv, db, agent, model: {} as never, ...overrides }));
+  app.use('/api/plans', createPlansRouter({ env: testEnv, db, agent, model: {} as never, activatePlanGraph, ...overrides }));
   return app;
 }
 
@@ -314,6 +322,83 @@ describe('createPlansRouter GET /:planId/current-step', () => {
       expect(res.status).toBe(200);
       expect(res.body.current.title).toBe('Now');
       expect(res.body.next.title).toBe('Next');
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+});
+
+describe('createPlansRouter POST /:planId/activate* (AD-14, end to end over HTTP)', () => {
+  // AC: "activate_plan pauses ... and surfaces the draft for confirm" then
+  // "confirmation ... the plan becomes active" — the full request/pause/
+  // resume cycle through the real route wiring, not just the underlying
+  // functions `activate_plan.test.ts` already covers.
+  it('surfaces the draft for review, then confirming it makes the plan active', async () => {
+    const userId = await createTestUser();
+    try {
+      const ideaId = await insertIdea(userId, 'selected');
+      const [plan] = await db
+        .insert(plans)
+        .values({ ideaId, userId, status: 'draft', threadId: `plan:${randomUUID()}` })
+        .returning();
+      await db.insert(planSteps).values(
+        VALID_DRAFT.steps.map((step, index) => ({
+          planId: plan!.id,
+          stepOrder: index,
+          title: step.title,
+          description: step.description,
+          dayOffset: step.dayOffset,
+          status: index === 0 ? 'current' : 'pending',
+        })),
+      );
+
+      const app = buildTestApp(fakeAgent(), userId);
+
+      const reviewRes = await request(app).post(`/api/plans/${plan!.id}/activate`);
+      expect(reviewRes.status).toBe(200);
+      expect(reviewRes.body.steps).toHaveLength(VALID_DRAFT.steps.length);
+
+      const confirmRes = await request(app).post(`/api/plans/${plan!.id}/activate/confirm`);
+      expect(confirmRes.status).toBe(200);
+      expect(confirmRes.body.status).toBe('active');
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+
+  // AC: "the modification is validated against the Zod schema" — an
+  // invalid draft (too few steps) is rejected before any write, with the
+  // plan's existing steps left untouched.
+  it('rejects an invalid modify draft with 400 and leaves the plan steps unchanged', async () => {
+    const userId = await createTestUser();
+    try {
+      const ideaId = await insertIdea(userId, 'selected');
+      const [plan] = await db
+        .insert(plans)
+        .values({ ideaId, userId, status: 'draft', threadId: `plan:${randomUUID()}` })
+        .returning();
+      await db.insert(planSteps).values(
+        VALID_DRAFT.steps.map((step, index) => ({
+          planId: plan!.id,
+          stepOrder: index,
+          title: step.title,
+          description: step.description,
+          dayOffset: step.dayOffset,
+          status: index === 0 ? 'current' : 'pending',
+        })),
+      );
+
+      const app = buildTestApp(fakeAgent(), userId);
+      await request(app).post(`/api/plans/${plan!.id}/activate`);
+
+      const modifyRes = await request(app)
+        .post(`/api/plans/${plan!.id}/activate/modify`)
+        .send({ draft: { steps: [] } });
+
+      expect(modifyRes.status).toBe(400);
+
+      const steps = await db.select().from(planSteps).where(eq(planSteps.planId, plan!.id)).orderBy(planSteps.stepOrder);
+      expect(steps.map((step) => step.title)).toEqual(VALID_DRAFT.steps.map((step) => step.title));
     } finally {
       await cleanUp(userId);
     }

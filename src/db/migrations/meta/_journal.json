@@ -57,6 +57,13 @@
       "when": 1794933702989,
       "tag": "0007_thick_calypso",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1794943004893,
+      "tag": "0008_rare_hairball",
+      "breakpoints": true
     }
   ]
 }

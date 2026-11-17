@@ -112,3 +112,32 @@ export const currentStepResponseSchema = z.object({
 });
 
 export type CurrentStepResponse = z.infer<typeof currentStepResponseSchema>;
+
+/**
+ * Story 3.2 (AD-14): the value `activate_plan`'s `interrupt()` surfaces to
+ * the caller while paused — the full draft (every step, not just
+ * current+next; AD-4's cap is specific to `get_current_step`, not this
+ * pre-activation review) so the UI's confirm/modify/reject panel can render
+ * it.
+ */
+export const planActivationReviewSchema = z.object({
+  plan: planResponseSchema,
+  steps: z.array(planStepResponseSchema),
+});
+
+export type PlanActivationReview = z.infer<typeof planActivationReviewSchema>;
+
+/**
+ * Story 3.2 (AD-14): the resume value passed back via `new Command({resume})`
+ * once the user picks confirm/modify/reject on the paused draft. `modify`'s
+ * `draft` is re-validated against `createPlanDraftSchema` (AC: "validated
+ * against the Zod schema") — the same shape `create_plan`'s own LLM output
+ * is validated against, never a separately hand-written one (AD-16).
+ */
+export const activatePlanDecisionSchema = z.discriminatedUnion('action', [
+  z.object({ action: z.literal('confirm') }),
+  z.object({ action: z.literal('modify'), draft: createPlanDraftSchema }),
+  z.object({ action: z.literal('reject'), feedback: z.string().min(1).max(2000) }),
+]);
+
+export type ActivatePlanDecision = z.infer<typeof activatePlanDecisionSchema>;

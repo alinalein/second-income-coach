@@ -8,6 +8,7 @@ import { IDEAS_MODEL_NODE_TIMEOUT_MS, IDEAS_MODEL_NODE_RETRY_POLICY, PLAN_MODEL_
 import { getWebSearchTool } from '../tools/mcp/web_search.js';
 import { createCreatePlanTool } from '../tools/llm/create_plan.js';
 import { createGetCurrentStepTool } from '../tools/plain/get_current_step.js';
+import { createActivatePlanGraph } from '../tools/plain/activate_plan.js';
 import { createApp } from './app.js';
 
 const CHECKPOINTER_SETUP_TIMEOUT_MS = 10_000;
@@ -123,11 +124,17 @@ try {
     tools: [createCreatePlanTool(db, chatModel), createGetCurrentStepTool(db)],
   });
 
+  // Story 3.2 (AD-14): the dedicated, checkpointed `activate_plan` graph —
+  // shares the one Postgres checkpointer/db/model everything else above
+  // does, but its own topology (no `createAgent`/tools at all, just one
+  // plain-code node that calls LangGraph's own `interrupt()`).
+  const activatePlanGraph = createActivatePlanGraph({ checkpointer, db, model: chatModel });
+
   // Story 2.10: the same shared `chatModel`/`webSearchTool` built above —
   // `ideasAgent`/`plansAgent` stay constructed unchanged (still needed for
   // `.getState`/`.updateState`), but `createApp`'s ideas/plans routes now
   // also call `handleGenerateIdeas`/`handleCreatePlan` directly.
-  const app = createApp({ env, db, pool, agent, ideasAgent, plansAgent, chatModel, webSearchTool });
+  const app = createApp({ env, db, pool, agent, ideasAgent, plansAgent, chatModel, webSearchTool, activatePlanGraph });
 
   const server = app.listen(env.PORT, () => {
     console.log(`[api] listening on http://localhost:${env.PORT} (${env.NODE_ENV})`);

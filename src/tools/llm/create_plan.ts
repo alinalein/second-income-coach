@@ -69,6 +69,11 @@ export function buildCreatePlanPrompt(
   idea: { title: string; ideaType: string; rationale: string },
   intakeRow: IntakeResponse,
   replyLanguage: CreatePlanToolArgs['replyLanguage'],
+  /** Story 3.2 (AD-13): "Reject with feedback ... create_plan runs again"
+   * — the rejected draft's feedback, folded into the same prompt rather
+   * than a second, separate instruction channel. `undefined` on every
+   * ordinary (non-reject) call, same as before this story. */
+  feedback?: string,
 ): string {
   return [
     'Create a concrete, ordered, step-by-step plan for turning the income idea below into action. Treat ' +
@@ -83,6 +88,9 @@ export function buildCreatePlanPrompt(
       '1-5 short, distinct, concrete actions (each its own bullet point, never one prose paragraph) that ' +
       'together say exactly what to do for that step.',
     FAILURE_PATTERN_GUIDANCE[intakeRow.failurePattern],
+    ...(feedback
+      ? [`The user rejected an earlier draft of this plan with this feedback: """${feedback}""" Revise the plan to address it.`]
+      : []),
     replyLanguage === 'de' ? 'Write every title and description in German.' : 'Write every title and description in English.',
   ].join('\n');
 }
@@ -108,6 +116,10 @@ export interface CreatePlanDeps {
     intakeRow: IntakeResponse,
     replyLanguage: CreatePlanToolArgs['replyLanguage'],
     signal: AbortSignal | undefined,
+    /** Story 3.2 (AD-13): only set on a reject-and-regenerate call — see
+     * `handleRegeneratePlanDraft` below. `undefined` for every ordinary
+     * create. */
+    feedback?: string,
   ) => Promise<CreatePlanDraft>;
 }
 
@@ -117,12 +129,102 @@ async function defaultCreateDraft(
   intakeRow: IntakeResponse,
   replyLanguage: CreatePlanToolArgs['replyLanguage'],
   signal: AbortSignal | undefined,
+  feedback?: string,
 ): Promise<CreatePlanDraft> {
   const structuredModel = model.withStructuredOutput(createPlanDraftSchema);
-  const raw = await structuredModel.invoke([new HumanMessage(buildCreatePlanPrompt(idea, intakeRow, replyLanguage))], {
-    signal,
-  });
+  const raw = await structuredModel.invoke(
+    [new HumanMessage(buildCreatePlanPrompt(idea, intakeRow, replyLanguage, feedback))],
+    { signal },
+  );
   return createPlanDraftSchema.parse(raw);
+}
+
+/**
+ * Story 3.2: the idea-ownership/status load + intake load shared by
+ * `handleCreatePlan` (insert path) and `handleRegeneratePlanDraft` (reject
+ * -and-update path, `src/tools/plain/activate_plan.ts`) — same checks, same
+ * error vocabulary, factored out rather than duplicated across both write
+ * paths.
+ */
+async function loadIdeaAndIntakeForPlan(
+  db: Db,
+  ideaId: string,
+  userId: string,
+  toolName: 'create_plan' | 'activate_plan',
+): Promise<{ ideaRow: { title: string; ideaType: string; rationale: string }; intakeRow: IntakeResponse }> {
+  const [ideaRow] = await db
+    .select({ title: ideas.title, ideaType: ideas.ideaType, rationale: ideas.rationale })
+    .from(ideas)
+    .where(and(eq(ideas.id, ideaId), eq(ideas.userId, userId), inArray(ideas.status, ['selected', 'bookmarked'])))
+    .limit(1);
+  if (!ideaRow) {
+    throw new Error(`${toolName}: idea "${ideaId}" was not found, not owned by this user, or no longer selected/bookmarked`);
+  }
+
+  const intakeRow = await getIntakeByUserId(db, userId);
+  if (!intakeRow) {
+    throw new Error(`${toolName}: no completed intake found for this user`);
+  }
+
+  return { ideaRow, intakeRow };
+}
+
+/**
+ * Story 3.2 (AD-13: "Rejecting a draft ... always updates that same plan row
+ * in place (regenerating its content) rather than inserting a new row"):
+ * the same LLM-call-then-validate logic as `handleCreatePlan`, but an UPDATE
+ * of the given `planId`'s existing row/steps instead of an INSERT — called
+ * only from `activate_plan`'s reject branch, never directly as its own tool
+ * (AD-4: `create_plan` stays the one LLM-backed draft generator; this is
+ * that same generator, reused, not a third one).
+ */
+export async function handleRegeneratePlanDraft(
+  deps: CreatePlanDeps,
+  planId: string,
+  ideaId: string,
+  userId: string,
+  replyLanguage: CreatePlanToolArgs['replyLanguage'],
+  feedback: string,
+  signal: AbortSignal | undefined,
+): Promise<PlanResponse> {
+  const { ideaRow, intakeRow } = await loadIdeaAndIntakeForPlan(deps.db, ideaId, userId, 'activate_plan');
+
+  const createDraft =
+    deps.createDraft ?? ((idea, intake, lang, sig, fb) => defaultCreateDraft(deps.model, idea, intake, lang, sig, fb));
+
+  const rawDraft = await createDraft(ideaRow, intakeRow, replyLanguage, signal, feedback);
+  const draft = createPlanDraftSchema.parse(rawDraft);
+
+  const updatedPlan = await deps.db.transaction(async (tx) => {
+    // Review fix (same race `activate_plan.ts`'s `confirmActivation`/
+    // `saveModifiedDraft` guard against): a reject that loses the race to a
+    // concurrent confirm must abort rather than overwriting the now-`active`
+    // plan's steps and silently reverting it to `draft`.
+    const [locked] = await tx.select({ status: plans.status }).from(plans).where(eq(plans.id, planId)).for('update');
+    if (!locked || locked.status !== 'draft') {
+      throw new Error(`activate_plan: plan "${planId}" is no longer a draft (resolved by a concurrent request)`);
+    }
+
+    await tx.delete(planSteps).where(eq(planSteps.planId, planId));
+    await tx.insert(planSteps).values(
+      draft.steps.map((step, index) => ({
+        planId,
+        stepOrder: index,
+        title: step.title,
+        description: step.description,
+        dayOffset: step.dayOffset,
+        status: index === 0 ? 'current' : 'pending',
+      })),
+    );
+    const [planRow] = await tx
+      .update(plans)
+      .set({ status: 'draft', updatedAt: new Date() })
+      .where(eq(plans.id, planId))
+      .returning();
+    return planRow!;
+  });
+
+  return toPlanResponse(updatedPlan);
 }
 
 /**
@@ -164,19 +266,7 @@ export async function handleCreatePlan(
   // actually running — without re-checking it here too, that race would
   // still create a plan for a now-unselected idea (Boundary: "no eager plan
   // creation for unselected/unbookmarked ideas").
-  const [ideaRow] = await deps.db
-    .select({ title: ideas.title, ideaType: ideas.ideaType, rationale: ideas.rationale })
-    .from(ideas)
-    .where(and(eq(ideas.id, ideaId), eq(ideas.userId, userId), inArray(ideas.status, ['selected', 'bookmarked'])))
-    .limit(1);
-  if (!ideaRow) {
-    throw new Error(`create_plan: idea "${ideaId}" was not found, not owned by this user, or no longer selected/bookmarked`);
-  }
-
-  const intakeRow = await getIntakeByUserId(deps.db, userId);
-  if (!intakeRow) {
-    throw new Error('create_plan: no completed intake found for this user');
-  }
+  const { ideaRow, intakeRow } = await loadIdeaAndIntakeForPlan(deps.db, ideaId, userId, 'create_plan');
 
   const createDraft = deps.createDraft ?? ((idea, intake, lang, signal) => defaultCreateDraft(deps.model, idea, intake, lang, signal));
 

@@ -99,6 +99,18 @@ export function buildPlanThreadId(planId: string): string {
   return `plan:${planId}`;
 }
 
+/**
+ * Story 3.2 (AD-14): a fourth internal-only thread kind — same precedent as
+ * `buildIdeasTriggerThreadId`/`buildIntakeTriggerThreadId`. `activate_plan`'s
+ * pause/resume runs on its own checkpointed graph (`src/tools/plain/
+ * activate_plan.ts`), never on the user-visible `plan:${planId}` chat thread
+ * (`buildPlanThreadId`) — a different graph topology sharing that thread id
+ * would risk deserializing an incompatible checkpoint.
+ */
+export function buildPlanActivationThreadId(planId: string): string {
+  return `plan-activation:${planId}`;
+}
+
 const DISCOVERY_THREAD_PREFIX = 'discovery:';
 
 /** Inverse of `buildDiscoveryThreadId` — Story 5.1 needs the `userId` back

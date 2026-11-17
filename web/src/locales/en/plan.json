@@ -10,5 +10,33 @@
     "noCurrentStep": "No current step yet.",
     "nextLabel": "Next (locked)",
     "dayLabel": "Day {{day}}"
+  },
+  "activation": {
+    "title": "Review & activate your plan",
+    "hint": "Check your plan once more before it becomes active.",
+    "startButton": "Review plan",
+    "loading": "Loading your plan for review…",
+    "loadFailed": "Couldn't load the review. Please try again.",
+    "reviewTitle": "Review your plan",
+    "stepLabel": "Step {{index}}",
+    "dayLabel": "Day {{day}}",
+    "confirmButton": "Confirm & activate",
+    "modifyButton": "Edit plan",
+    "rejectButton": "Not quite — regenerate",
+    "cancelButton": "Cancel",
+    "saveChangesButton": "Save changes",
+    "titleLabel": "Title",
+    "descriptionLabel": "Actions (one per line)",
+    "dayOffsetLabel": "Day",
+    "invalidDraft": "Please check your edits — each step needs a title and at least one action.",
+    "feedbackLabel": "What should change?",
+    "feedbackPlaceholder": "Tell us what to change about this plan…",
+    "feedbackRequired": "Please describe what should change.",
+    "submitFeedbackButton": "Send feedback & regenerate",
+    "regenerating": "Updating your plan based on your feedback…",
+    "saving": "Saving…",
+    "activating": "Activating…",
+    "activated": "Your plan is now active!",
+    "failed": "Something went wrong. Please try again."
   }
 }
