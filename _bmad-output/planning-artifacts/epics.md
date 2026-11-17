@@ -685,8 +685,12 @@ So that I can move between the things I'm working on without hunting through the
 **Then** it offers Settings (the existing settings page, Stories 5.1/5.4/5.5, shown as its own view and no longer as a card on the main page), the theme toggle and sign-out
 
 **Given** the plan workspace of Story 3.1
-**When** shown next to this sidebar
-**Then** its status panel (current and next step, timeline) is a compact header above the chat, not a second sidebar, using the narrow-screen layout Story 3.1 already defines
+**When** shown next to this sidebar on a desktop width
+**Then** it keeps the layout of layout-preview.html: the status panel (current and next step, timeline) is a column beside the chat, side by side, never stacked above it; only on a narrow screen does the status panel become the compact header above the chat that Story 3.1 defines
+
+**Given** the sidebar
+**When** the user is on any view
+**Then** every navigation and global action lives in it and nowhere else: "New ideas", "Generate new ideas" (with its disabled/limit states from Story 2.11), "Review your intake answers", the plan and bookmarked lists, Settings; there is no "Back to ideas" button or floating link in the page content, and the ideas view no longer has its own generate button or intake link (the progress bar and messages of a running generation stay in the ideas view)
 
 **Given** a normal desktop screen
 **When** the app is shown
