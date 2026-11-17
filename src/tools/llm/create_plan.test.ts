@@ -182,6 +182,42 @@ describe('handleCreatePlan (integration, real Postgres)', () => {
     }
   });
 
+  // Bug fix (user-reported): a retried/duplicate `create_plan` tool call
+  // (e.g. a pending call left over from an earlier invocation, resumed on a
+  // later, unrelated invocation of the same thread) must not crash on the
+  // unique `plans.ideaId` constraint — it returns the already-created plan
+  // instead of attempting (and failing) a second insert, and never calls
+  // `createDraft` again for it.
+  it('returns the existing plan, without calling createDraft again, when a plan already exists for this idea', async () => {
+    const { userId, ideaId } = await createTestUserWithIdeaAndIntake();
+    const firstPlanId = randomUUID();
+    const retriedPlanId = randomUUID();
+
+    try {
+      const firstResult = await handleCreatePlan(
+        baseDeps({ createDraft: async () => VALID_DRAFT }),
+        { configurable: { thread_id: `plan:${firstPlanId}`, planId: firstPlanId, ideaId, userId } },
+        { replyLanguage: 'en' },
+      );
+
+      let retriedDraftCalled = false;
+      const retriedResult = await handleCreatePlan(
+        baseDeps({ createDraft: async () => ((retriedDraftCalled = true), VALID_DRAFT) }),
+        { configurable: { thread_id: `plan:${retriedPlanId}`, planId: retriedPlanId, ideaId, userId } },
+        { replyLanguage: 'en' },
+      );
+
+      expect(retriedDraftCalled).toBe(false);
+      expect(retriedResult).toEqual(firstResult);
+
+      const planRows = await db.select().from(plans).where(eq(plans.ideaId, ideaId));
+      expect(planRows).toHaveLength(1);
+      expect(planRows[0]!.id).toBe(firstPlanId);
+    } finally {
+      await cleanUp(userId, ideaId);
+    }
+  });
+
   // I/O matrix: "Client disconnects mid-generation" -> "In-flight LLM call
   // aborted via AbortSignal, no orphaned write."
   it('throws and writes no row when the signal is already aborted', async () => {

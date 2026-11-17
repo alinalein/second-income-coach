@@ -256,6 +256,14 @@ export async function handleCreatePlan(
 
   const parsedArgs = createPlanToolSchema.parse(args);
 
+  // Bug fix (user-reported): a retried/duplicate call of this tool (e.g. a
+  // pending call left over from an earlier invocation, resumed on a later,
+  // unrelated invocation of the same thread) must not crash on the unique
+  // `plans.ideaId` constraint below — return the already-created plan
+  // instead of attempting a second insert.
+  const [existingPlan] = await deps.db.select().from(plans).where(eq(plans.ideaId, ideaId)).limit(1);
+  if (existingPlan) return toPlanResponse(existingPlan);
+
   // I/O matrix: "Idea not owned by user / unselected idea" -> "no row
   // written". The route already checked this before invoking the agent —
   // this is defense-in-depth, same precedent as `set_idea_status.ts`'s own
