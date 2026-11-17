@@ -17,7 +17,7 @@ This document provides the complete epic and story breakdown for Second Income C
 
 FR1: User can complete a structured intake capturing skills, interests, available time, risk tolerance, and starting budget, plus a free-text answer about what has stopped them from starting/following through before; that free-text answer is classified into one of five known failure patterns (overwhelm, loses interest once routine, gets stuck with no next step, life disruption, forgets/deprioritizes) and persisted alongside the rest of the intake.
 
-FR2: System generates exactly 3 tailored (one batch-size setting `IDEAS_PER_BATCH`, default 3, which a developer may lower to 2 for cheap test runs; a batch is that many ideas everywhere) second-income ideas from a completed intake. Each idea includes a rationale citing at least 3 different intake fields and structured info on weekly time required, startup cost, and risk level. No idea exceeds the user's stated time/budget/risk; two intakes differing in at least two fields yield different idea sets.
+FR2: System generates exactly 2 tailored (one batch-size setting `IDEAS_PER_BATCH`, default 2, range 1-5; a batch is that many ideas everywhere) second-income ideas from a completed intake. Each idea includes a rationale citing at least 3 different intake fields and structured info on weekly time required, startup cost, and risk level. No idea exceeds the user's stated time/budget/risk; two intakes differing in at least two fields yield different idea sets.
 
 FR3: User can select one of the shown ideas to work on; the others are retained as "bookmarked" (not discarded); the user can mark any idea "rejected," removing it from the visible list.
 
@@ -33,7 +33,7 @@ FR8: Starting a step and completing a step each produce their own distinct, spec
 
 FR9: After each completed step or check-in, the user sees an updated income estimate and the concrete next opportunity it unlocks - computed from their actual logged progress and check-in consistency, not fixed at intake and not silently re-fetched/recomputed later.
 
-FR10: User can request "more ideas" for a further batch of 3 that is added to the existing ones, never repeating anything already bookmarked or rejected.
+FR10: User can request "more ideas" for a further batch (same size as the first) that is added to the existing ones, never repeating anything already bookmarked or rejected.
 
 FR11: User can set the agent's personality (formal/friendly/terse) and choose which LLM answers from a model registry (id, provider, display name, price per 1M input/output tokens, price_as_of); only providers with a configured server-side key are selectable, and the moderation/transcription models are never user-selectable.
 
@@ -121,7 +121,7 @@ Users can sign in with Google and exchange at least one safe, moderated message 
 **Covers:** FR18, FR19, NFR4, UX-DR1-4, and the Additional Requirements (stack wiring, auth, persistence plumbing, moderation baseline, observability, Express/React shell, i18n foundation, web/API security baseline per AD-30).
 
 ### Epic 2: Tailored Idea Discovery
-Users complete an intake and receive 3 second-income ideas matched to their own skills, time, budget, and risk tolerance - not a generic list - and can curate that list by bookmarking or rejecting ideas.
+Users complete an intake and receive 2 second-income ideas matched to their own skills, time, budget, and risk tolerance - not a generic list - and can curate that list by bookmarking or rejecting ideas.
 **FRs covered:** FR1, FR2, FR3.
 
 ### Epic 3: Plan Creation & Activation
@@ -418,7 +418,7 @@ So that the app matches UX-DR3 and Story 1.1's acceptance criterion, which was a
 
 ## Epic 2: Tailored Idea Discovery
 
-Users complete an intake and receive 3 second-income ideas matched to their own skills, time, budget, and risk tolerance - not a generic list - and can curate that list by bookmarking or rejecting ideas.
+Users complete an intake and receive 2 second-income ideas matched to their own skills, time, budget, and risk tolerance - not a generic list - and can curate that list by bookmarking or rejecting ideas.
 
 ### Story 2.1: Structured Intake with Failure-Pattern Classification
 
@@ -466,7 +466,7 @@ So that I'm not stuck with a generic list.
 
 **Given** a completed intake
 **When** the user requests ideas
-**Then** `generate_ideas` produces exactly 3 (the batch-size constant)
+**Then** `generate_ideas` produces exactly `IDEAS_PER_BATCH` ideas (default 2)
 
 **Given** each idea
 **When** displayed
@@ -546,7 +546,7 @@ So that I have more options without re-entering my intake.
 
 **Given** existing ideas, some of them bookmarked/rejected
 **When** the user requests "more ideas"
-**Then** `generate_ideas` returns a further 3, added to the existing ones, never repeating anything already shown (`suggested`, `bookmarked` or `rejected`)
+**Then** `generate_ideas` returns a further batch of the same size, added to the existing ones, never repeating anything already shown (`suggested`, `bookmarked` or `rejected`)
 
 **Given** the new batch
 **When** generated
@@ -568,7 +568,7 @@ So that the suggestions are current and worth acting on, not generic.
 **When** displayed
 **Then** it shows a demand/trend evidence note with its source URL, in addition to the baseline-rate citation (AD-6), directly on the card; the evidence is persisted on the idea's record and is never invented - an idea without sourced evidence is retried, not shown
 
-**Given** a batch of 3
+**Given** a batch
 **When** validated
 **Then** its evidence comes from at least 3 distinct source domains, and the discovery step is not limited to freelance rate pages
 
@@ -720,7 +720,7 @@ So that the app is pleasant to use and does not waste time or money on steps it 
 
 **Given** each flow
 **When** measured on one real run before and after
-**Then** the report shows both numbers per step honestly, with targets of: intake "saved" within 1 s, classification within about 3 s, plan creation within about 20 s, idea generation within about 45 s for a batch of 3; a miss is reported as a miss, never hidden by raising timeouts
+**Then** the report shows both numbers per step honestly, with targets of: intake "saved" within 1 s, classification within about 3 s, plan creation within about 20 s, idea generation within about 45 s for the default batch; a miss is reported as a miss, never hidden by raising timeouts
 
 **Given** the change
 **When** done
