@@ -750,9 +750,17 @@ So that the free search credits last through development and the demo.
 **When** the environment sets the search mode to "stub"
 **Then** `web_search` returns fixed canned results with no network call and no credit use; "live" (the default in production and the demo) behaves as normal; the mode is one env variable documented in `.env.example`, validated at startup (CLAUDE.md)
 
-**Given** a live deployment with many users
-**When** total search credits used today reach a configurable daily budget (one env constant), or one user exceeds a configurable number of idea generations per day
-**Then** further generations are refused with a neutral localized message ("try again later"), never a hard error or a charge beyond the budget; the counters live in Postgres, and the limits are documented in the README (Story 7.1)
+**Given** a user who has used up their idea generations for the day
+**When** they press a generate action
+**Then** the app shows a clear, localized (DE/EN) message that says what happened, for example "You've reached today's limit of N idea generations. It resets tomorrow at HH:MM." - plainly a limit, never worded like an error or an outage - and the button is disabled with that explanation instead of failing after a click; the existing ideas stay fully usable
+
+**Given** the app's total daily search budget is used up
+**When** any user presses a generate action
+**Then** the message says so honestly and differently ("Today's shared search budget of the app is used up. New ideas are available again tomorrow."), the existing ideas stay usable, and nothing is charged beyond the budget
+
+**Given** the limits
+**When** configured
+**Then** the per-user generations per day and the shared daily search budget are separate env constants with generous defaults for development (so normal testing never hits them) and documented lower values for the live demo; the counters live in Postgres and reset at a fixed time; and a developer can lower them to see the messages on purpose (documented in the README, Story 7.1)
 
 **Given** the guard
 **When** a live run is measured before and after
