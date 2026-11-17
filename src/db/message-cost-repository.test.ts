@@ -39,14 +39,14 @@ describe('saveMessageCost / getMessageCosts (real Postgres: the message_id uniqu
         modelId: 'openai/gpt-6-luna',
         inputTokens: 1000,
         outputTokens: 500,
-        amountMinorUnitsUsd: 35,
+        amountMicroUnitsUsd: 35,
         pricePerMillionInputTokens: 0.1,
         pricePerMillionOutputTokens: 0.5,
         priceAsOf: '2026-11-14',
       });
 
       const costs = await getMessageCosts(db, [messageId]);
-      expect(costs.get(messageId)).toMatchObject({ modelId: 'openai/gpt-6-luna', inputTokens: 1000, outputTokens: 500, amountMinorUnitsUsd: 35 });
+      expect(costs.get(messageId)).toMatchObject({ modelId: 'openai/gpt-6-luna', inputTokens: 1000, outputTokens: 500, amountMicroUnitsUsd: 35 });
 
       // A second save for the same message id (e.g. a retried write) must
       // never throw a unique-violation, and must never overwrite the
@@ -59,14 +59,14 @@ describe('saveMessageCost / getMessageCosts (real Postgres: the message_id uniqu
         modelId: 'openai/gpt-6-luna',
         inputTokens: 999_999,
         outputTokens: 999_999,
-        amountMinorUnitsUsd: 999_999,
+        amountMicroUnitsUsd: 999_999,
         pricePerMillionInputTokens: 0.1,
         pricePerMillionOutputTokens: 0.5,
         priceAsOf: '2026-11-14',
       });
 
       const costsAfterRetry = await getMessageCosts(db, [messageId]);
-      expect(costsAfterRetry.get(messageId)).toMatchObject({ inputTokens: 1000, outputTokens: 500, amountMinorUnitsUsd: 35 });
+      expect(costsAfterRetry.get(messageId)).toMatchObject({ inputTokens: 1000, outputTokens: 500, amountMicroUnitsUsd: 35 });
     } finally {
       await db.delete(messageCosts).where(eq(messageCosts.userId, userId));
       await db.delete(users).where(eq(users.id, userId));
@@ -84,14 +84,14 @@ describe('saveMessageCost / getMessageCosts (real Postgres: the message_id uniqu
         modelId: 'some/unpriced-model',
         inputTokens: 42,
         outputTokens: 7,
-        amountMinorUnitsUsd: null,
+        amountMicroUnitsUsd: null,
         pricePerMillionInputTokens: null,
         pricePerMillionOutputTokens: null,
         priceAsOf: null,
       });
 
       const costs = await getMessageCosts(db, [messageId]);
-      expect(costs.get(messageId)).toMatchObject({ inputTokens: 42, outputTokens: 7, amountMinorUnitsUsd: null, priceAsOf: null });
+      expect(costs.get(messageId)).toMatchObject({ inputTokens: 42, outputTokens: 7, amountMicroUnitsUsd: null, priceAsOf: null });
     } finally {
       await db.delete(messageCosts).where(eq(messageCosts.userId, userId));
       await db.delete(users).where(eq(users.id, userId));

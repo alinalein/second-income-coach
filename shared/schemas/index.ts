@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { moneySchema } from '../money.js';
+import { microMoneySchema } from '../money.js';
 
 /**
  * Story 1.1 placeholder schema.
@@ -60,12 +60,16 @@ export type AuthSession = z.infer<typeof authSessionSchema>;
  * figure. `isEstimate` mirrors `ConvertedMoney.isEstimate` (`shared/
  * money.ts`): `true` only for a genuine currency conversion, never for a
  * same-currency (or no-price) amount.
+ *
+ * Bug fix (epics.md amendment): `amount` is `MicroMoney`, not `Money` — a
+ * typical per-message AI cost is a fraction of a cent, which `Money`'s
+ * minor-unit (cent) granularity rounds straight to zero.
  */
 export const messageCostSchema = z.object({
   modelId: z.string().min(1),
   inputTokens: z.number().int().nonnegative(),
   outputTokens: z.number().int().nonnegative(),
-  amount: moneySchema.nullable(),
+  amount: microMoneySchema.nullable(),
   isEstimate: z.boolean(),
 });
 

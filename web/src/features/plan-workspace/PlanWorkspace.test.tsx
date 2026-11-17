@@ -36,6 +36,7 @@ describe('PlanWorkspace (AC: lazy create-or-fetch wires ChatThread to the plan t
       '/api/plans/select/idea-1': () => new Response(JSON.stringify(plan), { status: 200 }),
       '/api/plans/plan-1/current-step': () => new Response(JSON.stringify(currentStep), { status: 200 }),
       '/api/plans/plan-1/messages': () => new Response(JSON.stringify({ messages: [] }), { status: 200 }),
+      '/api/plans/plan-1/activate': () => new Response(JSON.stringify({ review: null }), { status: 200 }),
     });
     vi.stubGlobal('fetch', fetchMock);
 
@@ -63,6 +64,7 @@ describe('PlanWorkspace (AC: lazy create-or-fetch wires ChatThread to the plan t
       '/api/plans/select/idea-1': () => new Response(JSON.stringify(plan), { status: 200 }),
       '/api/plans/plan-1/current-step': () => new Response(JSON.stringify(currentStep), { status: 200 }),
       '/api/plans/plan-1/messages': () => new Response(JSON.stringify({ messages: [] }), { status: 200 }),
+      '/api/plans/plan-1/activate': () => new Response(JSON.stringify({ review: null }), { status: 200 }),
     });
     vi.stubGlobal('fetch', fetchMock);
 

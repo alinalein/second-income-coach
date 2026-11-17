@@ -725,7 +725,18 @@ describe('IdeasPanel (Fix1: loading skeleton, never the empty state)', () => {
     const pending = new Promise<Response>((resolve) => {
       resolveFetch = resolve;
     });
-    vi.stubGlobal('fetch', vi.fn(() => pending));
+    // Story 2.6 AC5: `useViewerCountry()` is now called once at the panel
+    // level (lifted out of `IdeaCard`), so it fires its own `/api/intake`
+    // fetch even while `/api/ideas` is still pending with zero cards —
+    // needs its own mocked response, same `INTAKE_NULL_RESPONSE` pattern
+    // every other test in this file already uses.
+    vi.stubGlobal(
+      'fetch',
+      mockFetch({
+        ...INTAKE_NULL_RESPONSE,
+        '/api/ideas': () => pending,
+      }),
+    );
 
     render(<IdeasPanel />);
 
@@ -944,12 +955,14 @@ describe('IdeasPanel (Story 2.7: translate idea cards on language change)', () =
   });
 
   // I/O matrix: "Timeout/abort/moderation-reject -> stays stored-language,
-  // notice + retry" — never blank.
+  // notice + retry" — never blank. Story 2.6 AC5: the background
+  // other-language prefetch effect this test used to also exercise was
+  // removed (Code Map) — there is now no call at all until the UI language
+  // actually mismatches a card's stored language.
   it('shows a neutral notice with a working retry on translate failure, keeping the stored-language text', async () => {
     const idea = fakeIdea();
     const translateFetch = vi
       .fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ error: 'Translation failed' }), { status: 502 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ error: 'Translation failed' }), { status: 502 }))
       .mockResolvedValueOnce(
         new Response(
@@ -972,74 +985,28 @@ describe('IdeasPanel (Story 2.7: translate idea cards on language change)', () =
     render(<IdeasPanel />);
     expect(await screen.findByText(idea.title)).toBeInTheDocument();
 
-    // Live fix: a background prefetch for German already starts as soon as
-    // ideas load (before any language switch) and fails here — invisible
-    // while still viewing English (no banner, no alert).
-    await waitFor(() => expect(translateFetch).toHaveBeenCalledTimes(1));
+    // Story 2.6 AC5/I-O matrix row 3: the UI language still matches the
+    // card's own stored language — no translate call at all, no prefetch
+    // for the untouched other language either.
+    expect(translateFetch).not.toHaveBeenCalled();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
 
     await act(async () => {
       await i18n.changeLanguage('de');
     });
 
-    // Switching to a language whose background prefetch already failed
-    // triggers one real foreground attempt — which also fails here, and
-    // only now does the user see anything.
+    // Switching to German is the first real attempt — fails here, and the
+    // user sees the notice immediately (no earlier silent prefetch attempt
+    // to have already failed first).
     expect(await screen.findByRole('alert')).toHaveTextContent(
       "Deine Ideen konnten nicht übersetzt werden. Sie werden weiterhin in der ursprünglichen Sprache angezeigt.",
     );
     expect(screen.getByText(idea.title)).toBeInTheDocument(); // never blank
-    expect(translateFetch).toHaveBeenCalledTimes(2);
+    expect(translateFetch).toHaveBeenCalledTimes(1);
 
     fireEvent.click(screen.getByRole('button', { name: 'Übersetzung erneut versuchen' }));
 
     expect(await screen.findByText('DE Titel')).toBeInTheDocument();
-    expect(translateFetch).toHaveBeenCalledTimes(3);
-  });
-
-  // Live fix (post-handoff, user-reported: "the moment the user clicks from
-  // English to German, the translation should already be there"): the
-  // background prefetch populates the cache before any switch, so the
-  // *first* switch into a never-before-seen language is also an instant
-  // cache hit, not just a repeat one.
-  it('pre-translates in the background so the first language switch is also instant, with no visible loading banner before it', async () => {
-    const idea = fakeIdea(); // language: 'en'
-    const translateFetch = vi.fn(
-      () =>
-        new Response(
-          JSON.stringify({
-            translations: [{ ideaId: idea.id, language: 'de', title: 'DE Titel', rationale: 'Zeile 1.\nZeile 2.', demandEvidenceNote: null, growthPath: null }],
-          }),
-          { status: 200 },
-        ),
-    );
-
-    vi.stubGlobal(
-      'fetch',
-      mockFetch({
-        ...INTAKE_NULL_RESPONSE,
-        '/api/ideas/translate': translateFetch,
-        '/api/ideas': () => new Response(JSON.stringify({ ideas: [idea], currency: 'EUR' }), { status: 200 }),
-      }),
-    );
-
-    render(<IdeasPanel />);
-    expect(await screen.findByText(idea.title)).toBeInTheDocument();
-
-    // The prefetch fires and completes entirely on its own, before any
-    // switch — never shown, since the user is still viewing English.
-    await waitFor(() => expect(translateFetch).toHaveBeenCalledTimes(1));
-    expect(screen.queryByRole('status')).not.toBeInTheDocument();
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-
-    await act(async () => {
-      await i18n.changeLanguage('de');
-    });
-
-    // Already cached from the prefetch — shows immediately, no loading
-    // banner ever appears for this switch, and no second call was made.
-    expect(screen.getByText('DE Titel')).toBeInTheDocument();
-    expect(screen.queryByRole('status')).not.toBeInTheDocument();
-    expect(translateFetch).toHaveBeenCalledTimes(1);
+    expect(translateFetch).toHaveBeenCalledTimes(2);
   });
 });

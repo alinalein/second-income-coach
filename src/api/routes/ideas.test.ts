@@ -10,7 +10,7 @@ import { createDb } from '../../db/client.js';
 import { users, ideas, userSettings, plans, intake, userGenerationCounts } from '../../db/schema/index.js';
 import { upsertIntake } from '../../tools/plain/submit_intake.js';
 import { SearchServiceUnavailableError, type GenerateDraftsResult } from '../../tools/llm/generate_ideas.js';
-import { incrementAndGetUserGenerationCount } from '../../tools/plain/usage_limits.js';
+import { incrementAndGetUserGenerationCount, getUserGenerationCount } from '../../tools/plain/usage_limits.js';
 
 // Story 2.7: `createIdeasRouter` now also builds a translation chat model
 // at construction time (`createChatModel(env, TRANSLATION_MODEL_ID)`) —
@@ -238,25 +238,28 @@ describe('createIdeasRouter POST /generate', () => {
     }
   });
 
-  // Story 2.2 round 10 ("Generate new ideas" open item): a regenerate
-  // deletes the old `suggested` batch and inserts a new 5 in one
-  // transaction (`generate_ideas.ts`'s own real write — now exercised
-  // directly, not simulated by a fake agent) — proving the route reports
-  // success from entirely new ids, not the old before+5 row-count formula
-  // (which a replace, not an append, no longer satisfies).
-  it('reports success and returns the new batch when regenerating (replacing the old suggested batch)', async () => {
+  // Story 2.4 AC1: a regenerate appends a new 5 to the existing batch in
+  // one transaction (`generate_ideas.ts`'s own real insert-only write — now
+  // exercised directly, not simulated by a fake agent) — proving the route
+  // reports success from entirely new ids on top of (not replacing) the old
+  // ones, via the all-statuses before/after id-set diff.
+  it('reports success and returns the appended batch when regenerating, keeping the old suggested batch', async () => {
     const userId = await createTestUser();
     try {
       const intakeRow = await upsertIntake(db, userId, intakeArgs());
-      await insertFiveIdeas(userId);
-      const oldIds = (await db.select({ id: ideas.id }).from(ideas).where(eq(ideas.userId, userId))).map((row) => row.id);
+      const oldIds = await insertFiveIdeas(userId);
       const generateDrafts = fakeGenerateDrafts(intakeRow, 'New');
 
       const res = await request(buildTestApp(fakeAgent(), userId, { generateDrafts })).post('/api/ideas/generate');
 
       expect(res.status).toBe(200);
-      expect(res.body.ideas).toHaveLength(5);
-      expect(res.body.ideas.every((idea: { id: string }) => !oldIds.includes(idea.id))).toBe(true);
+      // Story 2.4: nothing is deleted — the response is the full visible
+      // list, old (5) + new (5).
+      expect(res.body.ideas).toHaveLength(10);
+      const returnedIds = res.body.ideas.map((idea: { id: string }) => idea.id);
+      expect(oldIds.every((id) => returnedIds.includes(id))).toBe(true);
+      const newIds = returnedIds.filter((id: string) => !oldIds.includes(id));
+      expect(newIds).toHaveLength(5);
     } finally {
       await cleanUp(userId);
     }
@@ -282,7 +285,9 @@ describe('createIdeasRouter POST /generate', () => {
       const returnedIds = res.body.ideas.map((idea: { id: string }) => idea.id);
       expect(returnedIds).not.toContain(ids[0]); // rejected — stays hidden
       expect(returnedIds).toContain(ids[1]); // bookmarked — stays visible
-      expect(res.body.ideas).toHaveLength(6); // 1 kept bookmarked + 5 new suggested
+      // Story 2.4: insert-only — the 3 still-suggested old ideas (ids[2-4])
+      // also survive, on top of (not instead of) the 5 new ones.
+      expect(res.body.ideas).toHaveLength(9); // 1 bookmarked + 3 old suggested + 5 new suggested
     } finally {
       await cleanUp(userId);
     }
@@ -318,7 +323,14 @@ describe('createIdeasRouter POST /generate', () => {
 
       await request(buildTestApp(fakeAgent(), userId, { generateDrafts })).post('/api/ideas/generate').send({ language: 'de' });
 
-      expect(generateDrafts).toHaveBeenCalledWith(expect.objectContaining({ id: intakeRow.id }), 'de', expect.any(AbortSignal));
+      // Story 2.4: a 4th `{ excludeTitles }` argument is now always passed
+      // too (empty here — this user has no existing ideas yet).
+      expect(generateDrafts).toHaveBeenCalledWith(
+        expect.objectContaining({ id: intakeRow.id }),
+        'de',
+        expect.any(AbortSignal),
+        expect.objectContaining({ excludeTitles: [] }),
+      );
     } finally {
       await cleanUp(userId);
     }
@@ -328,13 +340,18 @@ describe('createIdeasRouter POST /generate', () => {
   // a distinct 503/`search_unavailable` response, never the generic 502 —
   // and the pre-existing `suggested` batch is left completely untouched
   // (no delete, no insert — `handleGenerateIdeas` throws this before its DB
-  // transaction).
-  it('returns 503 with search_unavailable and leaves existing suggested ideas completely unchanged', async () => {
+  // transaction). Story 2.6 AC3 ("the user's counted generation for that
+  // day is refunded"): the attempt was already counted at entry
+  // (`incrementAndGetUserGenerationCount`, before `handleGenerateIdeas`
+  // runs) — this proves `refundUserGeneration` actually gives it back,
+  // not just that the route calls it.
+  it('returns 503 with search_unavailable, leaves existing suggested ideas unchanged, and refunds the counted generation', async () => {
     const userId = await createTestUser();
     try {
       await upsertIntake(db, userId, intakeArgs());
       const existingIds = await insertFiveIdeas(userId);
       const existingRowsBefore = await db.select().from(ideas).where(eq(ideas.userId, userId));
+      const countBefore = await getUserGenerationCount(db, userId);
       const generateDrafts = vi.fn().mockRejectedValue(new SearchServiceUnavailableError('generate_ideas: every web_search call in this round failed'));
 
       const res = await request(buildTestApp(fakeAgent(), userId, { generateDrafts })).post('/api/ideas/generate');
@@ -344,6 +361,8 @@ describe('createIdeasRouter POST /generate', () => {
       const existingRowsAfter = await db.select().from(ideas).where(eq(ideas.userId, userId));
       expect(existingRowsAfter).toEqual(existingRowsBefore);
       expect(existingRowsAfter.map((row) => row.id).sort()).toEqual(existingIds.sort());
+      const countAfter = await getUserGenerationCount(db, userId);
+      expect(countAfter).toBe(countBefore);
     } finally {
       await cleanUp(userId);
     }

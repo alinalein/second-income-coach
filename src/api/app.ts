@@ -7,6 +7,7 @@ import type { DynamicStructuredTool } from '@langchain/core/tools';
 import type { Env } from '../config/env.js';
 import type { createDb } from '../db/client.js';
 import type { CoachAgent } from '../agent/index.js';
+import type { ActivatePlanGraph } from '../tools/plain/activate_plan.js';
 import { createCorsMiddleware } from './middleware/cors.js';
 import { createGeneralRateLimiter } from './middleware/rateLimit.js';
 import { createRequireSameOrigin } from './middleware/requireSameOrigin.js';
@@ -43,6 +44,11 @@ export interface AppDeps {
   /** Story 2.10: the shared `web_search` MCP tool, passed through to
    * `createIdeasRouter` for the same direct `handleGenerateIdeas` call. */
   webSearchTool: DynamicStructuredTool;
+  /** Story 3.2 (AD-14): the dedicated, checkpointed `activate_plan` graph
+   * (`src/tools/plain/activate_plan.ts`) — passed to `createPlansRouter` for
+   * its `/:planId/activate*` routes. Never `plansAgent`: this graph has its
+   * own topology/thread kind, not another tool on the chat ReAct loop. */
+  activatePlanGraph: ActivatePlanGraph;
 }
 
 /**
@@ -57,7 +63,7 @@ export interface AppDeps {
  * Built as a factory (not a top-level `listen()`) so tests can construct the
  * app against injected deps without binding a real port or a real database.
  */
-export function createApp({ env, db, pool, agent, ideasAgent, plansAgent, chatModel, webSearchTool }: AppDeps) {
+export function createApp({ env, db, pool, agent, ideasAgent, plansAgent, chatModel, webSearchTool, activatePlanGraph }: AppDeps) {
   const app = express();
 
   // Behind a reverse proxy (Cloud Run, or any future load balancer), trust the
@@ -125,7 +131,7 @@ export function createApp({ env, db, pool, agent, ideasAgent, plansAgent, chatMo
   // 2.10: `POST /select/:ideaId` now calls `handleCreatePlan` directly, so
   // the shared `chatModel` is threaded in too; `plansAgent` stays needed for
   // `detectUserReplyLanguage`/`.updateState` (the plan welcome message).
-  app.use('/api/plans', createPlansRouter({ env, db, agent: plansAgent, model: chatModel }));
+  app.use('/api/plans', createPlansRouter({ env, db, agent: plansAgent, model: chatModel, activatePlanGraph }));
   app.use('/api/plans', createPlanChatRouter({ env, db, agent: plansAgent }));
 
   // Story 5.1: personality + model settings, same auth gate as /api/chat.

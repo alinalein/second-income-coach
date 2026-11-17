@@ -24,7 +24,14 @@
     "thumbsUpLabel": "Good response",
     "thumbsDownLabel": "Bad response",
     "commentToggle": "Add a comment",
+    "editComment": "Edit comment",
+    "savedCommentLabel": "Your comment",
     "commentPlaceholder": "Add a comment (optional)",
+    "modalTitlePositive": "Positive feedback",
+    "modalTitleNegative": "Negative feedback",
+    "modalLabel": "Add details (optional)",
+    "modalDisclosure": "Your comment is stored with this reply. It may be reviewed, with identifying details removed, to improve future responses — never to train a model.",
+    "cancel": "Cancel",
     "submit": "Save",
     "error": "Couldn't save your feedback. Please try again."
   }

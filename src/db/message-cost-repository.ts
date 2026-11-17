@@ -17,8 +17,10 @@ export interface MessageCostRow {
   inputTokens: number;
   outputTokens: number;
   /** `null` when the turn's resolved model had no registry price match
-   * (AD-21) — persisted as `null`, never a guessed/zero figure. */
-  amountMinorUnitsUsd: number | null;
+   * (AD-21) — persisted as `null`, never a guessed/zero figure. Micro-units
+   * (millionths of USD), not minor units/cents — bug fix, epics.md
+   * amendment. */
+  amountMicroUnitsUsd: number | null;
   pricePerMillionInputTokens: number | null;
   pricePerMillionOutputTokens: number | null;
   priceAsOf: string | null;

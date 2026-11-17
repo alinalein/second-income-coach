@@ -15,6 +15,7 @@ import {
   type WeeklyTimeAvailability,
   type Money,
   type GenerateLimitStatus,
+  type CountryCode,
 } from '@app/shared';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
@@ -416,6 +417,7 @@ function IdeaCard({
   translation,
   currency,
   locale,
+  viewerCountry,
   onSetStatus,
   onRequestSelect,
   onViewPlan,
@@ -427,6 +429,11 @@ function IdeaCard({
   translation: IdeaTranslation | undefined;
   currency: CurrencyCode;
   locale: string;
+  /** Story 2.6 AC5: lifted into the parent `IdeasPanel` and passed down —
+   * one `useViewerCountry()` call for the whole grid instead of one per
+   * card (same value for every card in a render, so calling it once up top
+   * and threading it down is strictly cheaper, never a behavior change). */
+  viewerCountry: CountryCode | undefined;
   onSetStatus: (ideaId: string, status: SettableStatus) => void;
   /** Story 2.8 AC3: "Select"'s own click opens the confirm dialog instead of
    * writing the status directly — the dialog's own confirm handler is what
@@ -493,10 +500,12 @@ function IdeaCard({
   // `aria-controls`, same pattern a native disclosure widget uses.
   const [detailsOpen, setDetailsOpen] = React.useState(false);
   const detailsPanelId = React.useId();
-  // User-requested follow-up (compact citation line): fetched once per
-  // card, shared with both this line and `IdeaEvidence`'s own demand-
-  // evidence line below — not two separate `/api/intake` fetches.
-  const viewerCountry = useViewerCountry();
+  // Story 2.6 AC5 (was: "User-requested follow-up (compact citation
+  // line): fetched once per card" — now fetched once for the whole panel
+  // instead, see `IdeasPanel`'s own `useViewerCountry()` call, and passed
+  // down as a prop): shared with both this line and `IdeaEvidence`'s own
+  // demand-evidence line below — not a separate `/api/intake` fetch per
+  // card.
   const baselineRegion = foreignSourceRegion(idea.baselineRateCitation, viewerCountry);
 
   return (
@@ -798,6 +807,12 @@ export function IdeasPanel({ onViewPlan, autoGenerate = false }: IdeasPanelProps
   const [pendingIdeaIds, setPendingIdeaIds] = React.useState<ReadonlySet<string>>(new Set());
   const [statusUpdateFailed, setStatusUpdateFailed] = React.useState(false);
 
+  // Story 2.6 AC5: lifted up from `IdeaCard` — one `useViewerCountry()`
+  // call (one `/api/intake` fetch) for the whole grid instead of one per
+  // card, passed down as a prop. Same value every card already got from its
+  // own identical call, so this changes nothing any card renders.
+  const viewerCountry = useViewerCountry();
+
   // Story 2.7: a cached translation per `${ideaId}:${language}` — an
   // immutable client-side mirror of the server's own `idea_translations`
   // cache, so toggling the UI language back and forth after the first
@@ -931,9 +946,16 @@ export function IdeasPanel({ onViewPlan, autoGenerate = false }: IdeasPanelProps
   // exactly one batched translate call — re-evaluated whenever the loaded
   // ideas or the UI language change, but only once `GET /api/ideas` itself
   // has settled (never mid-load/mid-generate, where `ideas` is still stale
-  // or about to be replaced wholesale). Skipped when the background
-  // prefetch effect (below) is already chasing this same language — its
-  // own in-flight/failed state already drives the banner either way.
+  // or about to be replaced wholesale). Story 2.6 AC5: this is now the only
+  // translate trigger in this component — the other-language background
+  // prefetch effect that used to run alongside it (pre-translating into
+  // whichever language wasn't the card's own stored one, before the user
+  // ever switched) was removed: it doubled the model-call volume behind
+  // every generation for a latency win on a *future, maybe-never* language
+  // switch, which this story's "cut avoidable latency" intent weighs more
+  // than that prefetch's own convenience. A switch into an untranslated
+  // language now always does the real work at switch time, same as the
+  // very first "Generate" ever did before the prefetch existed.
   React.useEffect(() => {
     if (phase !== 'idle' || translationInFlightRef.current.has(i18n.language)) return;
     const language = i18n.language;
@@ -942,35 +964,6 @@ export function IdeasPanel({ onViewPlan, autoGenerate = false }: IdeasPanelProps
       .map((idea) => idea.id);
     if (missingIds.length > 0) runTranslation(missingIds, language);
   }, [ideas, i18n.language, phase, runTranslation]);
-
-  // Live fix (post-handoff, user-reported): "the moment the user clicks
-  // from English to German, the translation should already be there" — a
-  // switch into a language no card has been translated into yet used to
-  // only start the model call once the user actually switched, so the
-  // first switch (unlike a repeat one) always had a real, visible wait.
-  // This pre-translates every visible idea into whichever of the two
-  // supported languages it ISN'T already stored in, as soon as ideas load
-  // — by the time the user actually toggles the UI language, the cache
-  // this populates usually already has it, so that switch is the same
-  // instant cache-hit a *repeat* switch already was. Invisible until the
-  // user actually switches to the language it's working on (the banner is
-  // derived from `translatingLanguages`/`failedLanguages` against the
-  // *currently selected* language, never from who started the request).
-  React.useEffect(() => {
-    if (phase !== 'idle') return;
-    const byOtherLanguage = new Map<string, string[]>();
-    for (const idea of ideas) {
-      if (idea.status === 'rejected') continue;
-      const otherLanguage = idea.language === 'en' ? 'de' : 'en';
-      if (translationsRef.current.has(translationKey(idea.id, otherLanguage))) continue;
-      const ids = byOtherLanguage.get(otherLanguage) ?? [];
-      ids.push(idea.id);
-      byOtherLanguage.set(otherLanguage, ids);
-    }
-    for (const [otherLanguage, ids] of byOtherLanguage) {
-      if (!translationInFlightRef.current.has(otherLanguage)) runTranslation(ids, otherLanguage);
-    }
-  }, [ideas, phase, runTranslation]);
 
   /**
    * AC: "on failure the cards stay in their stored language with a neutral
@@ -1275,6 +1268,7 @@ export function IdeasPanel({ onViewPlan, autoGenerate = false }: IdeasPanelProps
                   translation={translations.get(translationKey(idea.id, i18n.language))}
                   currency={currency}
                   locale={locale}
+                  viewerCountry={viewerCountry}
                   onSetStatus={handleSetIdeaStatus}
                   onRequestSelect={handleRequestSelect}
                   onViewPlan={onViewPlan}

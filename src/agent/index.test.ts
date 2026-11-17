@@ -128,14 +128,57 @@ describe('createCoachAgent (turnUsage state field: Story 5.2)', () => {
       { configurable: { thread_id: 'discovery:test-turn-usage' } },
     );
 
-    // The `model` test seam bypasses `createModelSelectionMiddleware` (see
-    // its own comment in `createCoachAgent`), so no `resolvedModelId` gets
-    // tagged here — this asserts the token sum wiring, not the tag itself
-    // (covered directly in `model.test.ts`).
-    expect((result as unknown as { turnUsage?: { inputTokens: number; outputTokens: number } }).turnUsage).toMatchObject({
+    // Injecting `model` bypasses `createModelSelectionMiddleware` (see its
+    // own comment in `createCoachAgent`) — this is also `src/api/index.ts`'s
+    // *production* topology (it shares one pre-built `chatModel` across all
+    // three agents, AD-7), not just a test seam. This fake carries no
+    // `response_metadata` at all, so `modelId` is correctly absent here —
+    // the no-`model_name`-either case. The bug-fix regression test right
+    // below covers the actual production case: no `resolvedModelId`, but a
+    // real `model_name` the provider itself set.
+    expect((result as unknown as { turnUsage?: { inputTokens: number; outputTokens: number; modelId?: string } }).turnUsage).toMatchObject({
       inputTokens: 10,
       outputTokens: 20,
     });
+    expect((result as unknown as { turnUsage?: { modelId?: string } }).turnUsage?.modelId).toBeUndefined();
+  });
+
+  // Bug fix (user-reported): a plan-chat reply showed thumbs but no cost
+  // line at all, not even a token count — root cause confirmed against the
+  // lane's own dev DB (zero `message_costs` rows despite real prior
+  // conversations) and by reading `src/api/index.ts`: it passes a shared
+  // `model` into every production `createCoachAgent(...)` call, which this
+  // file's own middleware wiring (above) treats as "skip
+  // `createModelSelectionMiddleware`" — so `resolvedModelId` is *never*
+  // tagged in production, for any turn. This reproduces that exact
+  // topology (a `model` injected, no `resolvedModelId`) with a response
+  // shaped like a real `ChatOpenAI` one — `response_metadata.model_name`
+  // set from the raw completion's own `model` field, same as
+  // `@langchain/openai`'s converter always sets it, regardless of which
+  // middleware ran — and asserts `turnUsage.modelId` still resolves.
+  it('falls back to the provider-native response_metadata.model_name when no resolvedModelId was tagged (production topology)', async () => {
+    const model = fakeModel().respond(
+      new AIMessage({
+        content: 'Sure, happy to help!',
+        usage_metadata: { input_tokens: 10, output_tokens: 20, total_tokens: 30 },
+        response_metadata: { model_provider: 'openai', model_name: 'openai/gpt-6-luna' },
+      }),
+    );
+    const agent = createCoachAgent({
+      env: { OPENROUTER_API_KEY: 'test-key', MISTRAL_API_KEY: 'test-key', IDEAS_PER_BATCH: 2, DAILY_SEARCH_BUDGET: 500 },
+      checkpointer: new MemorySaver(),
+      db: fakeDb(undefined),
+      webSearchTool: {} as never,
+      model,
+      classify: async () => ({}),
+    });
+
+    const result = await agent.invoke(
+      { messages: [new HumanMessage('Hello')] },
+      { configurable: { thread_id: 'discovery:test-turn-usage-prod' } },
+    );
+
+    expect((result as unknown as { turnUsage?: { modelId?: string } }).turnUsage?.modelId).toBe('openai/gpt-6-luna');
   });
 });
 

@@ -7,6 +7,7 @@ import { ChatThread } from '../../chat/ChatThread';
 import { MessageCost } from '../../chat/MessageCost';
 import { createMessageFeedbackItem } from '../../chat/MessageFeedback';
 import { StatusPanel } from './StatusPanel';
+import { PlanActivationPanel } from './PlanActivationPanel';
 
 export interface PlanWorkspaceProps {
   ideaId: string;
@@ -118,22 +119,28 @@ export function PlanWorkspace({ ideaId, ideaTitle, onBack }: PlanWorkspaceProps)
           <p className="text-xs text-muted-foreground">{t('loadingHint')}</p>
         </div>
       ) : (
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
-          <div className="flex flex-col gap-4 sm:w-64 sm:shrink-0">
-            <StatusPanel planId={plan.id} ideaTitle={ideaTitle} />
-            {/* Code Map: "projection card extension point (a slot in the
-             * sidebar/header) ... renders nothing until 4.4". */}
-          </div>
-          <div className="flex-1">
-            {/* Story 5.2/5.3: `MessageCost` + `MessageFeedback` registered
-             * into the footer extension point built in Story 3.1 — alongside
-             * each other, no restructuring of `ChatThread`/`ChatMessage`.
-             * Memoized on `plan.id` so each `MessageFeedback` instance keeps
-             * its own component identity (and so its in-session rating
-             * state) across unrelated `PlanWorkspace` re-renders — a fresh
-             * factory call on every render would remount it and silently
-             * drop whatever rating state the user had just set. */}
-            <ChatThread endpoint={`/api/plans/${plan.id}/messages`} footerItems={footerItems} />
+        <div className="flex flex-col gap-4">
+          {/* Story 3.2 (AD-14): the draft review/confirm/modify/reject panel
+           * — only a `draft` plan needs human confirmation before it can
+           * become `active`; once confirmed/already active, it's gone. */}
+          {plan.status === 'draft' ? (
+            <PlanActivationPanel planId={plan.id} onActivated={(activatedPlan) => setPlan(activatedPlan)} />
+          ) : null}
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
+            <div className="flex flex-col gap-4 sm:w-64 sm:shrink-0">
+              <StatusPanel planId={plan.id} ideaTitle={ideaTitle} />
+              {/* Code Map: "projection card extension point (a slot in the
+               * sidebar/header) ... renders nothing until 4.4". */}
+            </div>
+            <div className="flex-1">
+              {/* Story 5.2/5.3: `MessageCost` + `MessageFeedback` registered
+               * into the footer extension point built in Story 3.1 — alongside
+               * each other, no restructuring of `ChatThread`/`ChatMessage`.
+               * Memoized on `plan.id` so each `MessageFeedback` instance keeps
+               * its own component identity (and its in-session rating state)
+               * across unrelated `PlanWorkspace` re-renders. */}
+              <ChatThread endpoint={`/api/plans/${plan.id}/messages`} footerItems={footerItems} />
+            </div>
           </div>
         </div>
       )}

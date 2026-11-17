@@ -25,10 +25,27 @@ describe('computeMessageCost: no registry price match', () => {
   it('returns token counts with a null amount for an unregistered model id', () => {
     const cost = computeMessageCost({ inputTokens: 1000, outputTokens: 500 }, 'some/unregistered-model', 'USD');
 
-    expect(cost.amountMinorUnitsUsd).toBeNull();
+    expect(cost.amountMicroUnitsUsd).toBeNull();
     expect(cost.displayAmount).toBeNull();
     expect(cost.isEstimate).toBe(false);
     expect(cost).toMatchObject({ inputTokens: 1000, outputTokens: 500, modelId: 'some/unregistered-model' });
+  });
+});
+
+// Bug fix (epics.md amendment: "a typical chat turn that costs a fraction
+// of a cent ... stored as an integer in micro-units"). Table-driven across
+// known (tokens, price) pairs, including the exact user-reported case
+// (869/532 tokens on the default model) — proves the stored integer is
+// micro-USD (`tokens * pricePerMillion`, since price is USD-per-1,000,000-
+// tokens), not the old cents formula that rounded this same case to 0.
+describe('computeMessageCost: stored micro-unit value (bug fix)', () => {
+  it.each([
+    ['the exact user-reported case: 869/532 tokens on gpt-6-luna ($0.10/$0.50 per 1M)', 869, 532, 353],
+    ['a round number: 1,000,000/1,000,000 tokens', 1_000_000, 1_000_000, 600_000],
+    ['zero tokens -> zero cost, no special-casing needed', 0, 0, 0],
+  ] as const)('%s', (_label, inputTokens, outputTokens, expectedMicroUnitsUsd) => {
+    const cost = computeMessageCost({ inputTokens, outputTokens }, DEFAULT_MODEL_ID, 'USD');
+    expect(cost.amountMicroUnitsUsd).toBe(expectedMicroUnitsUsd);
   });
 });
 
@@ -44,7 +61,7 @@ describe('computeMessageCost: currency conversion', () => {
 
     expect(cost.displayAmount?.currencyCode).toBe(currency);
     expect(cost.isEstimate).toBe(expectedIsEstimate);
-    expect(cost.amountMinorUnitsUsd).not.toBeNull();
+    expect(cost.amountMicroUnitsUsd).not.toBeNull();
   });
 });
 
@@ -56,8 +73,8 @@ describe('convertStoredCost', () => {
   it.each([
     ['a priced row', DEFAULT_MODEL_ID, 100, { amount: { currencyCode: 'EUR' }, isEstimate: true }],
     ['a row with no price snapshot (AD-21: never a guessed figure)', 'some/unregistered-model', null, { amount: null, isEstimate: false }],
-  ] as const)('%s', (_label, modelId, amountMinorUnitsUsd, expected) => {
-    const display = convertStoredCost({ modelId, inputTokens: 10, outputTokens: 10, amountMinorUnitsUsd }, 'EUR');
+  ] as const)('%s', (_label, modelId, amountMicroUnitsUsd, expected) => {
+    const display = convertStoredCost({ modelId, inputTokens: 10, outputTokens: 10, amountMicroUnitsUsd }, 'EUR');
     expect(display).toMatchObject(expected);
   });
 });

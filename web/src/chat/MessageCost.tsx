@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import { formatMoney, type ChatMessage as ChatMessageType } from '@app/shared';
+import { formatMicroMoney, type ChatMessage as ChatMessageType } from '@app/shared';
 
 /** AD-24/AD-27: "locale and currency are independent axes" — same minimal
  * language-to-locale mapping `web/src/features/ideas/IdeasPanel.tsx` already
@@ -30,7 +30,7 @@ export function MessageCost({ message }: { message: ChatMessageType }) {
       {cost.amount ? (
         <>
           <span aria-hidden="true">·</span>
-          <span>{formatMoney(cost.amount, locale)}</span>
+          <span>{formatMicroMoney(cost.amount, locale)}</span>
           {cost.isEstimate ? <span aria-label={t('cost.estimateBadgeFull')}>{t('cost.estimateBadge')}</span> : null}
         </>
       ) : null}

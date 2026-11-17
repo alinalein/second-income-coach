@@ -91,6 +91,122 @@ export function ChatThread({ endpoint = DEFAULT_CHAT_ENDPOINT, footerItems = [],
   // Design Notes: "Only the just-arrived message animates ... ChatThread
   // tracks ids delivered via the SSE `result` event (not history GET)".
   const [animatedIds, setAnimatedIds] = React.useState<ReadonlySet<string>>(new Set());
+  // Layout fix (user-reported, companion to the fixed-height scroll
+  // region): without this, a new exchange can land below the now-fixed
+  // window's visible fold, requiring a manual scroll — the scrollable
+  // region didn't exist before that fix, so neither did the need to manage
+  // its scroll position. Pins the just-sent *user* message to the top of
+  // the visible area (set in `handleSubmit` below) rather than always
+  // jumping to the very bottom — a long reply then reads top-down from the
+  // question that triggered it, instead of hiding that question above the
+  // fold the moment the answer is long enough to fill the window.
+  const scrollRegionRef = React.useRef<HTMLDivElement | null>(null);
+  const bottomSpacerRef = React.useRef<HTMLDivElement | null>(null);
+  const pinToTopMessageIdRef = React.useRef<string | null>(null);
+  // Story 2.13 AC: "the user has scrolled up manually ... the view is not
+  // moved against their will." Distinguishes a genuine user-initiated
+  // scroll from the `scroll` event our own programmatic `scrollTo` below
+  // also fires — set right before that call, for a window a little longer
+  // than the smooth-scroll animation itself; a `scroll` event seen after it
+  // expires is the user's own.
+  const programmaticScrollUntilRef = React.useRef(0);
+  const userScrolledAwayRef = React.useRef(false);
+
+  React.useEffect(() => {
+    const node = scrollRegionRef.current;
+    if (!node) return undefined;
+    function handleScroll(): void {
+      if (Date.now() < programmaticScrollUntilRef.current) return;
+      userScrolledAwayRef.current = true;
+    }
+    node.addEventListener('scroll', handleScroll);
+    return () => node.removeEventListener('scroll', handleScroll);
+  }, []);
+
+  // Story 2.13 AC: "reduced-motion settings ... instant instead of
+  // animated." `matchMedia` is read fresh at scroll time (not memoized) —
+  // this never changes mid-session in practice, but there's no reason to
+  // cache a system setting read this cheaply.
+  function prefersReducedMotion(): boolean {
+    return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+  }
+
+  // The one case the pin-to-top behavior below doesn't cover: opening/
+  // reloading the thread — there's no "just sent" message to pin, so this
+  // instead jumps straight to the latest activity (the conversation's
+  // tail). Always instant (a page load, not a live scroll the user would
+  // perceive as a jump) — no `behavior` needed either way.
+  React.useEffect(() => {
+    if (!historyLoaded) return;
+    const node = scrollRegionRef.current;
+    if (node) node.scrollTop = node.scrollHeight;
+  }, [historyLoaded]);
+
+  // Bug fix (user-reported): the first version cleared the pin right after
+  // its first (necessarily premature) scroll — at that point the reply
+  // hadn't arrived yet, so there was nothing below the fold to scroll past,
+  // and the pin never re-applied once the reply (and the content height
+  // that comes with it) actually showed up. Re-asserts on every relevant
+  // change instead, for as long as this turn is still in flight — the
+  // progress label toggling on/off also changes the scroll region's
+  // content height, so it's included alongside `messages`.
+  //
+  // Bug fix round 2 (user-reported: still landed scrolled to the bottom,
+  // question hidden above the fold): `scrollIntoView` scrolls *every*
+  // scrollable ancestor as needed to bring the target into view, not just
+  // this one region — when the page itself is also tall enough to scroll
+  // (header/sidebar content above the chat card), the browser can satisfy
+  // the "bring it into view" request by scrolling the *page*, leaving this
+  // region's own `scrollTop` wherever it already was. Computing the exact
+  // delta via `getBoundingClientRect()` and calling *this node's own*
+  // `scrollTo` can never touch any ancestor's scroll position.
+  //
+  // Story 2.13: smooth (or instant under reduced motion, AC) via
+  // `scrollTo`'s own `behavior` option; suppressed entirely once the user
+  // has scrolled away on their own during this turn (`userScrolledAwayRef`).
+  React.useEffect(() => {
+    const pendingId = pinToTopMessageIdRef.current;
+    if (!pendingId || userScrolledAwayRef.current) return;
+    const node = scrollRegionRef.current;
+    const target = node?.querySelector<HTMLElement>(`[data-message-id="${pendingId}"]`);
+    if (!node || !target) return;
+    const nodeRect = node.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const top = node.scrollTop + (targetRect.top - nodeRect.top);
+    const behavior = prefersReducedMotion() ? 'auto' : 'smooth';
+    programmaticScrollUntilRef.current = Date.now() + 500;
+    node.scrollTo({ top, behavior });
+  }, [messages, displayedStep]);
+
+  // Stops re-pinning once the turn settles — a later, unrelated scroll (the
+  // user reading back up through history) is then never fought.
+  React.useEffect(() => {
+    if (!sending) pinToTopMessageIdRef.current = null;
+  }, [sending]);
+
+  // Story 2.13 AC: "a bottom spacer of about one viewport so the reply is
+  // never cut off by the input" — `min-height` = this region's own visible
+  // height minus the height of the last user+assistant pair (never
+  // negative), recomputed whenever that pair's content changes. Measures
+  // from the most recent *user* message's own top (the same row the pin-
+  // to-top effect above targets) down to the spacer's own position — that
+  // span covers the user message plus whatever reply/progress-label
+  // followed it, with no need to special-case "has the reply arrived yet".
+  React.useEffect(() => {
+    const node = scrollRegionRef.current;
+    const spacer = bottomSpacerRef.current;
+    if (!node || !spacer) return;
+
+    const lastUserMessage = [...messages].reverse().find((message) => message.role === 'user');
+    const pairStart = lastUserMessage ? node.querySelector<HTMLElement>(`[data-message-id="${lastUserMessage.id}"]`) : null;
+    if (!pairStart) {
+      spacer.style.minHeight = '0px';
+      return;
+    }
+
+    const pairHeight = spacer.offsetTop - pairStart.offsetTop;
+    spacer.style.minHeight = `${Math.max(0, node.clientHeight - pairHeight)}px`;
+  }, [messages, displayedStep]);
 
   // Review follow-up: crossfades `displayedStep` toward `currentStep`
   // instead of swapping instantly — fades the current label out, then swaps
@@ -141,7 +257,12 @@ export function ChatThread({ endpoint = DEFAULT_CHAT_ENDPOINT, footerItems = [],
       const content = draft.trim();
       if (!content || sending) return;
 
-      setMessages((prev) => [...prev, makeLocalMessage('user', 'message', content)]);
+      const userMessage = makeLocalMessage('user', 'message', content);
+      pinToTopMessageIdRef.current = userMessage.id;
+      // A fresh turn always re-pins to *its own* new message — any scroll-
+      // away the user did during a previous turn never carries over.
+      userScrolledAwayRef.current = false;
+      setMessages((prev) => [...prev, userMessage]);
       setDraft('');
       setSending(true);
       setCurrentStep(null);
@@ -202,39 +323,59 @@ export function ChatThread({ endpoint = DEFAULT_CHAT_ENDPOINT, footerItems = [],
   );
 
   return (
-    <Card>
-      <CardHeader>
+    // Layout fix (user-reported): a fixed-height chat window with its own
+    // internal scroll, instead of the message list growing the whole page
+    // taller as the thread fills up. `flex h-[70vh] flex-col` bounds the
+    // card itself; `CardContent` below is the one scrolling region between
+    // the always-visible header and footer — `min-h-0` is required for a
+    // flex child to actually shrink/scroll instead of growing to fit its
+    // content (the browser default `min-height: auto` on a flex item would
+    // otherwise defeat `overflow-y-auto` here).
+    <Card className="flex h-[70vh] flex-col">
+      <CardHeader className="shrink-0">
         <CardTitle>{t('title')}</CardTitle>
       </CardHeader>
-      <CardContent className="flex flex-col gap-3">
-        {!historyLoaded ? (
-          <p className="text-sm text-muted-foreground">{t('loading')}</p>
-        ) : messages.length === 0 ? (
-          <p className="text-sm text-muted-foreground">{t('empty')}</p>
-        ) : (
-          messages.map((message) => (
-            <ChatMessage key={message.id} message={message} animate={animatedIds.has(message.id)} footerItems={footerItems} />
-          ))
-        )}
-        {sending && displayedStep && (
-          <p
-            className={cn(
-              'text-sm text-muted-foreground transition-opacity duration-200 ease-in-out',
-              labelVisible ? 'opacity-100' : 'opacity-0',
-            )}
-            role="status"
-            aria-live="polite"
-          >
-            {/* AD-31: "never a blank state or the raw hook/tool name" — the
-                registry only ever emits keys both locale files carry today,
-                but this `defaultValue` keeps that true even if a future
-                tool-introducing story's backend step key lands a deploy
-                ahead of its i18n key. */}
-            {t(`progress.${displayedStep}`, { defaultValue: t('progress.tool_fallback') })}
-          </p>
-        )}
+      <CardContent className="flex min-h-0 flex-1 flex-col overflow-hidden p-0">
+        {/* `CardContent` itself only bounds the height (`flex-1 min-h-0`);
+         * this inner div is the actual scroll region — kept separate so
+         * `ref` doesn't need to be threaded through `CardContent`'s own
+         * `HTMLAttributes`-typed props. Carries `CardContent`'s usual
+         * `p-6 pt-0` padding itself, since the outer one now opts out of it. */}
+        <div ref={scrollRegionRef} data-testid="chat-scroll-region" className="flex flex-1 flex-col gap-3 overflow-y-auto p-6 pt-0">
+          {!historyLoaded ? (
+            <p className="text-sm text-muted-foreground">{t('loading')}</p>
+          ) : messages.length === 0 ? (
+            <p className="text-sm text-muted-foreground">{t('empty')}</p>
+          ) : (
+            messages.map((message) => (
+              <ChatMessage key={message.id} message={message} animate={animatedIds.has(message.id)} footerItems={footerItems} />
+            ))
+          )}
+          {sending && displayedStep && (
+            <p
+              className={cn(
+                'text-sm text-muted-foreground transition-opacity duration-200 ease-in-out',
+                labelVisible ? 'opacity-100' : 'opacity-0',
+              )}
+              role="status"
+              aria-live="polite"
+            >
+              {/* AD-31: "never a blank state or the raw hook/tool name" — the
+                  registry only ever emits keys both locale files carry today,
+                  but this `defaultValue` keeps that true even if a future
+                  tool-introducing story's backend step key lands a deploy
+                  ahead of its i18n key. */}
+              {t(`progress.${displayedStep}`, { defaultValue: t('progress.tool_fallback') })}
+            </p>
+          )}
+          {/* Story 2.13 AC: "a bottom spacer of about one viewport so the
+           * reply is never cut off by the input" — height set imperatively
+           * by the effect above, not a static class, since it depends on
+           * the last user+assistant pair's own (dynamic) height. */}
+          <div ref={bottomSpacerRef} data-testid="chat-bottom-spacer" aria-hidden="true" />
+        </div>
       </CardContent>
-      <CardFooter>
+      <CardFooter className="shrink-0">
         <form onSubmit={handleSubmit} className="flex w-full gap-2">
           <input
             type="text"

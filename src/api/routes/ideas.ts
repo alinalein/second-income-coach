@@ -345,18 +345,16 @@ export function createIdeasRouter({
     req.on('close', onClientDisconnect);
 
     try {
-      // Round 10 ("Generate new ideas" open item): `generate_ideas` now
-      // *replaces* the existing `suggested` batch (deletes old `suggested`
-      // rows, inserts the configured batch size's worth of new ones, in one
-      // transaction — `generate_ideas.ts`) rather than only ever appending,
-      // so the old before/after row-COUNT diff (`after.length === before +
-      // env.IDEAS_PER_BATCH`) can no longer tell "it ran this turn" apart
-      // from "a stale batch was already there and this turn failed, leaving
-      // it untouched" — both look like "still N suggested rows". Comparing
-      // the *set of ids* instead: a real replace always produces entirely
-      // new ids (`gen_random_uuid()`), so any overlap with the pre-call id
-      // set means nothing actually happened this turn.
-      const beforeSuggestedIds = new Set((await getIdeasByUserId(db, userId)).filter((idea) => idea.status === 'suggested').map((idea) => idea.id));
+      // Story 2.4 AC1/AC2: `generate_ideas` now *appends* to the existing
+      // batch (insert-only, never deletes any status — `generate_ideas.ts`)
+      // instead of replacing the `suggested` batch, so the before/after
+      // check is now over every existing idea's id (every status), not just
+      // `suggested` — a real run always produces entirely new ids
+      // (`gen_random_uuid()`), on top of (not instead of) whatever already
+      // existed, so comparing the *set of all ids* still tells "it ran this
+      // turn" apart from "nothing happened this turn" the same way the old
+      // suggested-only id set did for a replace.
+      const beforeIds = new Set((await getIdeasByUserId(db, userId)).map((idea) => idea.id));
 
       // Story 2.7 (AC4): the button's own request body, when present and
       // valid, wins outright — never overridden by the discovery thread's
@@ -376,8 +374,14 @@ export function createIdeasRouter({
       );
 
       const [after, currency] = await Promise.all([getIdeasByUserId(db, userId), getUserCurrency(db, userId)]);
-      const afterSuggested = after.filter((idea) => idea.status === 'suggested');
-      const regenerated = afterSuggested.length === env.IDEAS_PER_BATCH && afterSuggested.every((idea) => !beforeSuggestedIds.has(idea.id));
+      // Story 2.4 AC1: `regenerated` is now "exactly IDEAS_PER_BATCH brand-
+      // new ids appeared" — an append, not a replace, so the old
+      // `afterSuggested.length === env.IDEAS_PER_BATCH` formula (which
+      // assumed the suggested count was always reset to exactly the batch
+      // size) no longer holds once a previous run's suggested ideas are
+      // still there too.
+      const newIds = after.filter((idea) => !beforeIds.has(idea.id));
+      const regenerated = newIds.length === env.IDEAS_PER_BATCH;
 
       if (!regenerated) {
         // I/O matrix: "Agent doesn't call the tool" / a tool error (e.g. no

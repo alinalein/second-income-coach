@@ -101,6 +101,18 @@ export function buildPlanThreadId(planId: string): string {
   return `plan:${planId}`;
 }
 
+/**
+ * Story 3.2 (AD-14): a fourth internal-only thread kind — same precedent as
+ * `buildIdeasTriggerThreadId`/`buildIntakeTriggerThreadId`. `activate_plan`'s
+ * pause/resume runs on its own checkpointed graph (`src/tools/plain/
+ * activate_plan.ts`), never on the user-visible `plan:${planId}` chat thread
+ * (`buildPlanThreadId`) — a different graph topology sharing that thread id
+ * would risk deserializing an incompatible checkpoint.
+ */
+export function buildPlanActivationThreadId(planId: string): string {
+  return `plan-activation:${planId}`;
+}
+
 const DISCOVERY_THREAD_PREFIX = 'discovery:';
 
 /** Inverse of `buildDiscoveryThreadId` — Story 5.1 needs the `userId` back
@@ -136,12 +148,33 @@ export interface TurnUsageWithModel extends TurnUsage {
   modelId?: string;
 }
 
+/**
+ * Bug fix (user-reported: plan-chat replies showed thumbs but no cost line
+ * at all, not even a token count). Root cause: `src/api/index.ts` passes a
+ * pre-built `model` into every production `createCoachAgent(...)` call
+ * (Follow-up fix round 7, AD-7 — shares one `ChatOpenAI` client instead of
+ * building one per agent) — but `createCoachAgent`'s own middleware wiring
+ * treats *any* injected `model` as "this is a test, skip
+ * `createModelSelectionMiddleware`" (see its own comment below), so
+ * `model.ts`'s `tagResolvedModelId` never runs in production, for *any*
+ * agent (chat/ideas/plans) — `resolvedModelId` was never present to read,
+ * for any turn, ever (confirmed: zero `message_costs` rows existed despite
+ * real prior conversations). Falls back to `response_metadata.model_name`
+ * — the raw, provider-native field `@langchain/openai`'s own converter sets
+ * from the actual completion response's `model` field on *every* real call,
+ * independent of which middleware ran — before giving up. Prefers the
+ * explicit `resolvedModelId` tag when present (covers the fallback-to-
+ * default-model path's own notice-prefixed message, which still carries it
+ * forward) since that's a stronger, in-house signal than the provider's own
+ * echo.
+ */
 function resolveTurnModelId(newMessages: readonly BaseMessage[]): string | undefined {
   for (let i = newMessages.length - 1; i >= 0; i -= 1) {
     const message = newMessages[i];
     if (!message || !isAIMessage(message)) continue;
-    const resolvedModelId = (message.response_metadata as { resolvedModelId?: string } | undefined)?.resolvedModelId;
-    if (resolvedModelId) return resolvedModelId;
+    const metadata = message.response_metadata as { resolvedModelId?: string; model_name?: string } | undefined;
+    const modelId = metadata?.resolvedModelId ?? metadata?.model_name;
+    if (modelId) return modelId;
   }
   return undefined;
 }

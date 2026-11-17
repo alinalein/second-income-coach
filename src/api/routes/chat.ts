@@ -216,7 +216,7 @@ export function createChatRouter({ env, agent, db }: ChatRouterDeps) {
             modelId: cost.modelId,
             inputTokens: cost.inputTokens,
             outputTokens: cost.outputTokens,
-            amountMinorUnitsUsd: cost.amountMinorUnitsUsd,
+            amountMicroUnitsUsd: cost.amountMicroUnitsUsd,
             pricePerMillionInputTokens: cost.pricePerMillionInputTokens,
             pricePerMillionOutputTokens: cost.pricePerMillionOutputTokens,
             priceAsOf: cost.priceAsOf,

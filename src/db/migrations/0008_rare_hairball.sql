@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "plans_one_active_per_user_idx" ON "plans" USING btree ("user_id") WHERE "plans"."status" = 'active';

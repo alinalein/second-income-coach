@@ -1,5 +1,5 @@
 import { isAIMessage, type BaseMessage } from '@langchain/core/messages';
-import { convertMoney, type CurrencyCode, type Money } from '@app/shared';
+import { convertMicroMoney, type CurrencyCode, type MicroMoney } from '@app/shared';
 import { findModelEntry } from './registry.js';
 
 /**
@@ -39,7 +39,7 @@ export function sumTurnUsage(newMessages: readonly BaseMessage[]): TurnUsage {
 }
 
 /**
- * The persistable + displayable shape for one turn's cost. `amountMinorUnitsUsd`/
+ * The persistable + displayable shape for one turn's cost. `amountMicroUnitsUsd`/
  * `pricePerMillion*`/`priceAsOf` are the USD-native price snapshot persisted
  * verbatim (Design Notes: "never a pre-converted figure" — a later registry
  * price change must never retroactively alter a past message's recorded
@@ -47,6 +47,12 @@ export function sumTurnUsage(newMessages: readonly BaseMessage[]): TurnUsage {
  * `userCurrency` at the moment this was computed — the caller persists the
  * snapshot fields, not this converted pair, and recomputes the converted
  * pair fresh on every read via `convertStoredCost` below.
+ *
+ * Bug fix (epics.md amendment: "a typical chat turn that costs a fraction
+ * of a cent ... never rounded to a misleading '0.00'"): the amount is
+ * micro-units (millionths of USD), not minor units (cents) — a typical
+ * per-message cost (a few hundred tokens at a sub-$1-per-million-token
+ * price) rounds straight to zero at cent granularity.
  */
 export interface MessageCost {
   modelId: string;
@@ -55,8 +61,8 @@ export interface MessageCost {
   pricePerMillionInputTokens: number | null;
   pricePerMillionOutputTokens: number | null;
   priceAsOf: string | null;
-  amountMinorUnitsUsd: number | null;
-  displayAmount: Money | null;
+  amountMicroUnitsUsd: number | null;
+  displayAmount: MicroMoney | null;
   isEstimate: boolean;
 }
 
@@ -70,8 +76,14 @@ export interface MessageCost {
  *
  * AD-27: the registry price is USD-native; `userCurrency` only affects
  * `displayAmount`/`isEstimate` (a genuine conversion labels itself an
- * estimate; same-currency never does, per `convertMoney`) — never the
- * persisted `amountMinorUnitsUsd` snapshot.
+ * estimate; same-currency never does, per `convertMicroMoney`) — never the
+ * persisted `amountMicroUnitsUsd` snapshot.
+ *
+ * Bug fix: `pricePerMillionInputTokens` is USD *per 1,000,000 tokens* —
+ * `tokens * pricePerMillion` is therefore already USD scaled by 1,000,000
+ * (i.e. micro-USD) with no further multiply/divide needed; the previous
+ * `(tokens / 1e6) * price * 100` (cents) collapsed that same quantity back
+ * down to whole cents, rounding away everything below a cent.
  */
 export function computeMessageCost(
   usage: Pick<TurnUsage, 'inputTokens' | 'outputTokens'>,
@@ -88,17 +100,16 @@ export function computeMessageCost(
       pricePerMillionInputTokens: null,
       pricePerMillionOutputTokens: null,
       priceAsOf: null,
-      amountMinorUnitsUsd: null,
+      amountMicroUnitsUsd: null,
       displayAmount: null,
       isEstimate: false,
     };
   }
 
-  const amountMinorUnitsUsd = Math.round(
-    (usage.inputTokens / 1_000_000) * entry.pricePerMillionInputTokens * 100 +
-      (usage.outputTokens / 1_000_000) * entry.pricePerMillionOutputTokens * 100,
+  const amountMicroUnitsUsd = Math.round(
+    usage.inputTokens * entry.pricePerMillionInputTokens + usage.outputTokens * entry.pricePerMillionOutputTokens,
   );
-  const converted = convertMoney({ amountMinorUnits: amountMinorUnitsUsd, currencyCode: 'USD' }, userCurrency);
+  const converted = convertMicroMoney({ amountMicroUnits: amountMicroUnitsUsd, currencyCode: 'USD' }, userCurrency);
 
   return {
     modelId,
@@ -107,8 +118,8 @@ export function computeMessageCost(
     pricePerMillionInputTokens: entry.pricePerMillionInputTokens,
     pricePerMillionOutputTokens: entry.pricePerMillionOutputTokens,
     priceAsOf: entry.priceAsOf,
-    amountMinorUnitsUsd,
-    displayAmount: { amountMinorUnits: converted.amountMinorUnits, currencyCode: converted.currencyCode },
+    amountMicroUnitsUsd,
+    displayAmount: { amountMicroUnits: converted.amountMicroUnits, currencyCode: converted.currencyCode },
     isEstimate: converted.isEstimate,
   };
 }
@@ -125,7 +136,7 @@ export interface MessageCostDisplay {
   modelId: string;
   inputTokens: number;
   outputTokens: number;
-  amount: Money | null;
+  amount: MicroMoney | null;
   isEstimate: boolean;
 }
 
@@ -143,19 +154,19 @@ export function toMessageCostDisplay(cost: MessageCost): MessageCostDisplay {
  * `computeMessageCost`.
  */
 export function convertStoredCost(
-  row: { modelId: string; inputTokens: number; outputTokens: number; amountMinorUnitsUsd: number | null },
+  row: { modelId: string; inputTokens: number; outputTokens: number; amountMicroUnitsUsd: number | null },
   userCurrency: CurrencyCode,
 ): MessageCostDisplay {
-  if (row.amountMinorUnitsUsd === null) {
+  if (row.amountMicroUnitsUsd === null) {
     return { modelId: row.modelId, inputTokens: row.inputTokens, outputTokens: row.outputTokens, amount: null, isEstimate: false };
   }
 
-  const converted = convertMoney({ amountMinorUnits: row.amountMinorUnitsUsd, currencyCode: 'USD' }, userCurrency);
+  const converted = convertMicroMoney({ amountMicroUnits: row.amountMicroUnitsUsd, currencyCode: 'USD' }, userCurrency);
   return {
     modelId: row.modelId,
     inputTokens: row.inputTokens,
     outputTokens: row.outputTokens,
-    amount: { amountMinorUnits: converted.amountMinorUnits, currencyCode: converted.currencyCode },
+    amount: { amountMicroUnits: converted.amountMicroUnits, currencyCode: converted.currencyCode },
     isEstimate: converted.isEstimate,
   };
 }

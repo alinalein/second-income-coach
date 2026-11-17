@@ -23,13 +23,27 @@ describe('MessageCost', () => {
   it('shows the token counts and estimated amount, labeled as an estimate, for a converted EUR cost', () => {
     render(
       <MessageCost
-        message={makeMessage({ modelId: 'openai/gpt-6-luna', inputTokens: 100, outputTokens: 200, amount: { amountMinorUnits: 50, currencyCode: 'EUR' }, isEstimate: true })}
+        message={makeMessage({ modelId: 'openai/gpt-6-luna', inputTokens: 100, outputTokens: 200, amount: { amountMicroUnits: 500_000, currencyCode: 'EUR' }, isEstimate: true })}
       />,
     );
 
     expect(screen.getByText('100/200 tokens (in/out)')).toBeInTheDocument();
     expect(screen.getByText(/€0[.,]50/)).toBeInTheDocument();
     expect(screen.getByLabelText('estimate')).toBeInTheDocument();
+  });
+
+  // Bug fix (user-reported): a typical turn's cost (a fraction of a cent)
+  // used to round to a misleading "€0.00" — it now shows enough decimals to
+  // be meaningful instead of disappearing.
+  it('shows extra decimals for a sub-cent amount instead of rounding it to €0.00', () => {
+    render(
+      <MessageCost
+        message={makeMessage({ modelId: 'openai/gpt-6-luna', inputTokens: 869, outputTokens: 532, amount: { amountMicroUnits: 327, currencyCode: 'EUR' }, isEstimate: true })}
+      />,
+    );
+
+    expect(screen.queryByText('€0.00')).not.toBeInTheDocument();
+    expect(screen.getByText('€0.000327')).toBeInTheDocument();
   });
 
   it('shows only the token counts, no money figure, when amount is null (no registry price match)', () => {

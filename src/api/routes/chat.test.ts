@@ -334,7 +334,7 @@ describe('createChatRouter GET /messages', () => {
     const agent = fakeAgent({ getState });
     const db = fakeDb({
       settingsRow: { currency: 'EUR' },
-      costRows: [{ messageId: reply.id, modelId: DEFAULT_MODEL_ID, inputTokens: 100, outputTokens: 200, amountMinorUnitsUsd: 50 }],
+      costRows: [{ messageId: reply.id, modelId: DEFAULT_MODEL_ID, inputTokens: 100, outputTokens: 200, amountMicroUnitsUsd: 50 }],
     });
     const app = buildTestApp(agent, 'user-8', db);
 
