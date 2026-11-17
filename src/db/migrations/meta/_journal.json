@@ -50,6 +50,13 @@
       "when": 1794930775512,
       "tag": "0006_amusing_kate_bishop",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1794933702989,
+      "tag": "0007_thick_calypso",
+      "breakpoints": true
     }
   ]
 }

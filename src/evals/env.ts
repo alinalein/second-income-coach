@@ -1,6 +1,6 @@
 import type { Env } from '../config/env.js';
 
-export type EvalEnv = Pick<Env, 'OPENROUTER_API_KEY' | 'MISTRAL_API_KEY' | 'LANGSMITH_PROJECT' | 'IDEAS_PER_BATCH'>;
+export type EvalEnv = Pick<Env, 'OPENROUTER_API_KEY' | 'MISTRAL_API_KEY' | 'LANGSMITH_PROJECT' | 'IDEAS_PER_BATCH' | 'DAILY_SEARCH_BUDGET'>;
 
 /**
  * Story 6.2: reads directly off `process.env` — deliberately never
@@ -30,5 +30,9 @@ export function loadEvalEnv(source: NodeJS.ProcessEnv = process.env): EvalEnv {
     MISTRAL_API_KEY: source.MISTRAL_API_KEY ?? 'unused-in-trajectory-eval',
     LANGSMITH_PROJECT: source.LANGSMITH_PROJECT ?? 'unset',
     IDEAS_PER_BATCH: 2,
+    // Story 2.11: type-shape parity only, same precedent as `MISTRAL_API_KEY`
+    // above — a trajectory eval fixture never runs `generate_ideas` for real
+    // against Postgres, so this value is never actually read.
+    DAILY_SEARCH_BUDGET: 500,
   };
 }

@@ -30,6 +30,7 @@ import type { createDb } from '../../db/client.js';
 import { ideas } from '../../db/schema/index.js';
 import { getIntakeByUserId } from '../plain/submit_intake.js';
 import { createWebSearchModerationMiddleware } from '../../agent/moderation-web-search.js';
+import { createWebSearchBudgetGuardMiddleware } from '../../agent/web-search-budget-guard.js';
 
 type Db = ReturnType<typeof createDb>['db'];
 type IdeaRow = typeof ideas.$inferSelect;
@@ -1210,8 +1211,10 @@ export interface GenerateDraftsResult {
 async function defaultGenerateDrafts(
   model: BaseChatModel,
   webSearchTool: DynamicStructuredTool,
-  env: Pick<Env, 'MISTRAL_API_KEY'>,
+  env: Pick<Env, 'MISTRAL_API_KEY' | 'DAILY_SEARCH_BUDGET'>,
   ideasPerBatch: number,
+  db: Db,
+  userId: string,
   intakeRow: IntakeResponse,
   replyLanguage: GenerateIdeasToolArgs['replyLanguage'],
   signal: AbortSignal,
@@ -1222,7 +1225,13 @@ async function defaultGenerateDrafts(
   const nestedAgent = createAgent({
     model,
     tools: [webSearchTool],
-    middleware: [createWebSearchModerationMiddleware(env)],
+    // Story 2.11: the budget guard wraps *outside* moderation — it forces
+    // cheap search params, enforces the per-run cap and per-user 24h cache,
+    // and only ever calls on into moderation for a real, uncached search.
+    middleware: [
+      createWebSearchBudgetGuardMiddleware(db, { userId, intakeVersion: intakeRow.updatedAt, dailySearchBudget: env.DAILY_SEARCH_BUDGET }),
+      createWebSearchModerationMiddleware(env),
+    ],
     responseFormat: draftsSchema,
   });
 
@@ -1274,7 +1283,7 @@ export interface GenerateIdeasDeps {
   db: Db;
   model: BaseChatModel;
   webSearchTool: DynamicStructuredTool;
-  env: Pick<Env, 'MISTRAL_API_KEY' | 'IDEAS_PER_BATCH'>;
+  env: Pick<Env, 'MISTRAL_API_KEY' | 'IDEAS_PER_BATCH' | 'DAILY_SEARCH_BUDGET'>;
   /** Test-only seam: replaces the nested `createAgent` construction and
    * invocation entirely — tests exercise this tool's own deterministic
    * logic (Zod validation, limit/citation checks, atomic persistence)
@@ -1364,7 +1373,7 @@ export async function handleGenerateIdeas(
   const generateDrafts =
     deps.generateDrafts ??
     ((row, lang, signal, options) =>
-      defaultGenerateDrafts(deps.model, deps.webSearchTool, deps.env, ideasPerBatch, row, lang, signal, options));
+      defaultGenerateDrafts(deps.model, deps.webSearchTool, deps.env, ideasPerBatch, deps.db, userId, row, lang, signal, options));
 
   let validDrafts: IdeaDraft[] | undefined;
   let validEvaluations: DraftEvaluation[] | undefined;
@@ -1599,7 +1608,7 @@ export function createGenerateIdeasTool(
   db: Db,
   model: BaseChatModel,
   webSearchTool: DynamicStructuredTool,
-  env: Pick<Env, 'MISTRAL_API_KEY' | 'IDEAS_PER_BATCH'>,
+  env: Pick<Env, 'MISTRAL_API_KEY' | 'IDEAS_PER_BATCH' | 'DAILY_SEARCH_BUDGET'>,
 ) {
   return tool(
     async (args: GenerateIdeasToolArgs, config: GenerateIdeasRunConfig) => {

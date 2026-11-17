@@ -53,7 +53,7 @@ describe('createCoachAgent (Story 6.1: direct prompt-injection outcome, distinct
     const model = fakeModel().respond(new AIMessage('this should never be reached'));
     const classify = vi.fn(async () => ({ jailbreaking: true }));
     const agent = createCoachAgent({
-      env: { OPENROUTER_API_KEY: 'test-key', MISTRAL_API_KEY: 'test-key', IDEAS_PER_BATCH: 2 },
+      env: { OPENROUTER_API_KEY: 'test-key', MISTRAL_API_KEY: 'test-key', IDEAS_PER_BATCH: 2, DAILY_SEARCH_BUDGET: 500 },
       checkpointer: new MemorySaver(),
       db: fakeDb({ personality: 'friendly', model: null }),
       webSearchTool: {} as never,

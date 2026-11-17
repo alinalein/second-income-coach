@@ -25,6 +25,10 @@ function testEnv(overrides: Partial<Env> = {}): Env {
     LANGSMITH_PROJECT: 'test-project',
     TAVILY_API_KEY: 'test-tavily-key',
     IDEAS_PER_BATCH: 5,
+    WEB_SEARCH_MODE: 'stub',
+    DAILY_SEARCH_BUDGET: 500,
+    DAILY_GENERATIONS_PER_USER: 50,
+    UNLIMITED_USER_EMAILS: '',
     ...overrides,
   };
 }

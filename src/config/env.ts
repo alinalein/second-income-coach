@@ -72,6 +72,23 @@ const envSchema = z.object({
   // above) — the UI/evaluation logic only ever expects a batch in this
   // range. Defaults to 2.
   IDEAS_PER_BATCH: z.coerce.number().int().min(1).max(5).default(2),
+  // Story 2.11 (AC4): "stub" returns fixed canned results with no network
+  // call or credit use — used in dev/test so no test ever spends real
+  // Tavily credits. "live" (default) is the real `tavily-mcp` call.
+  WEB_SEARCH_MODE: z.enum(['live', 'stub'], {
+    error: 'WEB_SEARCH_MODE must be "live" or "stub" (see .env.example)',
+  }).default('live'),
+  // Story 2.11 (AC6/AC7): the app-wide shared daily search-count budget and
+  // the per-user daily generation-count limit — generous defaults so normal
+  // dev/testing never hits them; the demo sets lower values (.env.example).
+  // Both counters live in Postgres and reset at UTC midnight.
+  DAILY_SEARCH_BUDGET: z.coerce.number().int().positive().default(500),
+  DAILY_GENERATIONS_PER_USER: z.coerce.number().int().positive().default(50),
+  // Story 2.11 follow-up: comma-separated owner emails exempt from
+  // DAILY_GENERATIONS_PER_USER only (never the shared search budget, the
+  // per-run cap, or the forced search settings). Empty default -> nobody
+  // exempt.
+  UNLIMITED_USER_EMAILS: z.string().default(''),
 });
 
 export type Env = z.infer<typeof envSchema>;

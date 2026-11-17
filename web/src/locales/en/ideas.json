@@ -9,6 +9,10 @@
   "generatingStatus": "Generating your ideas…",
   "generatingHint": "This can take up to a minute.",
   "translating": "Translating your ideas…",
+  "limit": {
+    "userLimitReached": "You've reached today's limit of {{limit}} idea generations. It resets tomorrow at {{resetTime}}.",
+    "sharedBudgetExhausted": "Today's shared search budget of the app is used up. New ideas are available again tomorrow."
+  },
   "error": {
     "loadFailed": "We couldn't load your ideas. Please reload the page.",
     "generateFailed": "Generating your ideas failed or timed out. Please try again.",

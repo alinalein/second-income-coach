@@ -406,7 +406,7 @@ function baseDeps(overrides: Partial<GenerateIdeasDeps> = {}): GenerateIdeasDeps
     db,
     model: {} as never,
     webSearchTool: {} as never,
-    env: { MISTRAL_API_KEY: 'test-key', IDEAS_PER_BATCH: 5 },
+    env: { MISTRAL_API_KEY: 'test-key', IDEAS_PER_BATCH: 5, DAILY_SEARCH_BUDGET: 500 },
     ...overrides,
   };
 }
@@ -607,7 +607,7 @@ describe('handleGenerateIdeas (IDEAS_PER_BATCH controls the persisted batch size
     try {
       const intakeRow = await upsertIntake(db, userId, intakeArgs());
       const deps = baseDeps({
-        env: { MISTRAL_API_KEY: 'test-key', IDEAS_PER_BATCH: count },
+        env: { MISTRAL_API_KEY: 'test-key', IDEAS_PER_BATCH: count, DAILY_SEARCH_BUDGET: 500 },
         generateDrafts: vi.fn().mockResolvedValue({
           drafts: { ideas: nValidDrafts(intakeRow, 'Idea', count) },
           searchResultTexts: DEFAULT_SEARCH_RESULT_TEXTS,

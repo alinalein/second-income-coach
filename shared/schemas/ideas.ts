@@ -355,11 +355,42 @@ export const ideaWithPlanResponseSchema = ideaResponseSchema.extend({ hasPlan: z
 
 export type IdeaWithPlanResponse = z.infer<typeof ideaWithPlanResponseSchema>;
 
+/**
+ * Story 2.11 (AC5/AC6/AC7): why a blocked "generate" is blocked — a per-user
+ * daily generation limit, or the app-wide shared daily search budget. Both
+ * are worded as a plain limit on the client (never an error), with
+ * `resetsAt` telling the user exactly when it reopens.
+ */
+export const generateLimitReasonSchema = z.enum(['user_limit', 'shared_budget']);
+
+export type GenerateLimitReason = z.infer<typeof generateLimitReasonSchema>;
+
+export const generateLimitStatusSchema = z.object({
+  blocked: z.boolean(),
+  reason: generateLimitReasonSchema.nullable(),
+  /** The per-user daily cap itself — only meaningful when `reason` is
+   * `'user_limit'`; the client needs the number to render "today's limit of
+   * N idea generations". */
+  limit: z.number().int().positive().nullable(),
+  /** UTC midnight of the next day — when the counters this is based on
+   * reset (Boundary: "reset at a fixed time"). `null` when not blocked. */
+  resetsAt: z.iso.datetime().nullable(),
+});
+
+export type GenerateLimitStatus = z.infer<typeof generateLimitStatusSchema>;
+
 /** Story 2.8: the `hasPlan`-carrying counterpart to `ideasResponseSchema`,
- * returned by `GET /api/ideas` and `POST /api/ideas/generate`. */
+ * returned by `GET /api/ideas` and `POST /api/ideas/generate`. Story 2.11
+ * adds `generateLimit` so the client can disable the generate button
+ * proactively, before the user ever clicks it. `.default(...)` (same
+ * precedent as `hasPlan` above) keeps every existing fixture/response that
+ * omits the field parseable — the server always sends the real computed
+ * status; only a test fixture that doesn't care about limits omits it,
+ * safely defaulting to "not blocked". */
 export const ideasWithPlanResponseSchema = z.object({
   ideas: z.array(ideaWithPlanResponseSchema),
   currency: currencyCodeSchema,
+  generateLimit: generateLimitStatusSchema.default({ blocked: false, reason: null, limit: null, resetsAt: null }),
 });
 
 export type IdeasWithPlanResponse = z.infer<typeof ideasWithPlanResponseSchema>;

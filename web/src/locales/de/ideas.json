@@ -9,6 +9,10 @@
   "generatingStatus": "Deine Ideen werden generiert…",
   "generatingHint": "Das kann bis zu einer Minute dauern.",
   "translating": "Deine Ideen werden übersetzt…",
+  "limit": {
+    "userLimitReached": "Du hast dein heutiges Limit von {{limit}} Ideengenerierungen erreicht. Es wird morgen um {{resetTime}} Uhr zurückgesetzt.",
+    "sharedBudgetExhausted": "Das gemeinsame Such-Budget der App ist für heute aufgebraucht. Neue Ideen sind morgen wieder verfügbar."
+  },
   "error": {
     "loadFailed": "Deine Ideen konnten nicht geladen werden. Bitte lade die Seite neu.",
     "generateFailed": "Das Generieren deiner Ideen ist fehlgeschlagen oder hat zu lange gedauert. Bitte versuche es erneut.",

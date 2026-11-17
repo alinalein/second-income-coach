@@ -12,6 +12,7 @@ import {
   translateIdeasResponseSchema,
   type CurrencyCode,
   type IdeaResponse,
+  type GenerateLimitStatus,
 } from '@app/shared';
 import type { Env } from '../../config/env.js';
 import type { createDb } from '../../db/client.js';
@@ -28,6 +29,14 @@ import {
   type GenerateIdeasDeps,
 } from '../../tools/llm/generate_ideas.js';
 import { setIdeaStatus, IdeaNotFoundError, settableIdeaStatusSchema } from '../../tools/plain/set_idea_status.js';
+import {
+  getUserGenerationCount,
+  incrementAndGetUserGenerationCount,
+  refundUserGeneration,
+  getSearchBudgetCount,
+  getNextUtcResetIso,
+  isUnlimitedUser,
+} from '../../tools/plain/usage_limits.js';
 import { userSettings, plans } from '../../db/schema/index.js';
 import { createStrictRateLimiter } from '../middleware/rateLimit.js';
 
@@ -48,7 +57,16 @@ const setIdeaStatusRequestSchema = z.object({ status: settableIdeaStatusSchema }
 const generateIdeasRequestSchema = z.object({ language: replyLanguageSchema }).partial();
 
 export interface IdeasRouterDeps {
-  env: Pick<Env, 'RATE_LIMIT_WINDOW_MS' | 'OPENROUTER_API_KEY' | 'MISTRAL_API_KEY' | 'IDEAS_PER_BATCH'>;
+  env: Pick<
+    Env,
+    | 'RATE_LIMIT_WINDOW_MS'
+    | 'OPENROUTER_API_KEY'
+    | 'MISTRAL_API_KEY'
+    | 'IDEAS_PER_BATCH'
+    | 'DAILY_SEARCH_BUDGET'
+    | 'DAILY_GENERATIONS_PER_USER'
+    | 'UNLIMITED_USER_EMAILS'
+  >;
   db: ReturnType<typeof createDb>['db'];
   /** Story 2.10: `generate_ideas` itself is no longer invoked through this —
    * `handleGenerateIdeas` is called directly below. Still `ideasAgent`
@@ -82,6 +100,38 @@ async function getUserCurrency(db: Db, userId: string): Promise<CurrencyCode> {
   const [row] = await db.select({ currency: userSettings.currency }).from(userSettings).where(eq(userSettings.userId, userId)).limit(1);
   const parsed = currencyCodeSchema.safeParse(row?.currency);
   return parsed.success ? parsed.data : 'EUR';
+}
+
+/**
+ * Story 2.11 (AC5/AC6): read-only — never increments anything itself, so
+ * it's safe to call from `GET /` on every page load. Used there (so the
+ * generate button is disabled *before* the user ever clicks it) and again
+ * after `POST /generate` runs (so its response reflects the now-updated
+ * counts). The shared budget is checked first: if it's gone, that's true
+ * for every user regardless of their own count, so it's the more honest
+ * reason to report.
+ */
+async function computeGenerateLimitStatus(
+  db: Db,
+  env: Pick<Env, 'DAILY_SEARCH_BUDGET' | 'DAILY_GENERATIONS_PER_USER' | 'UNLIMITED_USER_EMAILS'>,
+  userId: string,
+  now: Date = new Date(),
+): Promise<GenerateLimitStatus> {
+  const [userGenerationsUsed, sharedSearchesUsed, unlimited] = await Promise.all([
+    getUserGenerationCount(db, userId, now),
+    getSearchBudgetCount(db, now),
+    isUnlimitedUser(db, userId, env),
+  ]);
+
+  if (sharedSearchesUsed >= env.DAILY_SEARCH_BUDGET) {
+    return { blocked: true, reason: 'shared_budget', limit: null, resetsAt: getNextUtcResetIso(now) };
+  }
+  // Story 2.11 follow-up: an unlimited user skips only this check — the
+  // shared budget check above still applies to them unchanged.
+  if (!unlimited && userGenerationsUsed >= env.DAILY_GENERATIONS_PER_USER) {
+    return { blocked: true, reason: 'user_limit', limit: env.DAILY_GENERATIONS_PER_USER, resetsAt: getNextUtcResetIso(now) };
+  }
+  return { blocked: false, reason: null, limit: null, resetsAt: null };
 }
 
 /**
@@ -159,14 +209,18 @@ export function createIdeasRouter({
     const userId = req.session.userId!;
 
     try {
-      const [records, currency] = await Promise.all([getIdeasByUserId(db, userId), getUserCurrency(db, userId)]);
+      const [records, currency, generateLimit] = await Promise.all([
+        getIdeasByUserId(db, userId),
+        getUserCurrency(db, userId),
+        computeGenerateLimitStatus(db, env, userId),
+      ]);
       // AC3/AC5: a rejected idea is persisted (status change only, never a
       // delete) but never shown again — filtered here in the route, not in
       // `getIdeasByUserId` itself (that stays the one untouched plain read
       // `POST /generate`'s own before/after id-set check also relies on).
       const visibleRecords = records.filter((idea) => idea.status !== 'rejected');
       const visibleRecordsWithPlan = await attachHasPlan(db, userId, visibleRecords);
-      res.json(ideasWithPlanResponseSchema.parse({ ideas: visibleRecordsWithPlan, currency }));
+      res.json(ideasWithPlanResponseSchema.parse({ ideas: visibleRecordsWithPlan, currency, generateLimit }));
     } catch (error) {
       console.error('[ideas] read failed:', { userId, error: (error as Error)?.message });
       res.status(503).json({ error: 'Service unavailable' });
@@ -251,6 +305,27 @@ export function createIdeasRouter({
 
   router.post('/generate', strictLimiter, async (req, res) => {
     const userId = req.session.userId!;
+    const now = new Date();
+
+    // Story 2.11 (AC5/AC6/AC7): the server enforces the limits — the UI's
+    // own disabled button is only a convenience. Shared budget first (read-
+    // only: it isn't this call's to spend down before even starting), then
+    // the per-user count (an atomic upsert-increment: this call always
+    // counts as one of today's attempts, win or lose).
+    const sharedSearchesUsed = await getSearchBudgetCount(db, now);
+    if (sharedSearchesUsed >= env.DAILY_SEARCH_BUDGET) {
+      res.status(429).json({ error: 'limit_reached', reason: 'shared_budget', limit: null, resetsAt: getNextUtcResetIso(now) });
+      return;
+    }
+    const [userGenerationsUsed, unlimited] = await Promise.all([
+      incrementAndGetUserGenerationCount(db, userId, now),
+      isUnlimitedUser(db, userId, env),
+    ]);
+    if (!unlimited && userGenerationsUsed > env.DAILY_GENERATIONS_PER_USER) {
+      res.status(429).json({ error: 'limit_reached', reason: 'user_limit', limit: env.DAILY_GENERATIONS_PER_USER, resetsAt: getNextUtcResetIso(now) });
+      return;
+    }
+
     // Story 2.2 follow-up fix 4: the trigger runs on its own internal-only
     // thread, never the user's visible discovery thread — that thread is
     // only *read* below (never written to) to detect a reply language.
@@ -318,14 +393,19 @@ export function createIdeasRouter({
       // previously-rejected idea (never deleted, only status-changed)
       // reappeared on every "Generate new ideas" click.
       const visibleAfter = after.filter((idea) => idea.status !== 'rejected');
-      const visibleAfterWithPlan = await attachHasPlan(db, userId, visibleAfter);
-      res.json(ideasWithPlanResponseSchema.parse({ ideas: visibleAfterWithPlan, currency }));
+      const [visibleAfterWithPlan, generateLimit] = await Promise.all([
+        attachHasPlan(db, userId, visibleAfter),
+        computeGenerateLimitStatus(db, env, userId, now),
+      ]);
+      res.json(ideasWithPlanResponseSchema.parse({ ideas: visibleAfterWithPlan, currency, generateLimit }));
     } catch (error) {
       // Fail-fast (every web_search call this round failed): a distinct,
       // specific error the client maps to a clear message — never the
       // generic one below — and existing `ideas` rows are left completely
       // untouched (`handleGenerateIdeas` throws this before any DB write).
       if (error instanceof SearchServiceUnavailableError) {
+        // The attempt was already counted at entry; give it back (the user did nothing wrong).
+        await refundUserGeneration(db, userId, now).catch(() => undefined);
         res.status(503).json({ error: 'search_unavailable' });
         return;
       }
