@@ -770,6 +770,30 @@ So that the free search credits last through development and the demo.
 **When** a live run is measured before and after
 **Then** the report shows searches per run and credits used for both, honestly
 
+### Story 2.12: Smooth Generation Flow
+
+As a user,
+I want the move from my answers to my ideas, my plan and a translated page to feel continuous,
+So that I never see a button flicker, a second wait or an abrupt text swap.
+
+**Acceptance Criteria:**
+
+**Given** the user presses Save on the intake form
+**When** the save is accepted
+**Then** the ideas view opens at once with generation already in progress: the generate button is shown in its disabled/transparent state and the progress bar is visible from the first frame (never an enabled green button that is then pressed by code); saving, classifying and generating are one continuous progress (stage text changes, the bar never restarts), and generation starts as soon as the intake is stored, without the user waiting on a separate save screen
+
+**Given** the plan is being created after the user confirms a selection (Stories 2.8/3.1)
+**When** it is generated
+**Then** the workspace shows the same determinate progress bar and stage text as idea generation, from the first frame
+
+**Given** the UI language is switched and cards need translating
+**When** the translation runs
+**Then** no "is being translated" text appears; the translated text parts of the cards (title, rationale, demand note, growth path) show a soft blur/shimmer placeholder for the duration, then crossfade to the new language; the card layout does not jump; the effect respects reduced-motion settings and the cards stay accessible (`aria-busy` while translating)
+
+**Given** any of the three transitions above
+**When** a request fails
+**Then** the existing neutral error and retry behaviours stay unchanged
+
 ### Story 2.6: Faster Idea Generation (optional)
 
 As a user,
@@ -803,6 +827,10 @@ So that the first-use wait is short without lowering the quality of the ideas.
 **Given** the three sequential nested-agent model calls measured at 15-18 s each, the per-card translation (about 6 s) and the plan creation (about 10-11 s)
 **When** the step timings are reviewed
 **Then** each is examined for shorter model output (fewer or tighter fields, fewer steps in a first plan draft), merging sequential calls, a faster internal model for translation, and not running the translation call for a language the user has not switched to unless it is cheap; the chosen changes are listed with before/after timing, no hard rule is weakened, and each card fetching `/api/intake` separately is replaced by one shared value
+
+**Given** a measured real run of 100-155 s for a 2-idea batch after the first speed round (user runs, 2026-11-18), against a 35-60 s earlier baseline
+**When** the second speed round starts
+**Then** it first logs, per attempt, the elapsed time and the reason an attempt was rejected or retried, and reports which of "retries" or "one long writing call" explains the extra time before changing anything; then it removes that cause, including writing each idea in its own parallel model call (wall time about one idea's time instead of all ideas' sum) with the cross-idea soft rules (variety, domain spread) checked afterwards and the hard rules unchanged per idea; the target is a typical run under about 40 s and never above about 60 s; a miss is reported as a miss
 
 **Given** the speed-up
 **When** done

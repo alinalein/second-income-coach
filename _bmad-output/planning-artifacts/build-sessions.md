@@ -15,6 +15,8 @@ Stories stay tracked one by one in `sprint-status.yaml`. A session builds one or
 | Session | Stories | Why together | Starts after |
 |---|---|---|---|
 | 3 | 2.6 Faster generation + 2.4 Generate more ideas (adds another batch of IDEAS_PER_BATCH, default 2 until the demo; never repeats shown ideas) | both work in generate_ideas + ideas route | 2.10, 2.11 |
+| 3b | 2.6 second round (parallel per-idea writing, retry diagnosis) | backend only, generate_ideas | session 3 committed |
+| 3c | 2.12 Smooth generation flow (UI) | IdeasPanel, IntakeForm, PlanWorkspace progress, card translation shimmer | after 3.2 and 3b |
 | 4 | 3.2 Plan activation (interrupt, one active plan) | plan routes + agent graph | 2.10 |
 | 5 | 2.9 + 3.3 Sidebar + plan switching | sidebar is the UI for switching | 3.2 |
 | 6 | 4.1 + 4.2 Text check-in + missed check-in | same tools and time logic | 3.2 |
