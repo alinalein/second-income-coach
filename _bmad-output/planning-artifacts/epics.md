@@ -502,7 +502,7 @@ So that I'm not stuck with a generic list.
 
 **Given** ideas already exist and the user has changed their intake answers
 **When** they request new ideas from the ideas panel
-**Then** a visible "Generate new ideas" action runs `generate_ideas` again for the current intake; it adds a further batch of 3 to the existing ideas (nothing the user has bookmarked, rejected or already been shown is removed or repeated) - the batch-adding behaviour is Story 2.4
+**Then** a visible "Generate new ideas" action runs `generate_ideas` again for the current intake; it adds a further batch (same size as the first) to the existing ideas (nothing the user has bookmarked, rejected or already been shown is removed or repeated) - the batch-adding behaviour is Story 2.4
 
 **Given** this story introduces the `web_search` provider's credential
 **When** it is built
