@@ -12,6 +12,7 @@ import {
   extractNumbers,
   getIdeasByUserId,
   handleGenerateIdeas,
+  looksLikeSearchServiceErrorText,
   occupationMatchesIdea,
   sourceEvidenceLooksBlockedOrHidden,
   truncateAtWordBoundary,
@@ -293,6 +294,20 @@ describe('sourceEvidenceLooksBlockedOrHidden (hard: login wall, blurred/masked, 
   });
 });
 
+// Live bug (lane B log): a Tavily auth/quota failure comes back as a
+// normal, successful tool result (plain text), never a thrown exception —
+// the fail-fast `SearchServiceUnavailableError` check never saw it. Pure-
+// function test — no DB/model/agent needed.
+describe('looksLikeSearchServiceErrorText (deterministic — treats an error-shaped result as a failed search)', () => {
+  it.each([
+    { name: 'unauthorized/missing-or-invalid API key', text: 'Unauthorized: missing or invalid API key.' },
+    { name: 'usage limit exceeded', text: 'Usage limit exceeded. Please upgrade your plan to continue searching.' },
+    { name: 'HTTP 429 status text', text: 'Error: request failed with status code 429 (Too Many Requests).' },
+  ])('$name', ({ text }) => {
+    expect(looksLikeSearchServiceErrorText(text)).toBe(true);
+  });
+});
+
 // Story 2.5 (AC: "its source describes the same activity or occupation as
 // the idea (checked deterministically against the quoted passage),
 // otherwise the card shows it as unverified") — the fix for the observed
@@ -419,6 +434,20 @@ function configFor(userId: string): GenerateIdeasRunConfig {
   return { configurable: { thread_id: buildIdeasTriggerThreadId(userId) } };
 }
 
+// Story 2.6 (second speed round): `generateDrafts` is now called once per
+// idea (always `options.count === 1`), in parallel across the batch —
+// order-independent (slots may call it in any order), so this hands out one
+// draft per call from a shared pool instead of returning the whole batch in
+// one call.
+function poolDraftsMock(drafts: IdeaDraft[], searchResultTexts: string[] = DEFAULT_SEARCH_RESULT_TEXTS) {
+  const queue = [...drafts];
+  return vi.fn().mockImplementation(async () => {
+    const draft = queue.shift();
+    if (!draft) throw new Error('poolDraftsMock: pool exhausted — test requested more drafts than provided');
+    return { drafts: { ideas: [draft] }, searchResultTexts };
+  });
+}
+
 // Table-driven (CLAUDE.md): every one of these corrupts attempt 1's batch a
 // different way, then supplies a clean batch for attempt 2 — same recovery
 // shape (retry once, then persist), different failure branch each time.
@@ -504,10 +533,14 @@ describe('handleGenerateIdeas (corrupted batch is rejected and retried, then a c
       corrupt: (drafts) => drafts.map((draft) => ({ ...draft, baselineRateCurrency: 'EUR' as const })),
     },
   ])('$name', async ({ corrupt, searchResultTexts, hangFirstAttempt }) => {
+    // Story 2.6 (second speed round): each idea now retries on its own,
+    // independent attempt loop — a single-idea batch (`IDEAS_PER_BATCH: 1`)
+    // exercises that one slot's own loop exactly like the old whole-batch
+    // loop did when the batch itself was the unit of retry.
     const userId = await createTestUser();
     try {
       const intakeRow = await upsertIntake(db, userId, intakeArgs({ startingBudgetRange: 'under_100' }));
-      const corrupted = corrupt(fiveValidDrafts(intakeRow, 'Bad'));
+      const corrupted = corrupt([buildValidDraft(intakeRow, { title: 'Bad' })]);
       const generateDrafts = vi.fn();
       if (hangFirstAttempt) {
         // Bug fix regression check: the attempt must receive a real
@@ -519,12 +552,16 @@ describe('handleGenerateIdeas (corrupted batch is rejected and retried, then a c
       } else {
         generateDrafts.mockResolvedValueOnce({ drafts: { ideas: corrupted }, searchResultTexts: searchResultTexts ?? DEFAULT_SEARCH_RESULT_TEXTS });
       }
-      generateDrafts.mockResolvedValueOnce({ drafts: { ideas: fiveValidDrafts(intakeRow, 'Good') }, searchResultTexts: DEFAULT_SEARCH_RESULT_TEXTS });
-      const deps = baseDeps({ generateDrafts, draftAttemptTimeoutMs: hangFirstAttempt ? 50 : undefined });
+      generateDrafts.mockResolvedValueOnce({ drafts: { ideas: [buildValidDraft(intakeRow, { title: 'Good' })] }, searchResultTexts: DEFAULT_SEARCH_RESULT_TEXTS });
+      const deps = baseDeps({
+        env: { MISTRAL_API_KEY: 'test-key', IDEAS_PER_BATCH: 1, DAILY_SEARCH_BUDGET: 500 },
+        generateDrafts,
+        draftAttemptTimeoutMs: hangFirstAttempt ? 50 : undefined,
+      });
 
       const result = await handleGenerateIdeas(deps, configFor(userId), { replyLanguage: 'en' });
 
-      expect(result).toHaveLength(5);
+      expect(result).toHaveLength(1);
       expect(generateDrafts).toHaveBeenCalledTimes(2);
       if (hangFirstAttempt) {
         const firstCallSignal = generateDrafts.mock.calls[0]?.[2] as AbortSignal | undefined;
@@ -532,7 +569,7 @@ describe('handleGenerateIdeas (corrupted batch is rejected and retried, then a c
         expect(firstCallSignal?.aborted).toBe(true);
       }
       const rows = await db.select().from(ideas).where(eq(ideas.userId, userId));
-      expect(rows).toHaveLength(5);
+      expect(rows).toHaveLength(1);
     } finally {
       await cleanUp(userId);
     }
@@ -568,10 +605,7 @@ describe('handleGenerateIdeas (I/O matrix: happy path)', () => {
     try {
       const intakeRow = await upsertIntake(db, userId, intakeArgs());
       const deps = baseDeps({
-        generateDrafts: vi.fn().mockResolvedValue({
-          drafts: { ideas: fiveValidDrafts(intakeRow, 'Idea') },
-          searchResultTexts: DEFAULT_SEARCH_RESULT_TEXTS,
-        }),
+        generateDrafts: poolDraftsMock(fiveValidDrafts(intakeRow, 'Idea')),
       });
 
       const result = await handleGenerateIdeas(deps, configFor(userId), { replyLanguage });
@@ -609,10 +643,7 @@ describe('handleGenerateIdeas (IDEAS_PER_BATCH controls the persisted batch size
       const intakeRow = await upsertIntake(db, userId, intakeArgs());
       const deps = baseDeps({
         env: { MISTRAL_API_KEY: 'test-key', IDEAS_PER_BATCH: count, DAILY_SEARCH_BUDGET: 500 },
-        generateDrafts: vi.fn().mockResolvedValue({
-          drafts: { ideas: nValidDrafts(intakeRow, 'Idea', count) },
-          searchResultTexts: DEFAULT_SEARCH_RESULT_TEXTS,
-        }),
+        generateDrafts: poolDraftsMock(nValidDrafts(intakeRow, 'Idea', count)),
       });
 
       const result = await handleGenerateIdeas(deps, configFor(userId), { replyLanguage: 'en' });
@@ -685,10 +716,7 @@ describe('handleGenerateIdeas (Story 2.4: regenerating appends, never deletes or
         })
         .returning();
 
-      const generateDrafts = vi.fn().mockResolvedValue({
-        drafts: { ideas: fiveValidDrafts(intakeRow, 'New') },
-        searchResultTexts: DEFAULT_SEARCH_RESULT_TEXTS,
-      });
+      const generateDrafts = poolDraftsMock(fiveValidDrafts(intakeRow, 'New'));
       const deps = baseDeps({ generateDrafts });
 
       const result = await handleGenerateIdeas(deps, configFor(userId), { replyLanguage: 'en' });
@@ -751,13 +779,13 @@ describe('handleGenerateIdeas (round 12: soft rules never block — a hard-valid
     try {
       const intakeRow = await upsertIntake(db, userId, intakeArgs({ startingBudgetRange: 'under_100' }));
       const corrupted = corrupt(fiveValidDrafts(intakeRow, 'SoftMiss'));
-      const generateDrafts = vi.fn().mockResolvedValue({ drafts: { ideas: corrupted }, searchResultTexts: DEFAULT_SEARCH_RESULT_TEXTS });
+      const generateDrafts = poolDraftsMock(corrupted);
       const deps = baseDeps({ generateDrafts });
 
       const result = await handleGenerateIdeas(deps, configFor(userId), { replyLanguage: 'en' });
 
       expect(result).toHaveLength(5);
-      expect(generateDrafts).toHaveBeenCalledTimes(1); // no retry — accepted immediately
+      expect(generateDrafts).toHaveBeenCalledTimes(5); // 5 slots, no retry — each accepted on its own first attempt
     } finally {
       await cleanUp(userId);
     }
@@ -775,13 +803,13 @@ describe('handleGenerateIdeas (round 12: soft rules never block — a hard-valid
         ...draft,
         baselineRateCitation: 'https://www.reddit.com/r/freelance/comments/abc',
       }));
-      const generateDrafts = vi.fn().mockResolvedValue({ drafts: { ideas: corrupted }, searchResultTexts: DEFAULT_SEARCH_RESULT_TEXTS });
+      const generateDrafts = poolDraftsMock(corrupted);
       const deps = baseDeps({ generateDrafts });
 
       const result = await handleGenerateIdeas(deps, configFor(userId), { replyLanguage: 'en' });
 
       expect(result).toHaveLength(5);
-      expect(generateDrafts).toHaveBeenCalledTimes(1);
+      expect(generateDrafts).toHaveBeenCalledTimes(5);
       for (const idea of result) {
         expect(idea.sourceTrustTier).toBe('tier_4');
         expect(idea.isRateUnverified).toBe(true);
@@ -798,15 +826,19 @@ describe('handleGenerateIdeas (round 12: soft rules never block — a hard-valid
   // it can't support the number it's cited for at all, a correctness
   // problem, not a confidence one.
   it('a hard-rule failure (e.g. a vendor-pricing-page citation) still blocks on both attempts — never degrades', async () => {
+    // Single-idea batch: this invariant is a per-slot property under the
+    // new per-idea design, so one slot proves it deterministically (5
+    // parallel slots each exhausting 2 attempts would too, just less
+    // predictably ordered).
     const userId = await createTestUser();
     try {
       const intakeRow = await upsertIntake(db, userId, intakeArgs({ startingBudgetRange: 'under_100' }));
-      const corrupted = fiveValidDrafts(intakeRow, 'Bad').map((draft) => ({
-        ...draft,
-        baselineRateCitation: 'https://vendor.example.com/pricing',
-      }));
-      const generateDrafts = vi.fn().mockResolvedValue({ drafts: { ideas: corrupted }, searchResultTexts: DEFAULT_SEARCH_RESULT_TEXTS });
-      const deps = baseDeps({ generateDrafts });
+      const corrupted = { ...buildValidDraft(intakeRow, { title: 'Bad' }), baselineRateCitation: 'https://vendor.example.com/pricing' };
+      const generateDrafts = vi.fn().mockResolvedValue({ drafts: { ideas: [corrupted] }, searchResultTexts: DEFAULT_SEARCH_RESULT_TEXTS });
+      const deps = baseDeps({
+        env: { MISTRAL_API_KEY: 'test-key', IDEAS_PER_BATCH: 1, DAILY_SEARCH_BUDGET: 500 },
+        generateDrafts,
+      });
 
       await expect(handleGenerateIdeas(deps, configFor(userId), { replyLanguage: 'en' })).rejects.toThrow();
 
@@ -849,13 +881,13 @@ describe('handleGenerateIdeas (Story 2.5: an occupation mismatch is persisted, l
         `Detailed Results:\n\n${mismatchedRateQuote}\nMore context around it.`,
         `Detailed Results:\n\n${mismatchedDemandQuote}\nMore context around it.`,
       ];
-      const generateDrafts = vi.fn().mockResolvedValue({ drafts: { ideas: drafts }, searchResultTexts });
+      const generateDrafts = poolDraftsMock(drafts, searchResultTexts);
       const deps = baseDeps({ generateDrafts });
 
       const result = await handleGenerateIdeas(deps, configFor(userId), { replyLanguage: 'en' });
 
       expect(result).toHaveLength(5);
-      expect(generateDrafts).toHaveBeenCalledTimes(1); // never blocks — accepted immediately
+      expect(generateDrafts).toHaveBeenCalledTimes(5); // 5 slots, never blocks — each accepted on its own first attempt
       for (const idea of result) {
         expect(idea.sourceTrustTier).toBe('tier_1'); // the domain itself is still genuinely tier 1
         expect(idea.isRateUnverified).toBe(true); // but labeled unverified due to the occupation mismatch
@@ -903,7 +935,7 @@ describe('handleGenerateIdeas (I/O matrix: nested LLM output fails Zod)', () => 
     try {
       await upsertIntake(db, userId, intakeArgs());
       const generateDrafts = vi.fn().mockResolvedValue({ drafts: { ideas: [{ title: '' }] }, searchResultTexts: [] });
-      const deps = baseDeps({ generateDrafts });
+      const deps = baseDeps({ env: { MISTRAL_API_KEY: 'test-key', IDEAS_PER_BATCH: 1, DAILY_SEARCH_BUDGET: 500 }, generateDrafts });
 
       await expect(handleGenerateIdeas(deps, configFor(userId), { replyLanguage: 'en' })).rejects.toThrow();
 
@@ -935,13 +967,13 @@ describe('handleGenerateIdeas (round 10: an over-length rationale bullet is shor
       const drafts = fiveValidDrafts(intakeRow, 'Idea').map((draft, index) =>
         index === 0 ? { ...draft, rationale: [longBullet, 'Start by listing your skills on one platform.'] } : draft,
       );
-      const generateDrafts = vi.fn().mockResolvedValue({ drafts: { ideas: drafts }, searchResultTexts: DEFAULT_SEARCH_RESULT_TEXTS });
+      const generateDrafts = poolDraftsMock(drafts);
       const deps = baseDeps({ generateDrafts });
 
       const result = await handleGenerateIdeas(deps, configFor(userId), { replyLanguage: 'en' });
 
       expect(result).toHaveLength(5);
-      expect(generateDrafts).toHaveBeenCalledTimes(1);
+      expect(generateDrafts).toHaveBeenCalledTimes(5);
       for (const idea of result) {
         for (const line of idea.rationale.split('\n')) {
           expect(line.length).toBeLessThanOrEqual(RATIONALE_LINE_MAX_LENGTH);
@@ -1054,16 +1086,67 @@ describe('handleGenerateIdeas (review fix: excludeTitles is capped, not unbounde
           isRateUnverified: false,
         })),
       );
-      const generateDrafts = vi.fn().mockResolvedValue({
-        drafts: { ideas: fiveValidDrafts(intakeRow, 'New') },
-        searchResultTexts: DEFAULT_SEARCH_RESULT_TEXTS,
-      });
+      const generateDrafts = poolDraftsMock(fiveValidDrafts(intakeRow, 'New'));
       const deps = baseDeps({ generateDrafts });
 
       await handleGenerateIdeas(deps, configFor(userId), { replyLanguage: 'en' });
 
       const options = generateDrafts.mock.calls[0]?.[3] as { excludeTitles?: string[] } | undefined;
       expect(options?.excludeTitles).toHaveLength(50);
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+});
+
+// Story 2.6 (second speed round, final AC): each idea of the batch is
+// generated by its own independent, parallel nested-agent call — never one
+// combined call for the whole batch.
+describe('handleGenerateIdeas (Story 2.6 second round: per-idea parallel generation)', () => {
+  it('writes each idea via its own call (count: 1 each) and persists exactly IDEAS_PER_BATCH ideas', async () => {
+    const userId = await createTestUser();
+    try {
+      const intakeRow = await upsertIntake(db, userId, intakeArgs());
+      const generateDrafts = poolDraftsMock(nValidDrafts(intakeRow, 'Idea', 3));
+      const deps = baseDeps({ env: { MISTRAL_API_KEY: 'test-key', IDEAS_PER_BATCH: 3, DAILY_SEARCH_BUDGET: 500 }, generateDrafts });
+
+      const result = await handleGenerateIdeas(deps, configFor(userId), { replyLanguage: 'en' });
+
+      expect(result).toHaveLength(3);
+      expect(generateDrafts).toHaveBeenCalledTimes(3);
+      for (const call of generateDrafts.mock.calls) {
+        expect(call[3]).toEqual(expect.objectContaining({ count: 1 }));
+      }
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+
+  it('retries only the one idea that failed a hard check, never redoing a sibling idea that already succeeded', async () => {
+    const userId = await createTestUser();
+    try {
+      const intakeRow = await upsertIntake(db, userId, intakeArgs({ startingBudgetRange: 'under_100' }));
+      const badDraft = { ...buildValidDraft(intakeRow, { title: 'Bad' }), baselineRateCitation: 'https://vendor.example.com/pricing' };
+      let callCount = 0;
+      // Exactly the first call (whichever of the two parallel slots gets
+      // there first — order-independent) returns a hard-failing draft;
+      // every other call, including that slot's own retry, returns a
+      // valid one. A whole-batch retry (the pre-fix design) would need a
+      // full extra round for *both* ideas (4 calls); per-idea retry needs
+      // exactly one extra call (3).
+      const generateDrafts = vi.fn().mockImplementation(async () => {
+        callCount += 1;
+        if (callCount === 1) {
+          return { drafts: { ideas: [badDraft] }, searchResultTexts: DEFAULT_SEARCH_RESULT_TEXTS };
+        }
+        return { drafts: { ideas: [buildValidDraft(intakeRow, { title: `Good ${callCount}` })] }, searchResultTexts: DEFAULT_SEARCH_RESULT_TEXTS };
+      });
+      const deps = baseDeps({ env: { MISTRAL_API_KEY: 'test-key', IDEAS_PER_BATCH: 2, DAILY_SEARCH_BUDGET: 500 }, generateDrafts });
+
+      const result = await handleGenerateIdeas(deps, configFor(userId), { replyLanguage: 'en' });
+
+      expect(result).toHaveLength(2);
+      expect(generateDrafts).toHaveBeenCalledTimes(3);
     } finally {
       await cleanUp(userId);
     }

@@ -118,11 +118,18 @@ function fiveValidDrafts(intakeRow: IntakeResponse, label: string): IdeaDraft[] 
   return Array.from({ length: 5 }, (_, i) => buildValidDraft(intakeRow, { title: `${label} ${i + 1}` }));
 }
 
+// Story 2.6 (second speed round): `handleGenerateIdeas` now calls
+// `generateDrafts` once per idea (always `options.count === 1`), in
+// parallel across the batch — order-independent, so this hands out one
+// draft per call from a shared pool instead of returning the whole batch
+// in one call.
 function fakeGenerateDrafts(intakeRow: IntakeResponse, label = 'Idea') {
-  return vi.fn().mockResolvedValue({
-    drafts: { ideas: fiveValidDrafts(intakeRow, label) },
-    searchResultTexts: SEARCH_RESULT_TEXTS,
-  } satisfies GenerateDraftsResult);
+  const queue = fiveValidDrafts(intakeRow, label);
+  return vi.fn().mockImplementation(async () => {
+    const draft = queue.shift();
+    if (!draft) throw new Error('fakeGenerateDrafts: pool exhausted — test requested more drafts than provided');
+    return { drafts: { ideas: [draft] }, searchResultTexts: SEARCH_RESULT_TEXTS } satisfies GenerateDraftsResult;
+  });
 }
 
 /** Story 2.10: `model`/`webSearchTool` default to never-called stubs —
@@ -230,7 +237,7 @@ describe('createIdeasRouter POST /generate', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.ideas).toHaveLength(5);
-      expect(generateDrafts).toHaveBeenCalledTimes(1);
+      expect(generateDrafts).toHaveBeenCalledTimes(5); // one call per idea, in parallel
       // AC1: no `agent.invoke` anywhere in this route anymore.
       expect(agent.invoke).not.toHaveBeenCalled();
     } finally {
