@@ -43,5 +43,5 @@
 - Never invoke a design or UX skill (e.g. bmad-ux, bmad-agent-ux-designer, artifact-design) for a UI change in this repo. The template `layout-preview.html` is the design; edit the named files directly.
 - Read only the files the prompt names plus what the change touches. No repo-wide exploration.
 - Review depth: logic, security, DB or agent changes get one review pass (at most 2 reviewers). Layout-only or text-only changes get no review pass.
-- Max 2 fix rounds per story; new findings become their own story.
+- Fix every defect in the story's own acceptance criteria until it works; there is no round cap for broken behaviour. Polish, new ideas and extras found along the way become their own story instead of extending this one.
 - The report states the tokens used.
