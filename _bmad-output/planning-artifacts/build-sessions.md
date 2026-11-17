@@ -14,7 +14,7 @@ Stories stay tracked one by one in `sprint-status.yaml`. A session builds one or
 ## Next (each session = one /bmad-build prompt, one codebase read)
 | Session | Stories | Why together | Starts after |
 |---|---|---|---|
-| 3 | 2.4 Generate more ideas (adds another batch of IDEAS_PER_BATCH, default 2 until the demo; never repeats shown ideas) | generate_ideas + ideas route | 2.10, 2.11 |
+| 3 | 2.6 Faster generation + 2.4 Generate more ideas (adds another batch of IDEAS_PER_BATCH, default 2 until the demo; never repeats shown ideas) | both work in generate_ideas + ideas route | 2.10, 2.11 |
 | 4 | 3.2 Plan activation (interrupt, one active plan) | plan routes + agent graph | 2.10 |
 | 5 | 2.9 + 3.3 Sidebar + plan switching | sidebar is the UI for switching | 3.2 |
 | 6 | 4.1 + 4.2 Text check-in + missed check-in | same tools and time logic | 3.2 |
@@ -25,7 +25,7 @@ Stories stay tracked one by one in `sprint-status.yaml`. A session builds one or
 | 11 | 7.5 Quality & Decisions page | reads the 6.3 report JSON | session 10, eval run |
 | 12 | 6.1 completion + eval fixtures for plan/check-in tools | plain fixture files, then the user runs `npm run eval` and `npm run eval:report` | sessions 4-8 |
 
-Optional, always last: 2.6 faster generation, 7.3 deploy.
+Optional, always last: 7.3 deploy. (2.6 became required on 2026-11-17 and is part of session 3.)
 
 ## Parallel plan
 After 2.10 and 2.11: A = session 3, B = session 4, C = session 9. Then 5, 6, 7 / 8, then 10, 11, 12.

@@ -776,7 +776,7 @@ As a user,
 I want idea generation to finish noticeably faster,
 So that the first-use wait is short without lowering the quality of the ideas.
 
-**Scheduling:** optional for the live demo on 2026-11-20; built only if time remains after every required story, and it never blocks the demo.
+**Scheduling:** required (raised from optional on 2026-11-17 after measured runs of 35-60 s for 2 ideas, 6 s per card translation and 10-11 s per plan); built together with Story 2.4 in one session because both work in `generate_ideas`.
 
 **Acceptance Criteria:**
 
@@ -798,7 +798,11 @@ So that the first-use wait is short without lowering the quality of the ideas.
 
 **Given** a typical successful run
 **When** measured before and after
-**Then** the report shows both numbers honestly, with a target of about 25 s for a normal run, and a run that misses the target is reported as such, not tuned by raising timeouts
+**Then** the report shows both numbers honestly, with a target of under about 30 s on average for the default batch, and a run that misses the target is reported as such, not tuned by raising timeouts
+
+**Given** the three sequential nested-agent model calls measured at 15-18 s each, the per-card translation (about 6 s) and the plan creation (about 10-11 s)
+**When** the step timings are reviewed
+**Then** each is examined for shorter model output (fewer or tighter fields, fewer steps in a first plan draft), merging sequential calls, a faster internal model for translation, and not running the translation call for a language the user has not switched to unless it is cheap; the chosen changes are listed with before/after timing, no hard rule is weakened, and each card fetching `/api/intake` separately is replaced by one shared value
 
 **Given** the speed-up
 **When** done
