@@ -14,7 +14,7 @@ Stories stay tracked one by one in `sprint-status.yaml`. A session builds one or
 ## Next (each session = one /bmad-build prompt, one codebase read)
 | Session | Stories | Why together | Starts after |
 |---|---|---|---|
-| 3 | 2.4 Generate more ideas (batch of 3, added) | generate_ideas + ideas route | 2.10, 2.11 |
+| 3 | 2.4 Generate more ideas (adds another batch of IDEAS_PER_BATCH, default 2; never repeats shown ideas) | generate_ideas + ideas route | 2.10, 2.11 |
 | 4 | 3.2 Plan activation (interrupt, one active plan) | plan routes + agent graph | 2.10 |
 | 5 | 2.9 + 3.3 Sidebar + plan switching | sidebar is the UI for switching | 3.2 |
 | 6 | 4.1 + 4.2 Text check-in + missed check-in | same tools and time logic | 3.2 |
