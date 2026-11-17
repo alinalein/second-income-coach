@@ -4,6 +4,8 @@ import { useTranslation } from 'react-i18next';
 import { planResponseSchema, type PlanResponse } from '@app/shared';
 import { Button } from '../../components/ui/button';
 import { ChatThread } from '../../chat/ChatThread';
+import { MessageCost } from '../../chat/MessageCost';
+import { createMessageFeedbackItem } from '../../chat/MessageFeedback';
 import { StatusPanel } from './StatusPanel';
 
 export interface PlanWorkspaceProps {
@@ -87,6 +89,11 @@ export function PlanWorkspace({ ideaId, ideaTitle, onBack }: PlanWorkspaceProps)
     };
   }, [ideaId]);
 
+  const footerItems = React.useMemo(
+    () => (plan ? [MessageCost, createMessageFeedbackItem(`/api/plans/${plan.id}/messages`)] : []),
+    [plan],
+  );
+
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-4">
       <div>
@@ -118,7 +125,15 @@ export function PlanWorkspace({ ideaId, ideaTitle, onBack }: PlanWorkspaceProps)
              * sidebar/header) ... renders nothing until 4.4". */}
           </div>
           <div className="flex-1">
-            <ChatThread endpoint={`/api/plans/${plan.id}/messages`} />
+            {/* Story 5.2/5.3: `MessageCost` + `MessageFeedback` registered
+             * into the footer extension point built in Story 3.1 — alongside
+             * each other, no restructuring of `ChatThread`/`ChatMessage`.
+             * Memoized on `plan.id` so each `MessageFeedback` instance keeps
+             * its own component identity (and so its in-session rating
+             * state) across unrelated `PlanWorkspace` re-renders — a fresh
+             * factory call on every render would remount it and silently
+             * drop whatever rating state the user had just set. */}
+            <ChatThread endpoint={`/api/plans/${plan.id}/messages`} footerItems={footerItems} />
           </div>
         </div>
       )}

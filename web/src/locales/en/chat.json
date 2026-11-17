@@ -14,5 +14,18 @@
     "checking_answer": "Checking the answer…",
     "creating_plan": "Working on your plan…",
     "tool_fallback": "Working on it…"
+  },
+  "cost": {
+    "tokens": "{{input}}/{{output}} tokens (in/out)",
+    "estimateBadge": "(est.)",
+    "estimateBadgeFull": "estimate"
+  },
+  "feedback": {
+    "thumbsUpLabel": "Good response",
+    "thumbsDownLabel": "Bad response",
+    "commentToggle": "Add a comment",
+    "commentPlaceholder": "Add a comment (optional)",
+    "submit": "Save",
+    "error": "Couldn't save your feedback. Please try again."
   }
 }

@@ -8,7 +8,7 @@ import { createPlanChatRouter, type PlanChatRouterDeps } from './plan-chat.js';
 import { createDb } from '../../db/client.js';
 import { users, ideas, plans } from '../../db/schema/index.js';
 
-const testEnv: PlanChatRouterDeps['env'] = { RATE_LIMIT_WINDOW_MS: 60_000 };
+const testEnv: PlanChatRouterDeps['env'] = { RATE_LIMIT_WINDOW_MS: 60_000, MISTRAL_API_KEY: 'test-key' };
 
 type FakeAgent = PlanChatRouterDeps['agent'];
 
@@ -158,5 +158,31 @@ describe('createPlanChatRouter (ownership check against plans.userId)', () => {
     const res = await makeRequest(app, randomUUID());
 
     expect(res.status).toBe(503);
+  });
+
+  // Story 5.3 Design Notes: "no new ownership-check code — ... reuses its
+  // existing `assertPlanOwnership`". Proven here the same way as the
+  // message routes above: a plan owned by someone else is a 404 for the
+  // feedback routes too, before `record_feedback` is ever reached.
+  it.each([
+    ['POST', (app: ReturnType<typeof express>, planId: string) => request(app).post(`/api/plans/${planId}/messages/msg-1/feedback`).send({ rating: 'up' })],
+    ['DELETE', (app: ReturnType<typeof express>, planId: string) => request(app).delete(`/api/plans/${planId}/messages/msg-1/feedback`)],
+  ] as const)('%s .../feedback returns 404 for a plan owned by another user', async (_method, makeRequest) => {
+    const ownerUserId = await createTestUser();
+    const requesterUserId = await createTestUser();
+    try {
+      const ideaId = await insertIdea(ownerUserId);
+      const [plan] = await db
+        .insert(plans)
+        .values({ ideaId, userId: ownerUserId, status: 'draft', threadId: `plan:${randomUUID()}` })
+        .returning();
+
+      const res = await makeRequest(buildTestApp(fakeAgent(), requesterUserId), plan!.id);
+
+      expect(res.status).toBe(404);
+    } finally {
+      await cleanUp(ownerUserId);
+      await cleanUp(requesterUserId);
+    }
   });
 });

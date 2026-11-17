@@ -105,6 +105,40 @@ describe('buildSystemPrompt (AC: personality tone + reply-language in one prompt
   });
 });
 
+// AD-21 (wiring, not the summation algorithm itself — that's unit-tested
+// directly in `turn-cost.test.ts`): the outer graph's `turnUsage` state
+// field actually gets populated from this turn's own new AI message(s)
+// after `reactAgent.invoke`, with the resolved model id carried along.
+describe('createCoachAgent (turnUsage state field: Story 5.2)', () => {
+  it('populates turnUsage with this turn\'s token usage and resolved model id', async () => {
+    const model = fakeModel().respond(
+      new AIMessage({ content: 'Sure, happy to help!', usage_metadata: { input_tokens: 10, output_tokens: 20, total_tokens: 30 } }),
+    );
+    const agent = createCoachAgent({
+      env: { OPENROUTER_API_KEY: 'test-key', MISTRAL_API_KEY: 'test-key', IDEAS_PER_BATCH: 2, DAILY_SEARCH_BUDGET: 500 },
+      checkpointer: new MemorySaver(),
+      db: fakeDb(undefined),
+      webSearchTool: {} as never,
+      model,
+      classify: async () => ({}),
+    });
+
+    const result = await agent.invoke(
+      { messages: [new HumanMessage('Hello')] },
+      { configurable: { thread_id: 'discovery:test-turn-usage' } },
+    );
+
+    // The `model` test seam bypasses `createModelSelectionMiddleware` (see
+    // its own comment in `createCoachAgent`), so no `resolvedModelId` gets
+    // tagged here — this asserts the token sum wiring, not the tag itself
+    // (covered directly in `model.test.ts`).
+    expect((result as unknown as { turnUsage?: { inputTokens: number; outputTokens: number } }).turnUsage).toMatchObject({
+      inputTokens: 10,
+      outputTokens: 20,
+    });
+  });
+});
+
 describe('createCoachAgent (hook integration: personality flows from user_settings into the system prompt)', () => {
   // AC: "the user picks a personality (formal/friendly/terse) -> ...
   // subsequent responses reflect that tone" — end to end, via the `db` the

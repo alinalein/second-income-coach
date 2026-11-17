@@ -105,7 +105,7 @@ export function createApp({ env, db, pool, agent, ideasAgent, plansAgent, chatMo
   // above — every route on this router is reachable only by a signed-in
   // session (Boundary: "Every route this story adds sits behind the existing
   // `requireAuth` gate").
-  app.use('/api/chat', createChatRouter({ env, agent }));
+  app.use('/api/chat', createChatRouter({ env, agent, db }));
 
   // Story 2.1: structured intake, same auth-gated/post-chat mounting as the
   // chat router above. Story 2.10: no `agent` dep anymore — `POST /` stores

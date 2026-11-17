@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, cleanup, fireEvent } from '@testing-library/react';
 import { ChatThread } from './ChatThread';
+import { createMessageFeedbackItem } from './MessageFeedback';
 import chatEn from '../locales/en/chat.json';
 
 function mockFetch(responses: Record<string, Response | (() => Response)>) {
@@ -197,5 +198,50 @@ describe('ChatThread (AC: chat UI)', () => {
     fireEvent.click(screen.getByRole('button', { name: /send/i }));
 
     expect(await screen.findByText(chatEn.error.modelFailure)).toBeInTheDocument();
+  });
+});
+
+// Story 5.3 Boundary (explicit test): "the chat input is never disabled or
+// gated on a missing rating." `MessageFeedback` shares no state and no prop
+// with `ChatThread`'s own input — this exercises them together, with no
+// rating given at all and with a feedback request left pending, to prove
+// neither state has any bearing on the input's `disabled` attribute.
+describe('ChatThread (Story 5.3 Boundary: chat input independent of feedback)', () => {
+  it('keeps the message input enabled with no rating given, and while a feedback request is in flight', async () => {
+    let resolveFeedbackFetch!: (value: Response) => void;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url.includes('/feedback')) {
+          return new Promise<Response>((resolve) => {
+            resolveFeedbackFetch = resolve;
+          });
+        }
+        if (url.includes('/api/chat/messages') && init?.method !== 'POST') {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                messages: [{ id: 'reply-1', role: 'assistant', kind: 'message', content: 'Here is an idea.', createdAt: new Date().toISOString() }],
+              }),
+              { status: 200 },
+            ),
+          );
+        }
+        throw new Error(`Unmocked fetch: ${url}`);
+      }),
+    );
+
+    render(<ChatThread footerItems={[createMessageFeedbackItem('/api/chat/messages')]} />);
+
+    const input = (await screen.findByRole('textbox', { name: /message/i })) as HTMLInputElement;
+    expect(input).not.toBeDisabled();
+
+    fireEvent.click(screen.getByLabelText('Good response'));
+    expect(input).not.toBeDisabled();
+
+    resolveFeedbackFetch(new Response(JSON.stringify({ feedback: { rating: 'up', comment: null } }), { status: 200 }));
+    await waitFor(() => expect(screen.getByLabelText('Good response')).toHaveAttribute('aria-pressed', 'true'));
+    expect(input).not.toBeDisabled();
   });
 });
