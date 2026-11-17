@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
-import type { IdeaDraft, IntakeResponse, SubmitIntakeToolArgs } from '@app/shared';
+import { RATIONALE_LINE_MAX_LENGTH, type IdeaDraft, type IntakeResponse, type SubmitIntakeToolArgs } from '@app/shared';
 import { createDb } from '../../db/client.js';
 import { users, intake, ideas } from '../../db/schema/index.js';
 import { buildIdeasTriggerThreadId } from '../../agent/index.js';
@@ -10,6 +10,7 @@ import {
   buildNestedAgentPrompt,
   evaluateSourceTrust,
   extractNumbers,
+  getIdeasByUserId,
   handleGenerateIdeas,
   occupationMatchesIdea,
   sourceEvidenceLooksBlockedOrHidden,
@@ -625,13 +626,13 @@ describe('handleGenerateIdeas (IDEAS_PER_BATCH controls the persisted batch size
   });
 });
 
-// Story 2.2 round 10 (open item, epics.md Story 2.2 AC: "Generate new
-// ideas" replaces the current `suggested` batch, keeping any bookmarked/
-// rejected idea). Real DB, real transaction — the route-level id-set
-// detection (`ideas.ts`) has its own separate test; this is the actual
-// delete+insert behavior.
-describe('handleGenerateIdeas (round 10: regenerating replaces the suggested batch, keeps other statuses)', () => {
-  it('deletes the old suggested rows and inserts 5 new ones, leaving a bookmarked idea untouched', async () => {
+// Story 2.4 AC1/AC2: "Generate new ideas" now *appends* to every existing
+// idea of any status instead of replacing the `suggested` batch — insert-
+// only, nothing ever deleted. Real DB, real transaction — the route-level
+// id-set detection (`ideas.ts`) has its own separate test; this is the
+// actual insert-only write behavior plus the excludeTitles exclusion.
+describe('handleGenerateIdeas (Story 2.4: regenerating appends, never deletes or repeats a title)', () => {
+  it('keeps every existing idea (suggested and bookmarked) and inserts 5 new ones with no repeated title', async () => {
     const userId = await createTestUser();
     try {
       const intakeRow = await upsertIntake(db, userId, intakeArgs());
@@ -684,21 +685,34 @@ describe('handleGenerateIdeas (round 10: regenerating replaces the suggested bat
         })
         .returning();
 
-      const deps = baseDeps({
-        generateDrafts: vi.fn().mockResolvedValue({
-          drafts: { ideas: fiveValidDrafts(intakeRow, 'New') },
-          searchResultTexts: DEFAULT_SEARCH_RESULT_TEXTS,
-        }),
+      const generateDrafts = vi.fn().mockResolvedValue({
+        drafts: { ideas: fiveValidDrafts(intakeRow, 'New') },
+        searchResultTexts: DEFAULT_SEARCH_RESULT_TEXTS,
       });
+      const deps = baseDeps({ generateDrafts });
 
       const result = await handleGenerateIdeas(deps, configFor(userId), { replyLanguage: 'en' });
 
       expect(result).toHaveLength(5);
-      expect(result.every((idea) => idea.id !== oldSuggested!.id)).toBe(true);
+      expect(result.every((idea) => idea.id !== oldSuggested!.id && idea.id !== bookmarked!.id)).toBe(true);
       const rows = await db.select().from(ideas).where(eq(ideas.userId, userId));
-      expect(rows).toHaveLength(6); // 5 new suggested + the 1 kept bookmarked
+      // Story 2.4: nothing is ever deleted — 5 new suggested + the 2 old
+      // rows (old suggested + bookmarked) survive untouched.
+      expect(rows).toHaveLength(7);
       expect(rows.some((row) => row.id === bookmarked!.id && row.status === 'bookmarked')).toBe(true);
-      expect(rows.some((row) => row.id === oldSuggested!.id)).toBe(false);
+      expect(rows.some((row) => row.id === oldSuggested!.id && row.status === 'suggested')).toBe(true);
+      // No repeated title across the whole set (old + new).
+      const titles = rows.map((row) => row.title);
+      expect(new Set(titles).size).toBe(titles.length);
+      // Story 2.4: the model is told about every existing title up front —
+      // the one server-side DB read Boundary requires, never a model-facing
+      // schema field.
+      expect(generateDrafts).toHaveBeenCalledWith(
+        expect.objectContaining({ id: intakeRow.id }),
+        'en',
+        expect.any(AbortSignal),
+        expect.objectContaining({ excludeTitles: expect.arrayContaining(['Old idea', 'Kept idea']) }),
+      );
     } finally {
       await cleanUp(userId);
     }
@@ -913,10 +927,11 @@ describe('handleGenerateIdeas (round 10: an over-length rationale bullet is shor
     const userId = await createTestUser();
     try {
       const intakeRow = await upsertIntake(db, userId, intakeArgs());
-      // 25 * 6 + 3 = 153 chars, well over the 140-char per-bullet limit, with
-      // a word boundary every 6 characters to truncate cleanly against.
+      // 25 * 6 + 3 = 153 chars, well over the Story 2.6 AC3 100-char
+      // per-bullet limit (`RATIONALE_LINE_MAX_LENGTH`), with a word boundary
+      // every 6 characters to truncate cleanly against.
       const longBullet = `${'Alpha '.repeat(25)}end`;
-      expect(longBullet.length).toBeGreaterThan(140);
+      expect(longBullet.length).toBeGreaterThan(RATIONALE_LINE_MAX_LENGTH);
       const drafts = fiveValidDrafts(intakeRow, 'Idea').map((draft, index) =>
         index === 0 ? { ...draft, rationale: [longBullet, 'Start by listing your skills on one platform.'] } : draft,
       );
@@ -929,11 +944,126 @@ describe('handleGenerateIdeas (round 10: an over-length rationale bullet is shor
       expect(generateDrafts).toHaveBeenCalledTimes(1);
       for (const idea of result) {
         for (const line of idea.rationale.split('\n')) {
-          expect(line.length).toBeLessThanOrEqual(140);
+          expect(line.length).toBeLessThanOrEqual(RATIONALE_LINE_MAX_LENGTH);
         }
       }
       const truncatedRationale = result.map((idea) => idea.rationale).find((rationale) => longBullet.startsWith(rationale.split('\n')[0]!));
       expect(truncatedRationale).toBeDefined();
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+});
+
+// Review fix (Story 2.4's insert-only persistence means an old row can
+// never be deleted): a row written under a since-shrunk cap
+// (`RATIONALE_LINE_MAX_LENGTH`/etc, `shared/schemas/ideas.ts`) must never
+// take down this user's entire `GET /api/ideas` read — `getIdeasByUserId`
+// skips just that row instead of letting `ideaResponseSchema.parse()` throw.
+describe('getIdeasByUserId (review fix: a row that now fails schema validation is skipped, not thrown)', () => {
+  it('returns the valid rows and silently skips one whose rationale now exceeds the current cap', async () => {
+    const userId = await createTestUser();
+    try {
+      const oversizedRationale = `${'x'.repeat(RATIONALE_LINE_MAX_LENGTH + 10)}\nSecond line.`;
+      await db.insert(ideas).values({
+        userId,
+        status: 'suggested',
+        title: 'Legacy idea from before the cap shrank',
+        rationale: oversizedRationale,
+        citedIntakeFields: ['weeklyTimeAvailability', 'riskTolerance', 'startingBudgetRange'],
+        ideaType: 'service',
+        weeklyTimeCommitment: '5_to_10h',
+        startupCostAmountMinorUnits: 0,
+        startupCostCurrency: 'EUR',
+        riskLevel: 'low',
+        baselineRateQuote: DEFAULT_RATE_QUOTE,
+        baselineRateLowAmountMinorUnits: 2500,
+        baselineRateHighAmountMinorUnits: 2500,
+        isVendorSource: false,
+        rateUnit: 'hour',
+        baselineRateCurrency: 'EUR',
+        baselineRateCitation: 'https://legacy.example.com/rates',
+        sourceTrustTier: 'tier_3',
+        isRateUnverified: false,
+      });
+      const [validRow] = await db
+        .insert(ideas)
+        .values({
+          userId,
+          status: 'suggested',
+          title: 'Still-valid idea',
+          rationale: 'Fits your week.\nStart today.',
+          citedIntakeFields: ['weeklyTimeAvailability', 'riskTolerance', 'startingBudgetRange'],
+          ideaType: 'service',
+          weeklyTimeCommitment: '5_to_10h',
+          startupCostAmountMinorUnits: 0,
+          startupCostCurrency: 'EUR',
+          riskLevel: 'low',
+          baselineRateQuote: DEFAULT_RATE_QUOTE,
+          baselineRateLowAmountMinorUnits: 2500,
+          baselineRateHighAmountMinorUnits: 2500,
+          isVendorSource: false,
+          rateUnit: 'hour',
+          baselineRateCurrency: 'EUR',
+          baselineRateCitation: 'https://valid.example.com/rates',
+          sourceTrustTier: 'tier_3',
+          isRateUnverified: false,
+        })
+        .returning();
+
+      const result = await getIdeasByUserId(db, userId);
+
+      expect(result).toHaveLength(1);
+      expect(result[0]!.id).toBe(validRow!.id);
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+});
+
+// Review fix: Story 2.4's insert-only persistence means a user's row count
+// only ever grows — `existingTitles` must stay bounded, not read every
+// title the user has ever had, so this proves the cap is actually applied
+// at the DB query, not just a documentation comment.
+describe('handleGenerateIdeas (review fix: excludeTitles is capped, not unbounded)', () => {
+  it('passes at most 50 titles as excludeTitles even when the user has more than 50 existing ideas', async () => {
+    const userId = await createTestUser();
+    try {
+      const intakeRow = await upsertIntake(db, userId, intakeArgs());
+      const rowCount = 55;
+      await db.insert(ideas).values(
+        Array.from({ length: rowCount }, (_, i) => ({
+          userId,
+          status: 'suggested' as const,
+          title: `Existing idea ${i + 1}`,
+          rationale: 'Fits your week.\nStart today.',
+          citedIntakeFields: ['weeklyTimeAvailability', 'riskTolerance', 'startingBudgetRange'],
+          ideaType: 'service' as const,
+          weeklyTimeCommitment: '5_to_10h' as const,
+          startupCostAmountMinorUnits: 0,
+          startupCostCurrency: 'EUR' as const,
+          riskLevel: 'low' as const,
+          baselineRateQuote: DEFAULT_RATE_QUOTE,
+          baselineRateLowAmountMinorUnits: 2500,
+          baselineRateHighAmountMinorUnits: 2500,
+          isVendorSource: false,
+          rateUnit: 'hour' as const,
+          baselineRateCurrency: 'EUR' as const,
+          baselineRateCitation: 'https://a.example.com/rates',
+          sourceTrustTier: 'tier_3' as const,
+          isRateUnverified: false,
+        })),
+      );
+      const generateDrafts = vi.fn().mockResolvedValue({
+        drafts: { ideas: fiveValidDrafts(intakeRow, 'New') },
+        searchResultTexts: DEFAULT_SEARCH_RESULT_TEXTS,
+      });
+      const deps = baseDeps({ generateDrafts });
+
+      await handleGenerateIdeas(deps, configFor(userId), { replyLanguage: 'en' });
+
+      const options = generateDrafts.mock.calls[0]?.[3] as { excludeTitles?: string[] } | undefined;
+      expect(options?.excludeTitles).toHaveLength(50);
     } finally {
       await cleanUp(userId);
     }

@@ -75,6 +75,14 @@ export interface ModelRegistryEntry {
  * property (this entry's own `category: 'translation'` already satisfies
  * it, same mechanism as the moderation entry below), not a constraint on
  * which literal id the underlying call may use.
+ *
+ * Story 2.6 AC3 (measured, not guessed): one real `translateIdeaCards` call
+ * against `anthropic/claude-haiku-4.5` as a swap candidate, same single
+ * one-idea translation request on both sides, real OpenRouter credentials,
+ * same dev Postgres — `openai/gpt-6-luna` (current): 2436ms;
+ * `anthropic/claude-haiku-4.5` (candidate): 5107ms, roughly 2.1x slower, not
+ * faster. No real latency win, so this stays `openai/gpt-6-luna` per the
+ * spec's own "keep it unless a measured win" rule.
  */
 export const TRANSLATION_MODEL_ID = 'openai/gpt-6-luna';
 

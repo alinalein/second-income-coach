@@ -33,9 +33,11 @@ export const createPlanToolSchema = z.object({
 export type CreatePlanToolArgs = z.infer<typeof createPlanToolSchema>;
 
 const MIN_PLAN_STEPS = 3;
-const MAX_PLAN_STEPS = 12;
+// Story 2.6 AC4: 12 -> 8 (shorter model output, no hard rule weakened).
+const MAX_PLAN_STEPS = 8;
 const MIN_STEP_ACTIONS = 1;
-const MAX_STEP_ACTIONS = 5;
+// Story 2.6 AC4: 5 -> 3 (shorter model output, no hard rule weakened).
+const MAX_STEP_ACTIONS = 3;
 
 /**
  * UI fix (user-reported): a step's description renders as a bullet list

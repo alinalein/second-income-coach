@@ -81,8 +81,10 @@ const RATIONALE_MIN_LINES = 2;
 const RATIONALE_MAX_LINES = 3;
 /** Exported (round 10) so `generate_ideas.ts`'s `truncateAtWordBoundary`
  * corrects against the exact same limit this schema enforces — one source
- * of truth, never two numbers that could drift apart. */
-export const RATIONALE_LINE_MAX_LENGTH = 140;
+ * of truth, never two numbers that could drift apart. Story 2.6 AC3: 140 ->
+ * 100 (shorter model output, no hard rule weakened — this is still shape
+ * only). */
+export const RATIONALE_LINE_MAX_LENGTH = 100;
 
 export const rationaleSchema = z.string().max(2000).refine(
   (value) => {
@@ -209,11 +211,13 @@ function checkBaselineRateInvariants(
  * the real retrieved discovery-search text the same way `baselineRateQuote`
  * is verified.
  */
-export const DEMAND_EVIDENCE_NOTE_MAX_LENGTH = 200;
+// Story 2.6 AC3: 200 -> 140 (shorter model output, no hard rule weakened).
+export const DEMAND_EVIDENCE_NOTE_MAX_LENGTH = 140;
 
 /** Story 2.5: the translated "how this can grow" note (AC/FR15/AD-25) — one
- * short sentence, same shape precedent as `demandEvidenceNote`. */
-export const GROWTH_PATH_MAX_LENGTH = 220;
+ * short sentence, same shape precedent as `demandEvidenceNote`.
+ * Story 2.6 AC3: 220 -> 150 (shorter model output, no hard rule weakened). */
+export const GROWTH_PATH_MAX_LENGTH = 150;
 
 export const ideaDraftSchema = z
   .object({

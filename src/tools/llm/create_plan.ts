@@ -78,9 +78,9 @@ export function buildCreatePlanPrompt(
     `idea rationale: """${idea.rationale}"""`,
     `weeklyTimeAvailability: ${intakeRow.weeklyTimeAvailability}`,
     `startingBudgetRange: ${intakeRow.startingBudgetRange}`,
-    'Produce between 3 and 12 steps, each with a short title, a dayOffset (an integer number of days from today ' +
+    'Produce between 3 and 8 steps, each with a short title, a dayOffset (an integer number of days from today ' +
       'this step should start — dayOffset must never decrease from one step to the next), and a description: ' +
-      '1-5 short, distinct, concrete actions (each its own bullet point, never one prose paragraph) that ' +
+      '1-3 short, distinct, concrete actions (each its own bullet point, never one prose paragraph) that ' +
       'together say exactly what to do for that step.',
     FAILURE_PATTERN_GUIDANCE[intakeRow.failurePattern],
     replyLanguage === 'de' ? 'Write every title and description in German.' : 'Write every title and description in English.',

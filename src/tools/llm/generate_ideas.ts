@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { desc, eq } from 'drizzle-orm';
 import { HumanMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import type { DynamicStructuredTool } from '@langchain/core/tools';
@@ -14,6 +14,8 @@ import {
   riskToleranceSchema,
   failurePatternSchema,
   RATIONALE_LINE_MAX_LENGTH,
+  DEMAND_EVIDENCE_NOTE_MAX_LENGTH,
+  GROWTH_PATH_MAX_LENGTH,
   type GenerateIdeasToolArgs,
   type GenerateIdeasDrafts,
   type IdeaDraft,
@@ -946,6 +948,14 @@ function buildRegionPreferenceText(
  * value itself (that always flows in explicitly from `deps.env.IDEAS_PER_BATCH`). */
 const DEFAULT_IDEAS_PER_BATCH = 2;
 
+/** Review fix: Story 2.4's insert-only persistence means a user's idea-row
+ * count only grows over time — this caps how many of their most-recent
+ * titles `handleGenerateIdeas` reads and sends to the model as
+ * `excludeTitles`, so that read/prompt never grows unbounded as a heavy
+ * user's history piles up. Generous relative to one `IDEAS_PER_BATCH` batch
+ * (max 5) — comfortably covers many regenerates' worth of recent titles. */
+const EXCLUDE_TITLES_LIMIT = 50;
+
 /**
  * `count`/`excludeTitles` (live-bug fix, post-handoff): a one-shot repair
  * call for just the ideas that failed a hard check asks for `count` (not
@@ -987,14 +997,15 @@ export function buildNestedAgentPrompt(
       'related ideas) for current demand, growth, or trend signals relevant to the skills/interests above — not ' +
       'limited to freelance rate pages (e.g. industry/market reports, job-market news, marketplace demand data). ' +
       'Issue these alongside the baseline-rate searches in the same first batch of parallel tool calls.',
-    'demandEvidenceNote: one short sentence (plain language, translated like the rest of this idea) stating the ' +
-      'current demand/trend signal you found for this idea.',
+    `demandEvidenceNote: one short sentence (at most ~${DEMAND_EVIDENCE_NOTE_MAX_LENGTH} characters, plain ` +
+      'language, translated like the rest of this idea) stating the current demand/trend signal you found for ' +
+      'this idea.',
     'demandEvidenceQuote: copy the exact sentence from that discovery search result, verbatim — checked against ' +
       'the real retrieved text, same as baselineRateQuote.',
     'demandEvidenceCitation: the full URL of that discovery result.',
-    'growthPath: one short sentence (translated) on how this idea could realistically grow over time (e.g. ' +
-      'raising rates once established, adding a service tier, building a repeat-client base) — never implying a ' +
-      'scale that would exceed the time/budget/risk limits below.',
+    `growthPath: one short sentence (at most ~${GROWTH_PATH_MAX_LENGTH} characters, translated) on how this idea ` +
+      'could realistically grow over time (e.g. raising rates once established, adding a service tier, building ' +
+      'a repeat-client base) — never implying a scale that would exceed the time/budget/risk limits below.',
     'For each idea, call the web_search tool at least once to find a real, current rate that states what a ' +
       '*worker* earns for that kind of work — never a software/subscription pricing page or any other source ' +
       'that describes what a vendor charges rather than what a person earns (reject such a source yourself and ' +
@@ -1038,9 +1049,9 @@ export function buildNestedAgentPrompt(
     'citedIntakeFields must list at least 3 *distinct* field ids from ' +
       '["skillsInterests","weeklyTimeAvailability","startingBudgetRange","riskTolerance","stoppedBeforeText",' +
       '"failurePattern"] — whichever of these actually shaped that idea.',
-    'rationale: an array of 2-3 short strings (not one block of text — a separate array item per bullet, no ' +
-      'markdown bullet markers like "-" or "*" within each one), each at most ~140 characters, in plain, ' +
-      'natural language for someone who has never seen this form — never the raw field name or its exact ' +
+    `rationale: an array of 2-3 short strings (not one block of text — a separate array item per bullet, no ` +
+      `markdown bullet markers like "-" or "*" within each one), each at most ~${RATIONALE_LINE_MAX_LENGTH} ` +
+      'characters, in plain, natural language for someone who has never seen this form — never the raw field name or its exact ' +
       'stored value (never write things like "weeklyTimeAvailability", "under_5h", "startingBudgetRange", ' +
       '"failurePattern", or "loses_interest_once_routine"). Item 1: why this idea fits this person specifically ' +
       '(e.g. "since you only have a few hours a week" or "because starting over completely once put you off ' +
@@ -1344,10 +1355,30 @@ function toIdeaResponse(row: IdeaRow): IdeaResponse {
 }
 
 /** AC5/Boundary: the plain read `GET /api/ideas` uses — never a LangChain
- * tool, same precedent as `submit_intake.ts`'s `getIntakeByUserId`. */
+ * tool, same precedent as `submit_intake.ts`'s `getIntakeByUserId`.
+ *
+ * Review fix: Story 2.4's switch to insert-only persistence means an old
+ * row written under a since-shrunk cap (`RATIONALE_LINE_MAX_LENGTH`/
+ * `DEMAND_EVIDENCE_NOTE_MAX_LENGTH`/`GROWTH_PATH_MAX_LENGTH`,
+ * `shared/schemas/ideas.ts`) can never be deleted, so it must never be
+ * allowed to fail `toIdeaResponse`'s `.parse()` and take down this user's
+ * entire ideas list on every future read — one bad row is skipped and
+ * logged (id only, never its content) instead, same "never let one row
+ * sink the whole response" precedent as other read paths in this codebase. */
 export async function getIdeasByUserId(db: Db, userId: string): Promise<IdeaResponse[]> {
   const rows = await db.select().from(ideas).where(eq(ideas.userId, userId)).orderBy(ideas.createdAt);
-  return rows.map(toIdeaResponse);
+  const responses: IdeaResponse[] = [];
+  for (const row of rows) {
+    try {
+      responses.push(toIdeaResponse(row));
+    } catch (error) {
+      console.error('[generate_ideas] getIdeasByUserId: skipping an idea row that failed validation', {
+        id: row.id,
+        error: (error as Error)?.message,
+      });
+    }
+  }
+  return responses;
 }
 
 /**
@@ -1374,6 +1405,24 @@ export async function handleGenerateIdeas(
     deps.generateDrafts ??
     ((row, lang, signal, options) =>
       defaultGenerateDrafts(deps.model, deps.webSearchTool, deps.env, ideasPerBatch, deps.db, userId, row, lang, signal, options));
+
+  // Story 2.4 AC1/AC2: "Generate new ideas" appends, never repeats a title
+  // already on any existing row (every status — `suggested`/`bookmarked`/
+  // `rejected`/`selected`), so this is read once up front, before the
+  // attempt loop, and threaded into every draft call below (the normal
+  // call and the repair-pass call). Boundary: this stays a server-side DB
+  // read, never a model-facing tool-schema field
+  // (`shared/schemas/ideas.ts`'s own "Story 2.4's addition" note).
+  //
+  // Review fix: insert-only persistence means this user's row count only
+  // ever grows, so an unbounded "every title ever" read would grow this
+  // prompt's size/token cost/latency a little more on every future
+  // regenerate, forever. Capped to the most recent `EXCLUDE_TITLES_LIMIT`
+  // — still generous enough to dedupe against every title the user is
+  // realistically still looking at, without an unbounded tail.
+  const existingTitles = (
+    await deps.db.select({ title: ideas.title }).from(ideas).where(eq(ideas.userId, userId)).orderBy(desc(ideas.createdAt)).limit(EXCLUDE_TITLES_LIMIT)
+  ).map((row) => row.title);
 
   let validDrafts: IdeaDraft[] | undefined;
   let validEvaluations: DraftEvaluation[] | undefined;
@@ -1419,7 +1468,7 @@ export async function handleGenerateIdeas(
       // out attempt stops consuming search/model capacity instead of
       // compounding the next attempt's latency.
       const { drafts: rawDrafts, searchResultTexts } = await withDraftAttemptTimeout(
-        (signal) => generateDrafts(intakeRow, parsedArgs.replyLanguage, signal),
+        (signal) => generateDrafts(intakeRow, parsedArgs.replyLanguage, signal, { excludeTitles: existingTitles }),
         deps.draftAttemptTimeoutMs ?? DRAFT_ATTEMPT_TIMEOUT_MS,
         config?.signal,
       );
@@ -1481,7 +1530,11 @@ export async function handleGenerateIdeas(
 
     if (failingIndexes.length > 0 && validIndexes.length > 0) {
       try {
-        const excludeTitles = validIndexes.map((index) => lastPartialDrafts![index]!.title);
+        // Story 2.4: merged with the already-fetched `existingTitles` — a
+        // repair call must never repeat a title from an earlier batch
+        // (Story 2.4) *or* one already kept from this same attempt (the
+        // original live-bug-fix exclusion this repair pass has always done).
+        const excludeTitles = [...existingTitles, ...validIndexes.map((index) => lastPartialDrafts![index]!.title)];
         const { drafts: repairRawDrafts, searchResultTexts: repairSearchResultTexts } = await withDraftAttemptTimeout(
           (signal) => generateDrafts(lastPartialIntakeRow!, parsedArgs.replyLanguage, signal, { count: failingIndexes.length, excludeTitles }),
           deps.draftAttemptTimeoutMs ?? DRAFT_ATTEMPT_TIMEOUT_MS,
@@ -1525,22 +1578,18 @@ export async function handleGenerateIdeas(
     throw lastError instanceof Error ? lastError : new Error('generate_ideas: failed to produce valid ideas');
   }
 
-  // Boundary: "All 5 rows insert in one DB transaction — never 1-4 partial
-  // rows." Round 10 (open item, epics.md Story 2.2 AC: "a visible 'Generate
-  // new ideas' action ... replaces the current batch of suggested ideas
-  // (ideas the user bookmarked or rejected in Story 2.3 are kept)"): the
-  // delete-old-suggested + insert-new-5 both happen inside this one
-  // transaction, AFTER the attempt loop above has already produced a valid
-  // batch — so a failed generation (the `!validDrafts` throw above) never
-  // reaches this point at all, and the old batch is untouched ("keep the
-  // old batch if the run fails"). Only `status = 'suggested'` rows are
-  // deleted; any `bookmarked`/`rejected`/`selected` row (Story 2.3, not yet
-  // built) is preserved — this also transparently covers a first-time
-  // generation (nothing to delete) with the exact same code path, no
-  // separate "is this a regenerate" branch needed.
+  // Boundary: "All N rows insert in one DB transaction — never 1-(N-1)
+  // partial rows." Story 2.4 AC1/AC2 ("Generate new ideas" appends to the
+  // existing batch, never deletes/repeats a `suggested`/`bookmarked`/
+  // `rejected`/`selected` idea): round 10's delete-old-suggested step is
+  // removed — this is now insert-only. `existingTitles` (fetched before the
+  // attempt loop) already excluded every existing title from what the model
+  // was asked to produce, so a genuinely fresh batch lands here with no
+  // extra dedupe needed at write time. A failed generation (the
+  // `!validDrafts` throw above) never reaches this point at all, so the
+  // existing batch is always left untouched on failure, same as before.
   const dbWriteStart = performance.now();
   const rows = await deps.db.transaction(async (tx) => {
-    await tx.delete(ideas).where(and(eq(ideas.userId, userId), eq(ideas.status, 'suggested')));
     return tx
       .insert(ideas)
       .values(
