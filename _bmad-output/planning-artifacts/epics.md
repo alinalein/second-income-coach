@@ -712,7 +712,7 @@ So that the app is pleasant to use and does not waste time or money on steps it 
 
 **Given** an intake submit
 **When** it is saved
-**Then** the fields are stored immediately and the user sees "saved" without waiting for a model; the failure pattern is classified by one direct structured-output call to a fast internal model (never in the user-selectable registry), in parallel with one AD-11 moderation of the free-text answer; ideas are never generated before the classification has finished; a flagged answer is rejected with the existing neutral message
+**Then** the fields are stored immediately and the user sees "saved" without waiting for a model; the failure pattern is classified by one direct structured-output call to a fast internal model (never in the user-selectable registry), in parallel with one AD-11 moderation of the free-text answer; ideas are never generated before the classification has finished; a flagged answer is rejected with the existing neutral message; no waiting hint such as "this can take up to half a minute" is shown anywhere in the intake flow - the user sees "saved" immediately, and any short remaining wait (the classification before ideas start) shows only the normal progress display
 
 **Given** server-authored trigger text (the messages the routes used to send to the agent)
 **When** the flows run
