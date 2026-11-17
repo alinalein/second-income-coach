@@ -696,6 +696,36 @@ So that I can move between the things I'm working on without hunting through the
 **When** a view or plan was active
 **Then** the same view or plan is shown again (kept in the URL or stored locally; never lost on reload)
 
+### Story 2.10: Direct Paths for Button-Triggered Flows
+
+As a user,
+I want saving my answers, generating ideas and creating a plan to feel fast,
+So that the app is pleasant to use and does not waste time or money on steps it doesn't need.
+
+**Scheduling:** required, built before Stories 2.9, 3.3 and Epic 4, because it changes how every later flow is wired.
+
+**Acceptance Criteria:**
+
+**Given** the intake form, the "Generate new ideas" action and the plan creation after a selection
+**When** the user triggers them
+**Then** each API route calls its tool handler directly (the same handler the agent's tool wraps) with no agent loop around it (AD-4 amendment); free-form chat turns keep the agent loop and still call the same tools, so tool-calling behaviour and the Story 6.2 evals are unchanged
+
+**Given** an intake submit
+**When** it is saved
+**Then** the fields are stored immediately and the user sees "saved" without waiting for a model; the failure pattern is classified by one direct structured-output call to a fast internal model (never in the user-selectable registry), in parallel with one AD-11 moderation of the free-text answer; ideas are never generated before the classification has finished; a flagged answer is rejected with the existing neutral message
+
+**Given** server-authored trigger text (the messages the routes used to send to the agent)
+**When** the flows run
+**Then** no moderation call is made on it, while every piece of user-written text is still moderated (AD-11) and every model-written text shown to the user is still output-moderated and guilt-language checked where AD-12 applies
+
+**Given** each flow
+**When** measured on one real run before and after
+**Then** the report shows both numbers per step honestly, with targets of: intake "saved" within 1 s, classification within about 3 s, plan creation within about 20 s, idea generation within about 45 s for a batch of 3; a miss is reported as a miss, never hidden by raising timeouts
+
+**Given** the change
+**When** done
+**Then** all existing acceptance criteria of Stories 2.1, 2.2, 2.5, 3.1 still pass unchanged, and the ones touching `agent.invoke` in the routes are updated to the direct handler calls
+
 ### Story 2.6: Faster Idea Generation (optional)
 
 As a user,
