@@ -1,0 +1,16 @@
+{
+  "id": "smalltalk-no-tool-de",
+  "type": "deterministic",
+  "language": "de",
+  "toolUnderTest": "none",
+  "input": [
+    {
+      "role": "human",
+      "content": "Hey, wie geht's dir? Wollte nur kurz Hallo sagen, bevor wir loslegen."
+    }
+  ],
+  "referenceTrajectory": [
+    { "role": "user", "content": "smalltalk" },
+    { "role": "assistant", "content": "Hallo! Mir geht's gut, danke der Nachfrage. Wie kann ich dir helfen?" }
+  ]
+}

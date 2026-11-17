@@ -1,0 +1,19 @@
+{
+  "id": "ui-language-change-negative-en",
+  "type": "deterministic",
+  "language": "en",
+  "toolUnderTest": "none",
+  "input": [
+    {
+      "role": "human",
+      "content": "Please switch the app's language to German for me."
+    }
+  ],
+  "referenceTrajectory": [
+    { "role": "user", "content": "ui language change request" },
+    {
+      "role": "assistant",
+      "content": "I can't change the app's language myself — you can switch it in the Settings screen."
+    }
+  ]
+}

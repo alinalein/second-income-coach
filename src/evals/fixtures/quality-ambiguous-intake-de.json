@@ -1,0 +1,12 @@
+{
+  "id": "quality-ambiguous-intake-de",
+  "type": "quality",
+  "language": "de",
+  "toolUnderTest": "submit_intake",
+  "input": [
+    {
+      "role": "human",
+      "content": "Fähigkeiten: Kochen. Zeit: ein paar Stunden pro Woche. Budget: nicht viel, vielleicht unter 100. Risiko: Risiko mag ich eigentlich nicht so. Ehrlich gesagt weiß ich nicht genau, warum frühere Versuche nie irgendwohin geführt haben — vielleicht kam einfach das Leben dazwischen, oder ich habe die Lust verloren, schwer zu sagen. Kannst du meine Antworten eintragen?"
+    }
+  ]
+}

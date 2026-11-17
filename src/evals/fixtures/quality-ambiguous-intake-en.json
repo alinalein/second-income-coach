@@ -1,0 +1,12 @@
+{
+  "id": "quality-ambiguous-intake-en",
+  "type": "quality",
+  "language": "en",
+  "toolUnderTest": "submit_intake",
+  "input": [
+    {
+      "role": "human",
+      "content": "Skills: cooking. Time: a few hours a week. Budget: not much, maybe under 100. Risk: I don't love risk. Honestly not sure why past attempts never went anywhere — I guess life just got in the way, or maybe I lost interest, hard to say really. Can you log my answers?"
+    }
+  ]
+}

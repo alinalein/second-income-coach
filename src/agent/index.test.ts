@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
+import { tool } from 'langchain';
 import { fakeModel } from '@langchain/core/testing';
 import { AIMessage, HumanMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph-checkpoint';
@@ -18,6 +20,71 @@ function fakeDb(row: { personality: string; model: string | null } | undefined):
     }),
   } as never;
 }
+
+/** Spies on `model.bindTools` (what `createAgent`'s own `AgentNode` calls
+ * with the exact tools it was constructed with) so a test can assert which
+ * tool names actually got bound, without inspecting any private state. */
+function captureBoundToolNames(model: ReturnType<typeof fakeModel>): string[][] {
+  const boundToolNames: string[][] = [];
+  const originalBindTools = model.bindTools.bind(model);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (model as any).bindTools = (tools: { name: string }[]) => {
+    boundToolNames.push(tools.map((toolInstance) => toolInstance.name));
+    return originalBindTools(tools as Parameters<typeof originalBindTools>[0]);
+  };
+  return boundToolNames;
+}
+
+// Story 6.2 (AD-23): the `tools` override seam `createCoachAgent` grew so the
+// trajectory eval harness can stub `generate_ideas` without duplicating this
+// function's wiring. Asserted directly against what the model is actually
+// bound to (not just "the call didn't throw") so a regression here — e.g.
+// the override being ignored, or merged with the default instead of
+// replacing it — would fail a fast, offline test instead of only surfacing
+// in the on-demand eval suite.
+describe('createCoachAgent (tools override seam: Story 6.2, AD-23)', () => {
+  it('binds exactly the supplied tools array when `tools` is provided, never the default two', async () => {
+    const model = fakeModel().respond(new AIMessage('ok'));
+    const boundToolNames = captureBoundToolNames(model);
+    const customTool = tool(async () => 'ok', {
+      name: 'custom_test_tool',
+      description: 'test-only tool, never one of the real two',
+      schema: z.object({}),
+    });
+
+    const agent = createCoachAgent({
+      env: { OPENROUTER_API_KEY: 'test-key', MISTRAL_API_KEY: 'test-key' },
+      checkpointer: new MemorySaver(),
+      db: fakeDb(undefined),
+      webSearchTool: {} as never,
+      model,
+      classify: async () => ({}),
+      tools: [customTool],
+    });
+
+    await agent.invoke({ messages: [new HumanMessage('hello')] }, { configurable: { thread_id: 'discovery:test-tools-override' } });
+
+    expect(boundToolNames[0]).toEqual(['custom_test_tool']);
+  });
+
+  it('still binds the default submit_intake + generate_ideas tools when `tools` is omitted', async () => {
+    const model = fakeModel().respond(new AIMessage('ok'));
+    const boundToolNames = captureBoundToolNames(model);
+
+    const agent = createCoachAgent({
+      env: { OPENROUTER_API_KEY: 'test-key', MISTRAL_API_KEY: 'test-key' },
+      checkpointer: new MemorySaver(),
+      db: fakeDb(undefined),
+      webSearchTool: {} as never,
+      model,
+      classify: async () => ({}),
+    });
+
+    await agent.invoke({ messages: [new HumanMessage('hello')] }, { configurable: { thread_id: 'discovery:test-tools-default' } });
+
+    expect(boundToolNames[0]).toEqual(['submit_intake', 'generate_ideas']);
+  });
+});
 
 // AC: "the user picks a personality ... subsequent responses reflect that
 // tone" (the prompt-construction side of it) / AD-25: personality and the
