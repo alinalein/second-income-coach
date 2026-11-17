@@ -1,6 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, cleanup, fireEvent, within, waitFor } from '@testing-library/react';
-import { convertMoney, formatMoney, EUR_USD_RATE, type IdeaResponse, type IntakeResponse, type CountryCode } from '@app/shared';
+import {
+  convertMoney,
+  formatMoney,
+  EUR_USD_RATE,
+  type IdeaResponse,
+  type IdeaWithPlanResponse,
+  type IntakeResponse,
+  type CountryCode,
+} from '@app/shared';
 import { IdeasPanel } from './IdeasPanel';
 import i18n from '../../i18n';
 
@@ -311,13 +319,19 @@ describe('IdeasPanel (AC2: status badge + action buttons on the card)', () => {
   });
 });
 
-// Story 3.1: "a 'View plan' action on a `selected`/`bookmarked` idea card" —
-// present and wired to `onViewPlan(idea.id, idea.title)` for either status
-// (UI fix, user-reported: the title rides along so the plan workspace can
-// label itself "Your plan for <idea>"), absent for a still-`suggested` idea.
-describe('IdeasPanel (Story 3.1: View plan action)', () => {
-  it.each(['selected', 'bookmarked'] as const)('fires onViewPlan(idea.id, idea.title) for a "%s" idea', async (status) => {
-    const idea: IdeaResponse = { ...fakeIdea(), status };
+// Story 2.8 AC5 (supersedes Story 3.1's `selected`/`bookmarked` rule): "View
+// plan" shows only for the `selected` idea's card, and only once it
+// actually has a plan (`hasPlan`) — never for `bookmarked`/`suggested`/
+// `rejected`, and never for a `selected` idea with no plan yet (I/O matrix:
+// "Card hasPlan rendering").
+describe('IdeasPanel (Story 2.8 AC5: hasPlan-gated View plan action)', () => {
+  it.each<{ label: string; status: IdeaResponse['status']; hasPlan: boolean; shows: boolean }>([
+    { label: 'selected with a plan', status: 'selected', hasPlan: true, shows: true },
+    { label: 'selected with no plan yet', status: 'selected', hasPlan: false, shows: false },
+    { label: 'bookmarked', status: 'bookmarked', hasPlan: true, shows: false },
+    { label: 'still suggested', status: 'suggested', hasPlan: false, shows: false },
+  ])('$label: View plan shows=$shows', async ({ status, hasPlan, shows }) => {
+    const idea: IdeaWithPlanResponse = { ...fakeIdea(), status, hasPlan };
     vi.stubGlobal(
       'fetch',
       mockFetch({ ...INTAKE_NULL_RESPONSE, '/api/ideas': () => new Response(JSON.stringify({ ideas: [idea], currency: 'EUR' }), { status: 200 }) }),
@@ -325,24 +339,118 @@ describe('IdeasPanel (Story 3.1: View plan action)', () => {
     const onViewPlan = vi.fn();
 
     render(<IdeasPanel onViewPlan={onViewPlan} />);
+    await screen.findByText(idea.title);
 
-    const viewPlanButton = await screen.findByRole('button', { name: 'View plan' });
-    fireEvent.click(viewPlanButton);
-
-    expect(onViewPlan).toHaveBeenCalledExactlyOnceWith(idea.id, idea.title);
+    const viewPlanButton = screen.queryByRole('button', { name: 'View plan' });
+    if (shows) {
+      expect(viewPlanButton).toBeInTheDocument();
+      fireEvent.click(viewPlanButton!);
+      expect(onViewPlan).toHaveBeenCalledExactlyOnceWith(idea.id, idea.title);
+    } else {
+      expect(viewPlanButton).not.toBeInTheDocument();
+    }
   });
+});
 
-  it('renders no View plan button for a still-suggested idea', async () => {
-    const idea: IdeaResponse = { ...fakeIdea(), status: 'suggested' };
+// Story 2.8 AC2/AC6: a short instruction line under the heading once ideas
+// exist; no blank band is left when there's nothing to act on yet.
+describe('IdeasPanel (Story 2.8 AC2/AC6: explanation line)', () => {
+  it('shows the explanation once ideas are loaded', async () => {
+    const idea = fakeIdea();
     vi.stubGlobal(
       'fetch',
       mockFetch({ ...INTAKE_NULL_RESPONSE, '/api/ideas': () => new Response(JSON.stringify({ ideas: [idea], currency: 'EUR' }), { status: 200 }) }),
     );
 
-    render(<IdeasPanel onViewPlan={vi.fn()} />);
+    render(<IdeasPanel />);
 
-    await screen.findByRole('button', { name: 'Select' });
-    expect(screen.queryByRole('button', { name: 'View plan' })).not.toBeInTheDocument();
+    expect(
+      await screen.findByText("Choose one idea to turn into a plan, reject the ones that aren't for you, or generate a new batch."),
+    ).toBeInTheDocument();
+  });
+
+  it('renders no explanation text while idle with no ideas yet', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockFetch({ ...INTAKE_NULL_RESPONSE, '/api/ideas': () => new Response(JSON.stringify({ ideas: [], currency: 'EUR' }), { status: 200 }) }),
+    );
+
+    render(<IdeasPanel />);
+
+    await screen.findByText("You don't have any ideas yet — let's generate your first 5.");
+    expect(screen.queryByText(/Choose one idea/)).not.toBeInTheDocument();
+  });
+});
+
+// Story 2.8 AC3/AC4: "Select" opens a confirm dialog instead of writing the
+// status directly — confirm runs the same status write and navigates;
+// cancel changes nothing; a failed write never navigates.
+describe('IdeasPanel (Story 2.8 AC3/AC4: select confirm dialog)', () => {
+  it('confirm: sets the idea selected, then navigates via onViewPlan', async () => {
+    const idea: IdeaWithPlanResponse = { ...fakeIdea(), status: 'suggested', hasPlan: false };
+    vi.stubGlobal(
+      'fetch',
+      mockFetch({
+        ...INTAKE_NULL_RESPONSE,
+        '/api/ideas/idea-1/status': () => new Response(null, { status: 204 }),
+        '/api/ideas': () => new Response(JSON.stringify({ ideas: [idea], currency: 'EUR' }), { status: 200 }),
+      }),
+    );
+    const onViewPlan = vi.fn();
+
+    render(<IdeasPanel onViewPlan={onViewPlan} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Select' }));
+
+    expect(await screen.findByText('Make this your plan?')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Yes, select this idea' }));
+
+    expect(await screen.findByText('selected')).toBeInTheDocument();
+    await waitFor(() => expect(onViewPlan).toHaveBeenCalledExactlyOnceWith(idea.id, idea.title));
+  });
+
+  it('cancel: closes the dialog with no status call and no navigation', async () => {
+    const idea: IdeaWithPlanResponse = { ...fakeIdea(), status: 'suggested', hasPlan: false };
+    const fetchMock = mockFetch({
+      ...INTAKE_NULL_RESPONSE,
+      '/api/ideas': () => new Response(JSON.stringify({ ideas: [idea], currency: 'EUR' }), { status: 200 }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const onViewPlan = vi.fn();
+
+    render(<IdeasPanel onViewPlan={onViewPlan} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Select' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
+
+    expect(screen.queryByText('Make this your plan?')).not.toBeInTheDocument();
+    expect(screen.queryByText('selected')).not.toBeInTheDocument();
+    expect(onViewPlan).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalledWith('/api/ideas/idea-1/status', expect.anything());
+  });
+
+  it('confirm, status write fails: no navigation, idea reverts, and Select stays available to retry', async () => {
+    const idea: IdeaWithPlanResponse = { ...fakeIdea(), status: 'suggested', hasPlan: false };
+    vi.stubGlobal(
+      'fetch',
+      mockFetch({
+        ...INTAKE_NULL_RESPONSE,
+        '/api/ideas/idea-1/status': () => new Response(JSON.stringify({ error: 'Idea not found' }), { status: 404 }),
+        '/api/ideas': () => new Response(JSON.stringify({ ideas: [idea], currency: 'EUR' }), { status: 200 }),
+      }),
+    );
+    const onViewPlan = vi.fn();
+
+    render(<IdeasPanel onViewPlan={onViewPlan} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Select' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Yes, select this idea' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent("That didn't save. Please try again.");
+    expect(onViewPlan).not.toHaveBeenCalled();
+    expect(screen.queryByText('selected')).not.toBeInTheDocument();
+
+    // "Select" is still there (never swapped for a different control) — the
+    // one documented way to retry a plan-creation failure from the card.
+    fireEvent.click(await screen.findByRole('button', { name: 'Select' }));
+    expect(await screen.findByText('Make this your plan?')).toBeInTheDocument();
   });
 });
 
@@ -350,7 +458,10 @@ describe('IdeasPanel (Story 3.1: View plan action)', () => {
 // immediately (optimistic — never waits on the response) and sends the new
 // status to the server.
 describe('IdeasPanel (AC1/AC2: optimistic status update)', () => {
-  it('shows the new status badge immediately and POSTs the new status', async () => {
+  // Story 2.8 AC3: "Select" itself only opens the confirm dialog — the
+  // optimistic update/POST this test covers now happens on the dialog's
+  // own confirm click, not on the initial "Select" click.
+  it('shows the new status badge immediately and POSTs the new status, once the select dialog is confirmed', async () => {
     const idea: IdeaResponse = { ...fakeIdea(), status: 'suggested' };
     const fetchMock = mockFetch({ ...INTAKE_NULL_RESPONSE,
       '/api/ideas/idea-1/status': () => new Response(null, { status: 204 }),
@@ -361,6 +472,7 @@ describe('IdeasPanel (AC1/AC2: optimistic status update)', () => {
     render(<IdeasPanel />);
     const selectButton = await screen.findByRole('button', { name: 'Select' });
     fireEvent.click(selectButton);
+    fireEvent.click(await screen.findByRole('button', { name: 'Yes, select this idea' }));
 
     expect(await screen.findByText('selected')).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(
@@ -477,6 +589,7 @@ describe('IdeasPanel (status actions disable panel-wide while a request is in fl
     expect(selectButtons).toHaveLength(2);
 
     fireEvent.click(selectButtons[0]!);
+    fireEvent.click(await screen.findByRole('button', { name: 'Yes, select this idea' }));
 
     // Both cards' buttons are disabled, not just the clicked (ideaA) card's
     // own — ideaB's are a different card entirely.
@@ -520,6 +633,7 @@ describe('IdeasPanel (status actions disable panel-wide while a request is in fl
     const bookmarkButtonB = (await screen.findAllByRole('button', { name: 'Bookmark' }))[1]!;
 
     fireEvent.click(selectButtonA);
+    fireEvent.click(await screen.findByRole('button', { name: 'Yes, select this idea' }));
 
     expect(selectButtonA).toBeDisabled(); // the target of this action
     expect(bookmarkButtonB).not.toBeDisabled(); // already bookmarked — nothing to change, never pending

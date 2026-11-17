@@ -2,7 +2,7 @@ import { eq } from 'drizzle-orm';
 import { Router } from 'express';
 import { z } from 'zod';
 import { HumanMessage, type BaseMessage } from '@langchain/core/messages';
-import { ideasResponseSchema, currencyCodeSchema, type CurrencyCode } from '@app/shared';
+import { ideasWithPlanResponseSchema, currencyCodeSchema, type CurrencyCode, type IdeaResponse } from '@app/shared';
 import type { Env } from '../../config/env.js';
 import type { createDb } from '../../db/client.js';
 import type { CoachAgent } from '../../agent/index.js';
@@ -10,7 +10,7 @@ import { buildDiscoveryThreadId, buildIdeasTriggerThreadId } from '../../agent/i
 import { detectReplyLanguage } from '../../agent/language.js';
 import { getIdeasByUserId } from '../../tools/llm/generate_ideas.js';
 import { setIdeaStatus, IdeaNotFoundError, settableIdeaStatusSchema } from '../../tools/plain/set_idea_status.js';
-import { userSettings } from '../../db/schema/index.js';
+import { userSettings, plans } from '../../db/schema/index.js';
 import { createStrictRateLimiter } from '../middleware/rateLimit.js';
 
 /** AC1/AC3: the body `POST /:id/status` accepts — just the new status; the
@@ -32,6 +32,21 @@ async function getUserCurrency(db: Db, userId: string): Promise<CurrencyCode> {
   const [row] = await db.select({ currency: userSettings.currency }).from(userSettings).where(eq(userSettings.userId, userId)).limit(1);
   const parsed = currencyCodeSchema.safeParse(row?.currency);
   return parsed.success ? parsed.data : 'EUR';
+}
+
+/**
+ * Story 2.8 AC5: derived, read-only `hasPlan` flag — a plain join against
+ * the `plans` table (`plans.ideaId` is already a unique FK,
+ * `src/db/schema/plans.ts:20-23` — no migration needed). Computed here,
+ * not in `generate_ideas.ts` (Design Notes): the Boundary against touching
+ * the idea-generation backend is about the LLM-backed write path, and this
+ * route already shapes its own response (e.g. the `status !== 'rejected'`
+ * filter), so a derived read-only join belongs at the same layer.
+ */
+async function attachHasPlan(db: Db, userId: string, records: IdeaResponse[]): Promise<Array<IdeaResponse & { hasPlan: boolean }>> {
+  const planRows = await db.select({ ideaId: plans.ideaId }).from(plans).where(eq(plans.userId, userId));
+  const ideaIdsWithPlan = new Set(planRows.map((row) => row.ideaId));
+  return records.map((idea) => ({ ...idea, hasPlan: ideaIdsWithPlan.has(idea.id) }));
 }
 
 /**
@@ -104,7 +119,8 @@ export function createIdeasRouter({ env, db, agent }: IdeasRouterDeps) {
       // `getIdeasByUserId` itself (that stays the one untouched plain read
       // `POST /generate`'s own before/after id-set check also relies on).
       const visibleRecords = records.filter((idea) => idea.status !== 'rejected');
-      res.json(ideasResponseSchema.parse({ ideas: visibleRecords, currency }));
+      const visibleRecordsWithPlan = await attachHasPlan(db, userId, visibleRecords);
+      res.json(ideasWithPlanResponseSchema.parse({ ideas: visibleRecordsWithPlan, currency }));
     } catch (error) {
       console.error('[ideas] read failed:', { userId, error: (error as Error)?.message });
       res.status(503).json({ error: 'Service unavailable' });
@@ -200,7 +216,8 @@ export function createIdeasRouter({ env, db, agent }: IdeasRouterDeps) {
       // previously-rejected idea (never deleted, only status-changed)
       // reappeared on every "Generate new ideas" click.
       const visibleAfter = after.filter((idea) => idea.status !== 'rejected');
-      res.json(ideasResponseSchema.parse({ ideas: visibleAfter, currency }));
+      const visibleAfterWithPlan = await attachHasPlan(db, userId, visibleAfter);
+      res.json(ideasWithPlanResponseSchema.parse({ ideas: visibleAfterWithPlan, currency }));
     } catch (error) {
       console.error('[ideas] generation failed:', { userId, error: (error as Error)?.message });
       if (!res.headersSent) res.status(502).json({ error: 'Ideas could not be generated' });

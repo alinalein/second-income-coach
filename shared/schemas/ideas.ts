@@ -319,3 +319,24 @@ export const ideasResponseSchema = z.object({
 });
 
 export type IdeasResponse = z.infer<typeof ideasResponseSchema>;
+
+/**
+ * Story 2.8 AC5: `ideaResponseSchema` extended with a derived, read-only
+ * `hasPlan` flag (computed server-side in `src/api/routes/ideas.ts` via a
+ * join against the `plans` table — no migration, no change to
+ * `generate_ideas.ts`/`create_plan`). `.default(false)` keeps every
+ * existing fixture/response that omits the field parseable, since
+ * `ideaResponseSchema` itself stays untouched (Boundary).
+ */
+export const ideaWithPlanResponseSchema = ideaResponseSchema.extend({ hasPlan: z.boolean().default(false) });
+
+export type IdeaWithPlanResponse = z.infer<typeof ideaWithPlanResponseSchema>;
+
+/** Story 2.8: the `hasPlan`-carrying counterpart to `ideasResponseSchema`,
+ * returned by `GET /api/ideas` and `POST /api/ideas/generate`. */
+export const ideasWithPlanResponseSchema = z.object({
+  ideas: z.array(ideaWithPlanResponseSchema),
+  currency: currencyCodeSchema,
+});
+
+export type IdeasWithPlanResponse = z.infer<typeof ideasWithPlanResponseSchema>;

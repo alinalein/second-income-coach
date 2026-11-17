@@ -2,10 +2,11 @@ import * as React from 'react';
 import { ChevronDown, Loader2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
-  ideasResponseSchema,
+  ideasWithPlanResponseSchema,
   convertMoney,
   formatMoney,
   type IdeaResponse,
+  type IdeaWithPlanResponse,
   type IdeaStatus,
   type CurrencyCode,
   type WeeklyTimeAvailability,
@@ -14,6 +15,7 @@ import {
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '../../components/ui/card';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from 'shadcn-glass-ui';
 import { IdeaEvidence, foreignSourceRegion, useViewerCountry, hasDemandEvidence } from './IdeaEvidence';
 
 /**
@@ -92,7 +94,7 @@ type SettableStatus = Exclude<IdeaStatus, 'suggested'>;
  * excludes it), a `selected` idea demotes every other non-`rejected` idea to
  * `bookmarked`, and `bookmarked` only ever touches the one target row.
  */
-function applyOptimisticIdeaStatus(current: IdeaResponse[], ideaId: string, status: SettableStatus): IdeaResponse[] {
+function applyOptimisticIdeaStatus(current: IdeaWithPlanResponse[], ideaId: string, status: SettableStatus): IdeaWithPlanResponse[] {
   if (status === 'rejected') {
     return current.filter((idea) => idea.id !== ideaId);
   }
@@ -123,7 +125,7 @@ function applyOptimisticIdeaStatus(current: IdeaResponse[], ideaId: string, stat
  * action changes, so a second, unrelated card's own in-flight action is
  * never disabled or reverted by this one, and an unaffected sibling's
  * buttons never flicker for a no-op write. */
-function affectedIdeaIds(current: IdeaResponse[], ideaId: string, status: SettableStatus): string[] {
+function affectedIdeaIds(current: IdeaWithPlanResponse[], ideaId: string, status: SettableStatus): string[] {
   if (status !== 'selected') return [ideaId];
   return current
     .filter((idea) => idea.id === ideaId || (idea.status !== 'rejected' && idea.status !== 'bookmarked'))
@@ -136,7 +138,10 @@ function affectedIdeaIds(current: IdeaResponse[], ideaId: string, status: Settab
  * action), re-sorted by `createdAt` to match the server's own ordering. Ids
  * not in `priorById` (a different, still-in-flight or since-completed
  * action) are left untouched. */
-function revertOptimisticIdeaStatus(current: IdeaResponse[], priorById: Map<string, IdeaResponse>): IdeaResponse[] {
+function revertOptimisticIdeaStatus(
+  current: IdeaWithPlanResponse[],
+  priorById: Map<string, IdeaWithPlanResponse>,
+): IdeaWithPlanResponse[] {
   const presentIds = new Set(current.map((idea) => idea.id));
   const restored = current.map((idea) => priorById.get(idea.id) ?? idea);
   const reinserted = [...priorById.values()].filter((idea) => !presentIds.has(idea.id));
@@ -400,18 +405,24 @@ function IdeaCard({
   currency,
   locale,
   onSetStatus,
+  onRequestSelect,
   onViewPlan,
   pending,
 }: {
-  idea: IdeaResponse;
+  idea: IdeaWithPlanResponse;
   currency: CurrencyCode;
   locale: string;
   onSetStatus: (ideaId: string, status: SettableStatus) => void;
-  /** Story 3.1: present only for a `selected`/`bookmarked` idea — navigates
-   * to that idea's `PlanWorkspace` (lazily creating its draft plan via
-   * `POST /api/plans/select/:ideaId` if none exists yet). `undefined` for a
-   * still-`suggested` idea, which has no plan to view. The idea's own title
-   * is passed through (UI fix, user-reported) so the workspace can label
+  /** Story 2.8 AC3: "Select"'s own click opens the confirm dialog instead of
+   * writing the status directly — the dialog's own confirm handler is what
+   * actually calls `onSetStatus`-equivalent logic (`postIdeaStatus`). */
+  onRequestSelect: (idea: IdeaWithPlanResponse) => void;
+  /** Story 3.1/2.8 AC5: present only for the `selected` idea's card once it
+   * actually has a plan (`idea.hasPlan`) — navigates to that idea's
+   * `PlanWorkspace` (lazily creating its draft plan via `POST
+   * /api/plans/select/:ideaId` if none exists yet, though by this gate one
+   * always does). `undefined`/hidden otherwise. The idea's own title is
+   * passed through (UI fix, user-reported) so the workspace can label
    * itself "Your plan for <idea>" instead of a bare "Your plan" that gives
    * no hint which idea it's for. */
   onViewPlan?: (ideaId: string, ideaTitle: string) => void;
@@ -668,7 +679,7 @@ function IdeaCard({
             variant={idea.status === 'selected' ? 'default' : 'outline'}
             className="flex-1"
             disabled={pending}
-            onClick={() => onSetStatus(idea.id, 'selected')}
+            onClick={() => onRequestSelect(idea)}
           >
             {t('actions.select')}
           </Button>
@@ -693,9 +704,10 @@ function IdeaCard({
             {t('actions.reject')}
           </Button>
         </div>
-        {/* Story 3.1: "a 'View plan' action on a `selected`/`bookmarked`
-         * idea card" — never for a still-`suggested` or `rejected` one. */}
-        {onViewPlan && (idea.status === 'selected' || idea.status === 'bookmarked') ? (
+        {/* Story 2.8 AC5: only the `selected` idea's card, and only once it
+         * actually has a plan — never for `bookmarked`/`suggested`/
+         * `rejected`, and never for a `selected` idea with no plan yet. */}
+        {onViewPlan && idea.status === 'selected' && idea.hasPlan ? (
           <Button type="button" size="sm" variant="ghost" className="w-full" disabled={pending} onClick={() => onViewPlan(idea.id, idea.title)}>
             {t('actions.viewPlan')}
           </Button>
@@ -717,14 +729,24 @@ export interface IdeasPanelProps {
   /** Story 3.1: forwarded to each card's "View plan" action — omitted
    * entirely means no card shows that action (test/compat default). */
   onViewPlan?: (ideaId: string, ideaTitle: string) => void;
+  /** Story 2.8 AC1: true only right after this session's first-ever intake
+   * submit (set by `App`) — fires `handleGenerate()` once, automatically,
+   * before the user has clicked anything. Omitted/false everywhere else
+   * (a returning user with or without existing ideas), leaving the
+   * existing manual "Generate" button as the only trigger. */
+  autoGenerate?: boolean;
 }
 
-export function IdeasPanel({ onViewPlan }: IdeasPanelProps = {}) {
+export function IdeasPanel({ onViewPlan, autoGenerate = false }: IdeasPanelProps = {}) {
   const { t, i18n } = useTranslation('ideas');
-  const [ideas, setIdeas] = React.useState<IdeaResponse[]>([]);
+  const [ideas, setIdeas] = React.useState<IdeaWithPlanResponse[]>([]);
   const [currency, setCurrency] = React.useState<CurrencyCode>('EUR');
   const [phase, setPhase] = React.useState<Phase>('loading');
   const [progress, setProgress] = React.useState(0);
+  // Story 2.8 AC3: which idea the "Select" confirm dialog is open for —
+  // `null` means closed. Panel-level (not per-card) since only one dialog
+  // can be open at a time.
+  const [confirmIdea, setConfirmIdea] = React.useState<IdeaWithPlanResponse | null>(null);
   // Story 2.3 (user-reported bug fix): `pendingIdeaIds` disables only the
   // card(s) a given action actually touches (the target, plus any siblings
   // a `selected` sweep demotes) while that request is in flight — not every
@@ -757,7 +779,7 @@ export function IdeasPanel({ onViewPlan }: IdeasPanelProps = {}) {
           return;
         }
         const body: unknown = await res.json();
-        const result = ideasResponseSchema.safeParse(body);
+        const result = ideasWithPlanResponseSchema.safeParse(body);
         if (!result.success) {
           setPhase('load-error');
           return;
@@ -788,8 +810,8 @@ export function IdeasPanel({ onViewPlan }: IdeasPanelProps = {}) {
    * time. Never calls `set_idea_status`'s persistence logic directly
    * (Boundary) — only ever this one HTTP call.
    */
-  const handleSetIdeaStatus = React.useCallback(
-    (ideaId: string, status: SettableStatus) => {
+  const postIdeaStatus = React.useCallback(
+    (ideaId: string, status: SettableStatus): Promise<boolean> => {
       setStatusUpdateFailed(false);
 
       const affectedIds = affectedIdeaIds(ideas, ideaId, status);
@@ -802,23 +824,28 @@ export function IdeasPanel({ onViewPlan }: IdeasPanelProps = {}) {
       });
       setIdeas((current) => applyOptimisticIdeaStatus(current, ideaId, status));
 
-      fetch(`/api/ideas/${ideaId}/status`, {
+      return fetch(`/api/ideas/${ideaId}/status`, {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status }),
       })
         .then((res) => {
-          if (!res.ok && isMountedRef.current) {
-            setIdeas((current) => revertOptimisticIdeaStatus(current, priorById));
-            setStatusUpdateFailed(true);
+          if (!res.ok) {
+            if (isMountedRef.current) {
+              setIdeas((current) => revertOptimisticIdeaStatus(current, priorById));
+              setStatusUpdateFailed(true);
+            }
+            return false;
           }
+          return true;
         })
         .catch(() => {
           if (isMountedRef.current) {
             setIdeas((current) => revertOptimisticIdeaStatus(current, priorById));
             setStatusUpdateFailed(true);
           }
+          return false;
         })
         .finally(() => {
           if (isMountedRef.current) {
@@ -832,6 +859,39 @@ export function IdeasPanel({ onViewPlan }: IdeasPanelProps = {}) {
     },
     [ideas],
   );
+
+  /** Bookmark/Reject keep their current direct-call, fire-and-forget
+   * behavior — only "Select" (via `handleConfirmSelect` below) needs to
+   * know whether the write actually succeeded. */
+  const handleSetIdeaStatus = React.useCallback(
+    (ideaId: string, status: SettableStatus) => {
+      void postIdeaStatus(ideaId, status);
+    },
+    [postIdeaStatus],
+  );
+
+  /** Story 2.8 AC3: "Select" opens the confirm dialog instead of writing
+   * the status directly. */
+  const handleRequestSelect = React.useCallback((idea: IdeaWithPlanResponse) => {
+    setConfirmIdea(idea);
+  }, []);
+
+  /**
+   * Story 2.8 AC3/AC4: confirming closes the dialog, then runs the same
+   * `postIdeaStatus('selected')` the status endpoint always used — on
+   * success, navigates straight to `PlanWorkspace` (which lazily creates
+   * the draft plan on mount and has its own loading/error UI — Design
+   * Notes). On failure, `postIdeaStatus` already reverted the optimistic
+   * change and raised `statusUpdateFailed`; nothing further happens here,
+   * so there is no navigation (I/O matrix: "Select -> Confirm" error row).
+   */
+  const handleConfirmSelect = React.useCallback(async () => {
+    const idea = confirmIdea;
+    if (!idea) return;
+    setConfirmIdea(null);
+    const succeeded = await postIdeaStatus(idea.id, 'selected');
+    if (succeeded && isMountedRef.current) onViewPlan?.(idea.id, idea.title);
+  }, [confirmIdea, postIdeaStatus, onViewPlan]);
 
   const handleGenerate = React.useCallback(() => {
     setPhase('generating');
@@ -849,7 +909,7 @@ export function IdeasPanel({ onViewPlan }: IdeasPanelProps = {}) {
     fetch('/api/ideas/generate', { method: 'POST', credentials: 'include', signal: controller.signal })
       .then(async (res) => {
         const body: unknown = await res.json();
-        const result = ideasResponseSchema.safeParse(body);
+        const result = ideasWithPlanResponseSchema.safeParse(body);
         setProgress(100);
         if (!res.ok || !result.success) {
           if (isMountedRef.current) setPhase('generate-error');
@@ -878,121 +938,160 @@ export function IdeasPanel({ onViewPlan }: IdeasPanelProps = {}) {
       });
   }, []);
 
+  // Story 2.8 AC1: fires `handleGenerate()` exactly once, automatically,
+  // the first time this panel is idle with no ideas yet *and* `autoGenerate`
+  // is set — never on a later re-render of the same mount (the ref is set
+  // before calling, per the Code Map), and never again after a manual
+  // generate/regenerate changes `phase` away from `idle`+empty and back.
+  const autoGenerateFiredRef = React.useRef(false);
+  React.useEffect(() => {
+    if (phase === 'idle' && ideas.length === 0 && autoGenerate && !autoGenerateFiredRef.current) {
+      autoGenerateFiredRef.current = true;
+      handleGenerate();
+    }
+  }, [phase, ideas.length, autoGenerate, handleGenerate]);
+
   const locale = LOCALE_BY_LANGUAGE[i18n.language] ?? 'en-US';
   const generating = phase === 'generating';
 
   return (
-    <Card aria-busy={generating}>
-      <CardHeader>
-        <CardTitle>{t('title')}</CardTitle>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-4">
-        {/* Fix1: a fixed-height neutral skeleton, never the "no ideas yet"
-         * text, while the first `GET /api/ideas` is pending. */}
-        {phase === 'loading' ? <IdeasSkeleton loadingLabel={t('loading')} /> : null}
-        {/* Round 13 (user-requested): which message shows now depends on
-         * which request actually failed, never on `ideas.length` — the old
-         * logic showed "couldn't load" for a failed *regenerate* whenever
-         * ideas were already empty, which was simply the wrong message for
-         * that failure. The generate button below (unaffected by either
-         * error phase) doubles as the retry action either message refers
-         * to. */}
-        {phase === 'load-error' ? (
-          <Badge variant="muted" role="alert">
-            {t('error.loadFailed')}
-          </Badge>
+    <>
+      <Card aria-busy={generating}>
+        <CardHeader>
+          <CardTitle>{t('title')}</CardTitle>
+          {/* Story 2.8 AC2/AC6: only rendered once there's something to act
+           * on — an empty/loading panel never reserves this line, so no
+           * blank band is left under the heading (AC6). */}
+          {ideas.length > 0 ? <p className="text-sm text-muted-foreground">{t('explanation')}</p> : null}
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          {/* Fix1: a fixed-height neutral skeleton, never the "no ideas yet"
+           * text, while the first `GET /api/ideas` is pending. */}
+          {phase === 'loading' ? <IdeasSkeleton loadingLabel={t('loading')} /> : null}
+          {/* Round 13 (user-requested): which message shows now depends on
+           * which request actually failed, never on `ideas.length` — the old
+           * logic showed "couldn't load" for a failed *regenerate* whenever
+           * ideas were already empty, which was simply the wrong message for
+           * that failure. The generate button below (unaffected by either
+           * error phase) doubles as the retry action either message refers
+           * to. */}
+          {phase === 'load-error' ? (
+            <Badge variant="muted" role="alert">
+              {t('error.loadFailed')}
+            </Badge>
+          ) : null}
+          {phase === 'generate-error' ? (
+            <Badge variant="muted" role="alert">
+              {t('error.generateFailed')}
+            </Badge>
+          ) : null}
+          {/* Story 2.3: independent of `phase` — a failed status change never
+           * overrides the load/generate messaging above, and vice versa. */}
+          {statusUpdateFailed ? (
+            <Badge variant="muted" role="alert">
+              {t('error.statusUpdateFailed')}
+            </Badge>
+          ) : null}
+          {/* Round 13: only when genuinely idle and empty — not alongside an
+           * error message, which already explains the state. */}
+          {phase === 'idle' && ideas.length === 0 ? (
+            <p className="text-sm text-muted-foreground">{t('empty')}</p>
+          ) : null}
+          {ideas.length > 0 ? (
+            <div className="grid grid-cols-1 items-stretch gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {ideas.map((idea) => (
+                <IdeaCard
+                  key={idea.id}
+                  idea={idea}
+                  currency={currency}
+                  locale={locale}
+                  onSetStatus={handleSetIdeaStatus}
+                  onRequestSelect={handleRequestSelect}
+                  onViewPlan={onViewPlan}
+                  // Only the card(s) this specific action touches disable —
+                  // the target, plus any siblings a `selected` sweep demotes
+                  // (those are genuinely changing too). An unrelated card's
+                  // own action is unaffected.
+                  pending={pendingIdeaIds.has(idea.id)}
+                />
+              ))}
+            </div>
+          ) : null}
+        </CardContent>
+        {/*
+         * Round 20 (user-requested — revert to round 14 exactly): one footer
+         * handles both the first-ever generate (epics.md AC1) and "Generate
+         * new ideas" (epics.md AC: regenerate, replacing the `suggested`
+         * batch — `generate_ideas.ts`'s own DB-write transaction, round 10,
+         * actually does the replace; this button only triggers the same
+         * request again) — both buttons already shared this exact code path
+         * (only `variant`/label differed by `ideas.length`), so round 22's
+         * row layout already applied to both equally.
+         *
+         * Round 22 (user-requested, annotated screenshot): the progress
+         * block moves from *under* the button to *beside* it, in the same
+         * row — button on the left, progress bar/status/hint stacked in the
+         * remaining width to its right.
+         *
+         * Round 23 (user-requested): both buttons now use the same solid
+         * `default` style (the `outline` variant for "Generate new ideas"
+         * is gone — same color as "Generate my 5 ideas"). The progress
+         * block's wrapper is now always rendered (never unmounted) and
+         * fades via `transition-opacity` instead of popping in/out — since
+         * it's always present, it also always reserves its own real height,
+         * so the footer doesn't jump when generation starts or ends; no
+         * height was guessed/hardcoded for this.
+         */}
+        {phase !== 'loading' ? (
+          <CardFooter className="flex flex-row items-start gap-4">
+            <Button type="button" onClick={handleGenerate} disabled={generating} className="shrink-0">
+              {generating ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                  {t('generatingButton')}
+                </>
+              ) : ideas.length > 0 ? (
+                t('generateNewButton')
+              ) : (
+                t('generateButton')
+              )}
+            </Button>
+            {/* Story 2.2 follow-up fix 2: an indeterminate (no percentage) progress
+             * indicator while POST /api/ideas/generate is pending — a live region
+             * so assistive tech announces the status/hint text as it appears,
+             * not just on first render. */}
+            <div
+              className={`flex flex-1 flex-col gap-2 transition-opacity duration-200 ${generating ? 'opacity-100' : 'opacity-0'}`}
+              aria-live="polite"
+              role={generating ? 'status' : undefined}
+              aria-hidden={!generating}
+            >
+              <DeterminateProgressBar percent={progress} label={t('generatingStatus')} />
+              <p className="text-sm font-medium">{t('generatingStatus')}</p>
+              <p className="text-xs text-muted-foreground">{t('generatingHint')}</p>
+            </div>
+          </CardFooter>
         ) : null}
-        {phase === 'generate-error' ? (
-          <Badge variant="muted" role="alert">
-            {t('error.generateFailed')}
-          </Badge>
-        ) : null}
-        {/* Story 2.3: independent of `phase` — a failed status change never
-         * overrides the load/generate messaging above, and vice versa. */}
-        {statusUpdateFailed ? (
-          <Badge variant="muted" role="alert">
-            {t('error.statusUpdateFailed')}
-          </Badge>
-        ) : null}
-        {/* Round 13: only when genuinely idle and empty — not alongside an
-         * error message, which already explains the state. */}
-        {phase === 'idle' && ideas.length === 0 ? (
-          <p className="text-sm text-muted-foreground">{t('empty')}</p>
-        ) : null}
-        {ideas.length > 0 ? (
-          <div className="grid grid-cols-1 items-stretch gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {ideas.map((idea) => (
-              <IdeaCard
-                key={idea.id}
-                idea={idea}
-                currency={currency}
-                locale={locale}
-                onSetStatus={handleSetIdeaStatus}
-                onViewPlan={onViewPlan}
-                // Only the card(s) this specific action touches disable —
-                // the target, plus any siblings a `selected` sweep demotes
-                // (those are genuinely changing too). An unrelated card's
-                // own action is unaffected.
-                pending={pendingIdeaIds.has(idea.id)}
-              />
-            ))}
-          </div>
-        ) : null}
-      </CardContent>
-      {/*
-       * Round 20 (user-requested — revert to round 14 exactly): one footer
-       * handles both the first-ever generate (epics.md AC1) and "Generate
-       * new ideas" (epics.md AC: regenerate, replacing the `suggested`
-       * batch — `generate_ideas.ts`'s own DB-write transaction, round 10,
-       * actually does the replace; this button only triggers the same
-       * request again) — both buttons already shared this exact code path
-       * (only `variant`/label differed by `ideas.length`), so round 22's
-       * row layout already applied to both equally.
-       *
-       * Round 22 (user-requested, annotated screenshot): the progress
-       * block moves from *under* the button to *beside* it, in the same
-       * row — button on the left, progress bar/status/hint stacked in the
-       * remaining width to its right.
-       *
-       * Round 23 (user-requested): both buttons now use the same solid
-       * `default` style (the `outline` variant for "Generate new ideas"
-       * is gone — same color as "Generate my 5 ideas"). The progress
-       * block's wrapper is now always rendered (never unmounted) and
-       * fades via `transition-opacity` instead of popping in/out — since
-       * it's always present, it also always reserves its own real height,
-       * so the footer doesn't jump when generation starts or ends; no
-       * height was guessed/hardcoded for this.
-       */}
-      {phase !== 'loading' ? (
-        <CardFooter className="flex flex-row items-start gap-4">
-          <Button type="button" onClick={handleGenerate} disabled={generating} className="shrink-0">
-            {generating ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-                {t('generatingButton')}
-              </>
-            ) : ideas.length > 0 ? (
-              t('generateNewButton')
-            ) : (
-              t('generateButton')
-            )}
-          </Button>
-          {/* Story 2.2 follow-up fix 2: an indeterminate (no percentage) progress
-           * indicator while POST /api/ideas/generate is pending — a live region
-           * so assistive tech announces the status/hint text as it appears,
-           * not just on first render. */}
-          <div
-            className={`flex flex-1 flex-col gap-2 transition-opacity duration-200 ${generating ? 'opacity-100' : 'opacity-0'}`}
-            aria-live="polite"
-            role={generating ? 'status' : undefined}
-            aria-hidden={!generating}
-          >
-            <DeterminateProgressBar percent={progress} label={t('generatingStatus')} />
-            <p className="text-sm font-medium">{t('generatingStatus')}</p>
-            <p className="text-xs text-muted-foreground">{t('generatingHint')}</p>
-          </div>
-        </CardFooter>
-      ) : null}
-    </Card>
+      </Card>
+      {/* Story 2.8 AC3: panel-level (rendered once, not per-card) — driven by
+       * `confirmIdea`. Confirming demotes nothing until the status write
+       * actually succeeds; canceling changes nothing at all. */}
+      <Dialog open={confirmIdea !== null} onOpenChange={(open: boolean) => { if (!open) setConfirmIdea(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t('confirmSelect.title')}</DialogTitle>
+            <DialogDescription>{t('confirmSelect.description')}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setConfirmIdea(null)}>
+              {t('confirmSelect.cancel')}
+            </Button>
+            <Button type="button" onClick={() => void handleConfirmSelect()}>
+              {t('confirmSelect.confirm')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }

@@ -23,8 +23,15 @@ import { Textarea } from '../../components/ui/textarea';
 /** Client-side cap on how long `POST /api/intake` (an LLM-backed, agent-
  * invoking call) is allowed to hang before this form treats it the same as
  * any other submit failure — no request should ever leave the user staring
- * at "Saving…" forever. */
-const SUBMIT_TIMEOUT_MS = 20_000;
+ * at "Saving…" forever. Bug fix (user-reported: intake submit "takes long"):
+ * must stay longer than the server's own per-call budget
+ * (`MODEL_NODE_TIMEOUT_MS`, `src/agent/resilience.ts`, 30s — moderation
+ * before + the classification call + moderation after, all within one node)
+ * or this form can abort and report "failed" on a request that was still
+ * genuinely working server-side and would have succeeded. Same
+ * client-longer-than-server margin `IdeasPanel.tsx`'s own
+ * `GENERATE_TIMEOUT_MS`/`IDEAS_MODEL_NODE_TIMEOUT_MS` pair already uses. */
+const SUBMIT_TIMEOUT_MS = 40_000;
 
 const BLANK_FORM: SubmitIntakeRequest = {
   skillsInterests: '',
@@ -290,7 +297,7 @@ export function IntakeForm({ onSaved }: IntakeFormProps) {
             </Badge>
           ) : null}
         </CardContent>
-        <CardFooter>
+        <CardFooter className="flex flex-col items-start gap-2">
           <Button type="submit" disabled={disabled}>
             {submitting ? (
               <>
@@ -301,6 +308,17 @@ export function IntakeForm({ onSaved }: IntakeFormProps) {
               t('submitButton')
             )}
           </Button>
+          {/* UX fix (user-reported: submit "takes long" with no explanation)
+           * — the real cause (moderation + the model's own classification
+           * call, AD-4/AD-11) can't be removed without weakening either, so
+           * this sets honest expectations instead of leaving a bare spinner,
+           * same pattern as `IdeasPanel`'s `generatingHint`/`PlanWorkspace`'s
+           * `loadingHint`. */}
+          {submitting ? (
+            <p aria-live="polite" className="text-xs text-muted-foreground">
+              {t('savingHint')}
+            </p>
+          ) : null}
         </CardFooter>
       </form>
     </Card>

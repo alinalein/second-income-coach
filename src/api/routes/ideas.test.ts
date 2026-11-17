@@ -6,7 +6,7 @@ import { afterAll, describe, expect, it, vi } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { createIdeasRouter, type IdeasRouterDeps } from './ideas.js';
 import { createDb } from '../../db/client.js';
-import { users, ideas, userSettings } from '../../db/schema/index.js';
+import { users, ideas, userSettings, plans } from '../../db/schema/index.js';
 
 const testEnv: IdeasRouterDeps['env'] = { RATE_LIMIT_WINDOW_MS: 60_000 };
 
@@ -104,6 +104,27 @@ describe('createIdeasRouter GET /', () => {
       expect(res.body.currency).toBe('EUR');
       expect(res.body.ideas[0].startupCost).toEqual({ amountMinorUnits: 0, currencyCode: 'EUR' });
     } finally {
+      await cleanUp(userId);
+    }
+  });
+
+  // AC5 (Story 2.8): `hasPlan` is a derived, read-only join against the
+  // `plans` table — true for an idea with an existing plan row, false for
+  // one without.
+  it('reports hasPlan: true for an idea with an existing plan row, and false for one without', async () => {
+    const userId = await createTestUser();
+    try {
+      const ids = await insertFiveIdeas(userId);
+      await db.insert(plans).values({ ideaId: ids[0]!, userId, threadId: `plan:${randomUUID()}` });
+
+      const res = await request(buildTestApp(fakeAgent(), userId)).get('/api/ideas');
+
+      expect(res.status).toBe(200);
+      const hasPlanById = new Map(res.body.ideas.map((idea: { id: string; hasPlan: boolean }) => [idea.id, idea.hasPlan]));
+      expect(hasPlanById.get(ids[0]!)).toBe(true);
+      expect(hasPlanById.get(ids[1]!)).toBe(false);
+    } finally {
+      await db.delete(plans).where(eq(plans.userId, userId));
       await cleanUp(userId);
     }
   });

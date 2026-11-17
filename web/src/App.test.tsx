@@ -95,12 +95,14 @@ describe('App (AC: authenticated view renders)', () => {
   });
 
   // AC: "authenticated view renders" — a successful session response shows
-  // the authenticated shell (sign-out control, chat UI) instead of the
-  // sign-in card. Story 1.3 replaced the placeholder card with `ChatThread`
-  // (Code Map); `web/src/chat/ChatThread.test.tsx` covers that component's
-  // own behavior in detail. Story 2.1: now gated behind an existing intake
-  // row (see the "intake" describe block below for the no-intake branch).
-  it('shows the authenticated shell, sign-out control, and chat UI when GET /api/auth/session returns a user with an existing intake row', async () => {
+  // the authenticated shell (sign-out control, ideas panel) instead of the
+  // sign-in card. Story 2.1: now gated behind an existing intake row (see
+  // the "intake" describe block below for the no-intake branch). Story 2.8
+  // (guided-flow fix, user-reported): the discovery `ChatThread` no longer
+  // renders on this screen — it belongs once the user starts working on a
+  // chosen idea (`PlanWorkspace`'s own plan-thread chat), not while ideas
+  // are still being generated or picked from.
+  it('shows the authenticated shell, sign-out control, and ideas panel when GET /api/auth/session returns a user with an existing intake row', async () => {
     vi.stubGlobal(
       'fetch',
       mockFetch({
@@ -109,7 +111,6 @@ describe('App (AC: authenticated view renders)', () => {
           { status: 200 },
         ),
         '/api/intake': () => new Response(JSON.stringify({ intake: existingIntakeRecord() }), { status: 200 }),
-        '/api/chat/messages': new Response(JSON.stringify({ messages: [] }), { status: 200 }),
         '/api/ideas': () => new Response(JSON.stringify({ ideas: [], currency: 'EUR' }), { status: 200 }),
         '/api/settings': new Response(
           JSON.stringify({ personality: 'friendly', model: 'openai/gpt-6-luna', selectableModels: [], uiLanguage: 'English' }),
@@ -121,8 +122,8 @@ describe('App (AC: authenticated view renders)', () => {
     renderApp();
 
     expect(await screen.findByRole('button', { name: /sign out/i })).toBeInTheDocument();
-    expect(await screen.findByRole('textbox', { name: /message/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /send/i })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /your tailored income ideas/i })).toBeInTheDocument();
+    expect(screen.queryByRole('textbox', { name: /message/i })).not.toBeInTheDocument();
   });
 
   // Design Notes: "Callback failure" — a neutral, detail-free error is shown
@@ -147,11 +148,13 @@ describe('App (AC: authenticated view renders)', () => {
   });
 });
 
-// Story 2.1 (AC1/AC5): the intake form gates chat for a signed-in user with
-// no saved intake, and a revisit link lets a user with one come back to it.
-describe('App (Story 2.1: intake gates chat)', () => {
-  it('shows the blank intake form for a user with no intake row, and shows chat after a successful submission', async () => {
+// Story 2.1 (AC1/AC5): the intake form gates the ideas panel for a signed-in
+// user with no saved intake, and a revisit link lets a user with one come
+// back to it.
+describe('App (Story 2.1: intake gates the ideas panel)', () => {
+  it('shows the blank intake form for a user with no intake row, and shows the ideas panel after a successful submission', async () => {
     let postedBody: unknown;
+    const generateFetch = vi.fn(() => Promise.resolve(new Response(JSON.stringify({ ideas: [], currency: 'EUR' }), { status: 200 })));
 
     vi.stubGlobal(
       'fetch',
@@ -165,9 +168,12 @@ describe('App (Story 2.1: intake gates chat)', () => {
           }
           return Promise.resolve(new Response(JSON.stringify({ intake: null }), { status: 200 }));
         }
-        if (url.includes('/api/chat/messages')) {
-          return Promise.resolve(new Response(JSON.stringify({ messages: [] }), { status: 200 }));
-        }
+        // Story 2.8 AC1: the first-ever intake submit auto-fires
+        // `POST /api/ideas/generate` with no extra click — `GET /api/ideas`
+        // (checked first below, via the `init?.method` guard) must still
+        // report zero ideas so `IdeasPanel` is idle+empty when its
+        // auto-generate effect runs.
+        if (url.includes('/api/ideas/generate')) return generateFetch();
         if (url.includes('/api/ideas')) {
           return Promise.resolve(new Response(JSON.stringify({ ideas: [], currency: 'EUR' }), { status: 200 }));
         }
@@ -193,17 +199,20 @@ describe('App (Story 2.1: intake gates chat)', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: intakeEn.submitButton }));
 
-    expect(await screen.findByRole('textbox', { name: /message/i })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /your tailored income ideas/i })).toBeInTheDocument();
     expect(postedBody).toMatchObject({ skillsInterests: 'Woodworking', stoppedBeforeText: 'I got overwhelmed.' });
+    // The only assertion this story's AC1 needs at the App level: generation
+    // started with no extra click — `IdeasPanel.test.tsx` covers the
+    // fire-once guard and the manual-trigger paths in detail.
+    await waitFor(() => expect(generateFetch).toHaveBeenCalledOnce());
   });
 
-  it('shows chat with a revisit link when intake already exists, and revisiting shows the prefilled form', async () => {
+  it('shows a revisit link when intake already exists, and revisiting shows the prefilled form', async () => {
     vi.stubGlobal(
       'fetch',
       mockFetch({
         '/api/auth/session': authSessionResponse(),
         '/api/intake': () => new Response(JSON.stringify({ intake: existingIntakeRecord() }), { status: 200 }),
-        '/api/chat/messages': new Response(JSON.stringify({ messages: [] }), { status: 200 }),
         '/api/ideas': () => new Response(JSON.stringify({ ideas: [], currency: 'EUR' }), { status: 200 }),
         '/api/settings': new Response(
           JSON.stringify({ personality: 'friendly', model: 'openai/gpt-6-luna', selectableModels: [], uiLanguage: 'English' }),

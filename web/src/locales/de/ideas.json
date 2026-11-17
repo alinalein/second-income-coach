@@ -1,5 +1,6 @@
 {
   "title": "Deine passenden Einkommensideen",
+  "explanation": "Wähle eine Idee aus, um daraus einen Plan zu machen, lehne die ab, die nicht zu dir passen, oder generiere eine neue Auswahl.",
   "loading": "Wird geladen…",
   "empty": "Du hast noch keine Ideen — lass uns deine ersten 5 generieren.",
   "generateButton": "Meine 5 Ideen generieren",
@@ -22,6 +23,12 @@
     "bookmark": "Merken",
     "reject": "Ablehnen",
     "viewPlan": "Plan ansehen"
+  },
+  "confirmSelect": {
+    "title": "Diese Idee auswählen?",
+    "description": "Diese Idee wird dein ausgewählter Plan. Die anderen bleiben als Lesezeichen erhalten, falls du später zurückkommen möchtest.",
+    "confirm": "Ja, diese Idee auswählen",
+    "cancel": "Abbrechen"
   },
   "card": {
     "weeklyTimeLabel": "Zeit pro Woche",

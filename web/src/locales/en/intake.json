@@ -4,6 +4,7 @@
   "loading": "Loading…",
   "submitButton": "Save and continue",
   "savingButton": "Saving…",
+  "savingHint": "This can take up to half a minute — we're classifying your answer and checking it, same as every message.",
   "revisitLink": "Review your intake answers",
   "skillsInterests": {
     "label": "Skills and interests",

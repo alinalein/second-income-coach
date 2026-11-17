@@ -4,6 +4,7 @@
   "loading": "Wird geladen…",
   "submitButton": "Speichern und weiter",
   "savingButton": "Wird gespeichert…",
+  "savingHint": "Das kann bis zu einer halben Minute dauern — wir ordnen deine Antwort ein und prüfen sie, wie jede Nachricht.",
   "revisitLink": "Deine Angaben überprüfen",
   "skillsInterests": {
     "label": "Fähigkeiten und Interessen",
