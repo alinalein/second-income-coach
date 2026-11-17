@@ -12,6 +12,7 @@
     "checking_message": "Prüfe deine Nachricht…",
     "generating_response": "Denke nach…",
     "checking_answer": "Prüfe die Antwort…",
+    "creating_plan": "Arbeite an deinem Plan…",
     "tool_fallback": "Arbeite daran…"
   }
 }

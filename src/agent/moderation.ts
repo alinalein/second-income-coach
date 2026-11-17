@@ -204,6 +204,21 @@ export interface CreateModerationMiddlewareOptions {
 }
 
 /**
+ * Measurement (user-requested): logs how long each moderation step actually
+ * takes, so a real run's numbers can answer "does Mistral matter" for
+ * latency rather than guessing. `skipped` covers both "never ran" (the
+ * trigger-message bypass below) and "nothing to check" (no text on this
+ * message) — both are zero-cost, distinguished by `reason`.
+ */
+function logModerationTiming(
+  event: 'moderation_before' | 'moderation_after',
+  elapsedMs: number,
+  extra: { skipped?: boolean; reason?: string } = {},
+): void {
+  console.log(`[moderation] ${event}`, { elapsedMs, ...extra });
+}
+
+/**
  * Mistral Moderation 2 at `beforeModel`/`afterModel` (Intent). Built with
  * `createMiddleware` — per epic-1-context.md: "Its built-in hooks
  * (`beforeModel`/`wrapToolCall`/`afterModel`, etc.) are the only
@@ -222,11 +237,31 @@ export function createModerationMiddleware(
       // Declares the jailbreak short-circuit this hook may take (Intent:
       // "jailbreak → reject the turn ... return the fixed response").
       canJumpTo: ['end'],
-      hook: async (state: { messages: BaseMessage[] }, runtime: { configurable?: { thread_id?: string } }) => {
-        const lastHuman = lastMessageOfType(state.messages, 'human');
-        if (!lastHuman?.text) return undefined;
+      hook: async (
+        state: { messages: BaseMessage[] },
+        runtime: { configurable?: { thread_id?: string; skipInputModeration?: boolean } },
+      ) => {
+        // Perf fix (user-requested): the lazy `create_plan` trigger message
+        // ("call create_plan now") is server-authored, never user input —
+        // there is nothing to screen. Scoped to the one call site that sets
+        // this flag (`src/api/routes/plans.ts`); every other caller (real
+        // user messages, including this same plan thread's own later
+        // follow-up questions) never sets it, so AD-11's screening of actual
+        // user input is unchanged everywhere else.
+        if (runtime.configurable?.skipInputModeration) {
+          logModerationTiming('moderation_before', 0, { skipped: true, reason: 'server_authored_trigger' });
+          return undefined;
+        }
 
+        const lastHuman = lastMessageOfType(state.messages, 'human');
+        if (!lastHuman?.text) {
+          logModerationTiming('moderation_before', 0, { skipped: true, reason: 'no_text' });
+          return undefined;
+        }
+
+        const start = Date.now();
         const verdict = await evaluateUserMessage(lastHuman.text, classify, runtime.configurable?.thread_id);
+        logModerationTiming('moderation_before', Date.now() - start);
 
         if (verdict.action === 'reject') {
           return { messages: [new AIMessage({ content: verdict.content })], jumpTo: 'end' as const };
@@ -242,15 +277,21 @@ export function createModerationMiddleware(
     },
     afterModel: async (state: { messages: BaseMessage[] }, runtime: { configurable?: { thread_id?: string } }) => {
       const lastAi = lastMessageOfType(state.messages, 'ai');
-      if (!lastAi?.text) return undefined;
+      if (!lastAi?.text) {
+        logModerationTiming('moderation_after', 0, { skipped: true, reason: 'no_text' });
+        return undefined;
+      }
 
       const lastHuman = lastMessageOfType(state.messages, 'human');
+      const start = Date.now();
       const verdict = await evaluateAssistantMessage(
         lastAi.text,
         classify,
         runtime.configurable?.thread_id,
         lastHuman?.text,
       );
+      logModerationTiming('moderation_after', Date.now() - start);
+
       if (verdict.action === 'replace') {
         return { messages: [new AIMessage({ id: lastAi.id, content: verdict.content })] };
       }

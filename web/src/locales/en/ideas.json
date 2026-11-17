@@ -20,7 +20,8 @@
   "actions": {
     "select": "Select",
     "bookmark": "Bookmark",
-    "reject": "Reject"
+    "reject": "Reject",
+    "viewPlan": "View plan"
   },
   "card": {
     "weeklyTimeLabel": "Weekly time",

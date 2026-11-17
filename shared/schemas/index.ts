@@ -103,6 +103,7 @@ export const MODEL_FAILURE_MESSAGE =
 
 export * from './intake.js';
 export * from './ideas.js';
+export * from './plans.js';
 export * from '../money.js';
 export * from './settings.js';
 

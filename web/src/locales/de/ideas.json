@@ -20,7 +20,8 @@
   "actions": {
     "select": "Auswählen",
     "bookmark": "Merken",
-    "reject": "Ablehnen"
+    "reject": "Ablehnen",
+    "viewPlan": "Plan ansehen"
   },
   "card": {
     "weeklyTimeLabel": "Zeit pro Woche",

@@ -1,0 +1,14 @@
+{
+  "backToIdeas": "Zurück zu den Ideen",
+  "loading": "Dein Plan wird vorbereitet…",
+  "loadingHint": "Das kann einige Sekunden dauern.",
+  "loadFailed": "Dein Plan konnte nicht geladen werden. Bitte versuche es erneut.",
+  "statusPanel": {
+    "title": "Dein Plan für {{ideaTitle}}",
+    "loading": "Lädt…",
+    "loadFailed": "Dein aktueller Schritt konnte nicht geladen werden.",
+    "noCurrentStep": "Noch kein aktueller Schritt.",
+    "nextLabel": "Als Nächstes (gesperrt)",
+    "dayLabel": "Tag {{day}}"
+  }
+}

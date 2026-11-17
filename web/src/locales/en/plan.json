@@ -1,0 +1,14 @@
+{
+  "backToIdeas": "Back to ideas",
+  "loading": "Setting up your plan…",
+  "loadingHint": "This can take a few seconds.",
+  "loadFailed": "Couldn't load your plan. Please try again.",
+  "statusPanel": {
+    "title": "Your plan for {{ideaTitle}}",
+    "loading": "Loading…",
+    "loadFailed": "Couldn't load your current step.",
+    "noCurrentStep": "No current step yet.",
+    "nextLabel": "Next (locked)",
+    "dayLabel": "Day {{day}}"
+  }
+}

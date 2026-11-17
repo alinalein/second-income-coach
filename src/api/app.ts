@@ -15,6 +15,8 @@ import { createAuthRouter } from './routes/auth.js';
 import { createChatRouter } from './routes/chat.js';
 import { createIntakeRouter } from './routes/intake.js';
 import { createIdeasRouter } from './routes/ideas.js';
+import { createPlansRouter } from './routes/plans.js';
+import { createPlanChatRouter } from './routes/plan-chat.js';
 import { createSettingsRouter } from './routes/settings.js';
 
 export interface AppDeps {
@@ -27,6 +29,10 @@ export interface AppDeps {
    * the ideas route below, since `generate_ideas` routinely runs longer
    * than the chat/intake budget. */
   ideasAgent: CoachAgent;
+  /** Story 3.1: a third compiled agent, with `create_plan`/
+   * `get_current_step` wired in instead of `submit_intake`/`generate_ideas`
+   * — used only by the plans/plan-chat routes below. */
+  plansAgent: CoachAgent;
 }
 
 /**
@@ -41,7 +47,7 @@ export interface AppDeps {
  * Built as a factory (not a top-level `listen()`) so tests can construct the
  * app against injected deps without binding a real port or a real database.
  */
-export function createApp({ env, db, pool, agent, ideasAgent }: AppDeps) {
+export function createApp({ env, db, pool, agent, ideasAgent, plansAgent }: AppDeps) {
   const app = express();
 
   // Behind a reverse proxy (Cloud Run, or any future load balancer), trust the
@@ -98,6 +104,12 @@ export function createApp({ env, db, pool, agent, ideasAgent }: AppDeps) {
   // Story 2.2: tailored idea generation, same auth-gated mounting. Uses
   // `ideasAgent` (longer node timeout, follow-up fix 1), not `agent`.
   app.use('/api/ideas', createIdeasRouter({ env, db, agent: ideasAgent }));
+
+  // Story 3.1: lazy draft-plan creation + the sole current-step read path,
+  // plus the plan thread's own free-form chat — both use `plansAgent`
+  // (`create_plan`/`get_current_step`), never `agent`/`ideasAgent`.
+  app.use('/api/plans', createPlansRouter({ env, db, agent: plansAgent }));
+  app.use('/api/plans', createPlanChatRouter({ env, db, agent: plansAgent }));
 
   // Story 5.1: personality + model settings, same auth gate as /api/chat.
   app.use('/api/settings', createSettingsRouter({ env, db }));

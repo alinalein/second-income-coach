@@ -9,13 +9,21 @@ import {
   TOOL_FALLBACK,
 } from './progress.js';
 
-// I/O matrix: "Unmapped tool step (forward-looking; no tool exists yet) ...
-// resolves to the fixed `tool_fallback` step key, never the raw tool name."
-// `TOOL_STEP_REGISTRY` is empty until a tool-introducing story (Epic 2+)
-// adds an entry, so every tool name is unmapped in this story.
+// I/O matrix: "Unmapped tool step ... resolves to the fixed `tool_fallback`
+// step key, never the raw tool name" / AD-31: "each tool-introducing story
+// registers its own label key". `TOOL_STEP_REGISTRY` now carries Story 3.1's
+// `create_plan` -> `creating_plan` entry; `web_search`/`get_current_step`
+// stay unmapped (still-open gaps, spec Design Notes), so they still fall
+// back to the generic key.
 describe('resolveToolStepKey (AC2/I/O matrix: unmapped tool step)', () => {
   it('falls back to the fixed generic key for any tool name, never the raw name', () => {
     expect(resolveToolStepKey('web_search')).toBe(TOOL_FALLBACK);
+  });
+
+  // Story 3.1 (Code Map: "Story 3.1 registers 'Working on your plan…' for
+  // `create_plan`").
+  it.each([['create_plan', 'creating_plan']] as const)('resolves %j -> %j from the registry', (toolName, expected) => {
+    expect(resolveToolStepKey(toolName)).toBe(expected);
   });
 });
 

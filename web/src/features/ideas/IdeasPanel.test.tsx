@@ -275,6 +275,41 @@ describe('IdeasPanel (AC2: status badge + action buttons on the card)', () => {
   });
 });
 
+// Story 3.1: "a 'View plan' action on a `selected`/`bookmarked` idea card" —
+// present and wired to `onViewPlan(idea.id, idea.title)` for either status
+// (UI fix, user-reported: the title rides along so the plan workspace can
+// label itself "Your plan for <idea>"), absent for a still-`suggested` idea.
+describe('IdeasPanel (Story 3.1: View plan action)', () => {
+  it.each(['selected', 'bookmarked'] as const)('fires onViewPlan(idea.id, idea.title) for a "%s" idea', async (status) => {
+    const idea: IdeaResponse = { ...fakeIdea(), status };
+    vi.stubGlobal(
+      'fetch',
+      mockFetch({ '/api/ideas': () => new Response(JSON.stringify({ ideas: [idea], currency: 'EUR' }), { status: 200 }) }),
+    );
+    const onViewPlan = vi.fn();
+
+    render(<IdeasPanel onViewPlan={onViewPlan} />);
+
+    const viewPlanButton = await screen.findByRole('button', { name: 'View plan' });
+    fireEvent.click(viewPlanButton);
+
+    expect(onViewPlan).toHaveBeenCalledExactlyOnceWith(idea.id, idea.title);
+  });
+
+  it('renders no View plan button for a still-suggested idea', async () => {
+    const idea: IdeaResponse = { ...fakeIdea(), status: 'suggested' };
+    vi.stubGlobal(
+      'fetch',
+      mockFetch({ '/api/ideas': () => new Response(JSON.stringify({ ideas: [idea], currency: 'EUR' }), { status: 200 }) }),
+    );
+
+    render(<IdeasPanel onViewPlan={vi.fn()} />);
+
+    await screen.findByRole('button', { name: 'Select' });
+    expect(screen.queryByRole('button', { name: 'View plan' })).not.toBeInTheDocument();
+  });
+});
+
 // Story 2.3 AC1/AC2: clicking an action updates the card's own status
 // immediately (optimistic — never waits on the response) and sends the new
 // status to the server.

@@ -113,6 +113,15 @@ function trimBareListMarker(text: string): string {
   return /^\d+[.)][ \t]*$/.test(text.slice(lineStart)) ? text.slice(0, lineStart) : text;
 }
 
+/**
+ * Story 3.1: the footer extension point (Code Map: "an ordered list of
+ * footer items rendered beneath each agent message"). Empty by default —
+ * Story 5.2 (`MessageCost`) and Story 5.3 (`MessageFeedback`) each register
+ * their own component here; neither exists yet, so nothing renders by
+ * default and every Story 1.3 behavior stays unchanged.
+ */
+export type ChatMessageFooterItem = React.ComponentType<{ message: ChatMessageType }>;
+
 export interface ChatMessageProps {
   message: ChatMessageType;
   /**
@@ -121,6 +130,8 @@ export interface ChatMessageProps {
    * `result` event, never for history reads.
    */
   animate?: boolean;
+  /** Story 3.1 extension point — see `ChatMessageFooterItem` above. */
+  footerItems?: readonly ChatMessageFooterItem[];
 }
 
 /**
@@ -132,7 +143,7 @@ export interface ChatMessageProps {
  * bubble's `role` (`'alert'` for an error, `'status'` for a notice, no role
  * for a normal message) — never a different visual treatment.
  */
-export function ChatMessage({ message, animate = false }: ChatMessageProps) {
+export function ChatMessage({ message, animate = false, footerItems = [] }: ChatMessageProps) {
   const shouldAnimate = animate && message.kind === 'message';
   // Review loop 2 (edge-case-hunter): iterate by Unicode code point, not
   // UTF-16 code unit — `content.slice(n)` can split an astral-plane
@@ -197,6 +208,16 @@ export function ChatMessage({ message, animate = false }: ChatMessageProps) {
             {isRevealing ? hideIncompleteMarkdownTail(codePoints.slice(0, revealedLength).join('')) : message.content}
           </ReactMarkdown>
         )}
+        {/* Story 3.1 extension point: empty by default (no items registered
+         * yet) — renders nothing until 5.2/5.3 register their own footer
+         * item components. */}
+        {footerItems.length > 0 ? (
+          <div className="mt-1 flex items-center gap-2">
+            {footerItems.map((FooterItem, index) => (
+              <FooterItem key={index} message={message} />
+            ))}
+          </div>
+        ) : null}
       </div>
     </div>
   );

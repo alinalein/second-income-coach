@@ -4,8 +4,10 @@ import { createDb } from '../db/client.js';
 import { createCheckpointer } from '../agent/checkpointer.js';
 import { createCoachAgent } from '../agent/index.js';
 import { createChatModel } from '../agent/model.js';
-import { IDEAS_MODEL_NODE_TIMEOUT_MS, IDEAS_MODEL_NODE_RETRY_POLICY } from '../agent/resilience.js';
+import { IDEAS_MODEL_NODE_TIMEOUT_MS, IDEAS_MODEL_NODE_RETRY_POLICY, PLAN_MODEL_NODE_TIMEOUT_MS, PLAN_MODEL_NODE_RETRY_POLICY } from '../agent/resilience.js';
 import { getWebSearchTool } from '../tools/mcp/web_search.js';
+import { createCreatePlanTool } from '../tools/llm/create_plan.js';
+import { createGetCurrentStepTool } from '../tools/plain/get_current_step.js';
 import { createApp } from './app.js';
 
 const CHECKPOINTER_SETUP_TIMEOUT_MS = 10_000;
@@ -104,8 +106,24 @@ try {
     // timeout there is a failure, never a re-run of every search.
     modelNodeRetryPolicy: IDEAS_MODEL_NODE_RETRY_POLICY,
   });
+  // Story 3.1: a third compiled agent — same checkpointer/db/model as the
+  // other two, but its own tool set (`create_plan`/`get_current_step`,
+  // never `submit_intake`/`generate_ideas`) and its own (shorter, no-search)
+  // resilience budget. `webSearchTool` is still passed through only because
+  // `createCoachAgent`'s own dependency shape requires it — this agent's
+  // `tools: [...]` override never references it.
+  const plansAgent = createCoachAgent({
+    env,
+    checkpointer,
+    db,
+    webSearchTool,
+    model: chatModel,
+    modelNodeTimeoutMs: PLAN_MODEL_NODE_TIMEOUT_MS,
+    modelNodeRetryPolicy: PLAN_MODEL_NODE_RETRY_POLICY,
+    tools: [createCreatePlanTool(db, chatModel), createGetCurrentStepTool(db)],
+  });
 
-  const app = createApp({ env, db, pool, agent, ideasAgent });
+  const app = createApp({ env, db, pool, agent, ideasAgent, plansAgent });
 
   const server = app.listen(env.PORT, () => {
     console.log(`[api] listening on http://localhost:${env.PORT} (${env.NODE_ENV})`);

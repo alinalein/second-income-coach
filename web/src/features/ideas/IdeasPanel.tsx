@@ -385,12 +385,21 @@ function IdeaCard({
   currency,
   locale,
   onSetStatus,
+  onViewPlan,
   pending,
 }: {
   idea: IdeaResponse;
   currency: CurrencyCode;
   locale: string;
   onSetStatus: (ideaId: string, status: SettableStatus) => void;
+  /** Story 3.1: present only for a `selected`/`bookmarked` idea — navigates
+   * to that idea's `PlanWorkspace` (lazily creating its draft plan via
+   * `POST /api/plans/select/:ideaId` if none exists yet). `undefined` for a
+   * still-`suggested` idea, which has no plan to view. The idea's own title
+   * is passed through (UI fix, user-reported) so the workspace can label
+   * itself "Your plan for <idea>" instead of a bare "Your plan" that gives
+   * no hint which idea it's for. */
+  onViewPlan?: (ideaId: string, ideaTitle: string) => void;
   pending: boolean;
 }) {
   const { t } = useTranslation('ideas');
@@ -605,41 +614,51 @@ function IdeaCard({
        * a menu (Story 2.3 AC2) — the 5th and last of the card's subgridded
        * rows (see the doc comment above), so it lands at an identical
        * height across every card in a row with no margin trick needed; its
-       * own content (3 buttons) never varies in height across ideas. The
-       * action matching the card's current status renders as the primary
-       * (`default`) button; the others are `outline`. None is primary
-       * while still `suggested`. */}
-      <div className="flex gap-2">
-        <Button
-          type="button"
-          size="sm"
-          variant={idea.status === 'selected' ? 'default' : 'outline'}
-          className="flex-1"
-          disabled={pending}
-          onClick={() => onSetStatus(idea.id, 'selected')}
-        >
-          {t('actions.select')}
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant={idea.status === 'bookmarked' ? 'default' : 'outline'}
-          className="flex-1"
-          disabled={pending}
-          onClick={() => onSetStatus(idea.id, 'bookmarked')}
-        >
-          {t('actions.bookmark')}
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant={idea.status === 'rejected' ? 'default' : 'outline'}
-          className="flex-1"
-          disabled={pending}
-          onClick={() => onSetStatus(idea.id, 'rejected')}
-        >
-          {t('actions.reject')}
-        </Button>
+       * own content (3 buttons, plus the Story 3.1 "View plan" row below
+       * for a `selected`/`bookmarked` idea) never varies in height across
+       * ideas of the same status. The action matching the card's current
+       * status renders as the primary (`default`) button; the others are
+       * `outline`. None is primary while still `suggested`. */}
+      <div className="flex flex-col gap-2">
+        <div className="flex gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant={idea.status === 'selected' ? 'default' : 'outline'}
+            className="flex-1"
+            disabled={pending}
+            onClick={() => onSetStatus(idea.id, 'selected')}
+          >
+            {t('actions.select')}
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant={idea.status === 'bookmarked' ? 'default' : 'outline'}
+            className="flex-1"
+            disabled={pending}
+            onClick={() => onSetStatus(idea.id, 'bookmarked')}
+          >
+            {t('actions.bookmark')}
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant={idea.status === 'rejected' ? 'default' : 'outline'}
+            className="flex-1"
+            disabled={pending}
+            onClick={() => onSetStatus(idea.id, 'rejected')}
+          >
+            {t('actions.reject')}
+          </Button>
+        </div>
+        {/* Story 3.1: "a 'View plan' action on a `selected`/`bookmarked`
+         * idea card" — never for a still-`suggested` or `rejected` one. */}
+        {onViewPlan && (idea.status === 'selected' || idea.status === 'bookmarked') ? (
+          <Button type="button" size="sm" variant="ghost" className="w-full" disabled={pending} onClick={() => onViewPlan(idea.id, idea.title)}>
+            {t('actions.viewPlan')}
+          </Button>
+        ) : null}
       </div>
     </Card>
   );
@@ -653,7 +672,13 @@ function IdeaCard({
  * — this only ever asks the agent to run `generate_ideas`, never calls its
  * persistence logic directly (Boundary).
  */
-export function IdeasPanel() {
+export interface IdeasPanelProps {
+  /** Story 3.1: forwarded to each card's "View plan" action — omitted
+   * entirely means no card shows that action (test/compat default). */
+  onViewPlan?: (ideaId: string, ideaTitle: string) => void;
+}
+
+export function IdeasPanel({ onViewPlan }: IdeasPanelProps = {}) {
   const { t, i18n } = useTranslation('ideas');
   const [ideas, setIdeas] = React.useState<IdeaResponse[]>([]);
   const [currency, setCurrency] = React.useState<CurrencyCode>('EUR');
@@ -862,6 +887,7 @@ export function IdeasPanel() {
                 currency={currency}
                 locale={locale}
                 onSetStatus={handleSetIdeaStatus}
+                onViewPlan={onViewPlan}
                 // Only the card(s) this specific action touches disable —
                 // the target, plus any siblings a `selected` sweep demotes
                 // (those are genuinely changing too). An unrelated card's
