@@ -1058,7 +1058,7 @@ So that I get specific encouragement without empty praise.
 
 **Given** the user starts a step
 **When** `start_step` is called
-**Then** a distinct start-of-action acknowledgment fires, separate from completion; it appears as a short, motivating, non-punitive assistant message in the plan chat (written in the user's language, no streaks/points, AD-12 guilt check applies), produced by one direct model call from the start route (AD-4 amendment), not just a hidden button; the status panel shows the day label above the current step's title (not below its description), and the following step is labelled "Next step" (DE/EN), not "Next (locked)"
+**Then** a distinct start-of-action acknowledgment fires, separate from completion; it appears as a short, motivating, non-punitive assistant message in the plan chat (written in the user's language, no streaks/points, AD-12 guilt check applies), produced by one direct model call from the start route (AD-4 amendment), not just a hidden button, and consecutive start messages must not repeat each other (no repeated opener such as "You've started ... that's a meaningful step ... keep going at your own pace"): vary wording and length, sometimes just one short sentence; the status panel shows the day label above the current step's title (not below its description), and the following step is labelled "Next step" (DE/EN), not "Next (locked)"
 
 **Given** the user completes a step
 **When** `complete_step` fires
