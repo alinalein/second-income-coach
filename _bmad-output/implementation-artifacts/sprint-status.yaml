@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 11-14-2026 19:50
-last_updated: 11-18-2026 20:00
+last_updated: '2026-11-18'
 project: Second Income Coach
 project_key: NOKEY
 tracking_system: file-system
@@ -52,7 +52,7 @@ development_status:
   2-5-opportunity-discovery-growth-path: done
   2-7-translate-idea-cards-on-language-change: done
   2-8-guided-flow-from-intake-to-plan: done
-  2-9-app-navigation-sidebar: backlog
+  2-9-app-navigation-sidebar: done
   2-10-direct-paths-for-button-triggered-flows: done
   2-11-search-budget-guard: done
   2-12-smooth-generation-flow: backlog
@@ -63,12 +63,12 @@ development_status:
   epic-3: backlog
   3-1-draft-plan-generation-with-failure-pattern-aware-steps: done
   3-2-human-confirmed-plan-activation: done
-  3-3-switching-between-plans: backlog
+  3-3-switching-between-plans: done
   epic-3-retrospective: optional
 
   epic-4: backlog
-  4-1-text-check-in-with-start-finish-acknowledgment: backlog
-  4-2-non-punitive-missed-check-in-handling: backlog
+  4-1-text-check-in-with-start-finish-acknowledgment: done
+  4-2-non-punitive-missed-check-in-handling: done
   4-3-voice-check-in-with-editable-transcript: backlog
   4-4-live-income-opportunity-projection: backlog
   epic-4-retrospective: optional
@@ -76,7 +76,7 @@ development_status:
   epic-5: backlog
   5-1-personality-model-selection: done
   5-2-token-cost-display: done
-  5-3-response-feedback: in-progress
+  5-3-response-feedback: done
   5-4-ui-language-selection: done
   5-5-currency-selection: done
   epic-5-retrospective: optional
