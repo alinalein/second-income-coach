@@ -44,6 +44,11 @@ const PROGRESS_LABEL_FADE_MS = 200;
  * 0.85, before that 0.7. */
 const ALMOST_FULL_THRESHOLD_RATIO = 1;
 
+/** User-reported: the composer text field's auto-grow cap — about 6 lines
+ * of text, beyond which it scrolls internally instead of growing forever
+ * and pushing the rest of the layout around. */
+const MAX_TEXTAREA_HEIGHT_PX = 150;
+
 function makeLocalMessage(role: ChatMessageType['role'], kind: ChatMessageType['kind'], content: string): ChatMessageType {
   return {
     id: `local-${Math.random().toString(36).slice(2)}-${Date.now()}`,
@@ -119,6 +124,19 @@ export function ChatThread({ endpoint = DEFAULT_CHAT_ENDPOINT, footerItems = [],
   // review/correct the transcript in this same input before sending, and
   // an edit is still the same (voice-originated) message.
   const [pendingVoiceLanguage, setPendingVoiceLanguage] = React.useState<DetectedLanguage | undefined>(undefined);
+  // User-reported: the composer's text field stayed a fixed one-line
+  // height even as `draft` grew past it (typed, or filled by voice) —
+  // the end of a long message was never visible without scrolling inside
+  // a single visible line. Auto-grows with content up to `MAX_TEXTAREA_
+  // HEIGHT_PX`, then scrolls internally rather than growing forever.
+  const textareaRef = React.useRef<HTMLTextAreaElement | null>(null);
+  const formRef = React.useRef<HTMLFormElement | null>(null);
+  React.useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, MAX_TEXTAREA_HEIGHT_PX)}px`;
+  }, [draft]);
   // AC1/AC3: the current turn's localized progress label, sourced from the
   // SSE `progress` frames (Code Map).
   const [currentStep, setCurrentStep] = React.useState<string | null>(null);
@@ -470,16 +488,27 @@ export function ChatThread({ endpoint = DEFAULT_CHAT_ENDPOINT, footerItems = [],
         </div>
       </CardContent>
       <CardFooter className="shrink-0">
-        <form onSubmit={handleSubmit} className="flex w-full gap-2">
-          <input
-            type="text"
+        <form ref={formRef} onSubmit={handleSubmit} className="flex w-full items-end gap-2">
+          <textarea
+            ref={textareaRef}
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              // Enter sends (matching the single-line input's old native
+              // behavior); Shift+Enter inserts a newline, same as every
+              // other chat composer.
+              if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                formRef.current?.requestSubmit();
+              }
+            }}
             placeholder={t('placeholder')}
             maxLength={CHAT_MESSAGE_MAX_LENGTH}
             disabled={sending}
             aria-label={t('messageAriaLabel')}
-            className="h-10 flex-1 rounded-md border border-border bg-card px-3 text-sm text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+            rows={1}
+            className="min-h-10 flex-1 resize-none overflow-y-auto rounded-md border border-border bg-card px-3 py-2 text-sm leading-normal text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+            style={{ maxHeight: MAX_TEXTAREA_HEIGHT_PX }}
           />
           {/* Story 3.1 extension point: empty by default — Story 4.3 fills
            * this with a voice-record control; typed text stays available

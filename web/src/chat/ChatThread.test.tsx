@@ -111,7 +111,7 @@ describe('ChatThread (AC: chat UI)', () => {
 
     render(<ChatThread />);
 
-    const input = (await screen.findByRole('textbox', { name: /message/i })) as HTMLInputElement;
+    const input = (await screen.findByRole('textbox', { name: /message/i })) as HTMLTextAreaElement;
     fireEvent.change(input, { target: { value: 'How do I get started?' } });
     fireEvent.click(screen.getByRole('button', { name: /send/i }));
 
@@ -156,7 +156,7 @@ describe('ChatThread (AC: chat UI)', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'voice-fill' }));
 
-    const input = (await screen.findByRole('textbox', { name: /message/i })) as HTMLInputElement;
+    const input = (await screen.findByRole('textbox', { name: /message/i })) as HTMLTextAreaElement;
     expect(input.value).toBe('Hallo');
 
     fireEvent.click(screen.getByRole('button', { name: /send/i }));
@@ -207,7 +207,7 @@ describe('ChatThread (AC: chat UI)', () => {
 
     render(<ChatThread />);
 
-    const input = (await screen.findByRole('textbox', { name: /message/i })) as HTMLInputElement;
+    const input = (await screen.findByRole('textbox', { name: /message/i })) as HTMLTextAreaElement;
     fireEvent.change(input, { target: { value: 'Hi' } });
     fireEvent.click(screen.getByRole('button', { name: /send/i }));
 
@@ -237,7 +237,7 @@ describe('ChatThread (AC: chat UI)', () => {
 
     render(<ChatThread />);
 
-    const input = (await screen.findByRole('textbox', { name: /message/i })) as HTMLInputElement;
+    const input = (await screen.findByRole('textbox', { name: /message/i })) as HTMLTextAreaElement;
     fireEvent.change(input, { target: { value: 'Hello?' } });
     fireEvent.click(screen.getByRole('button', { name: /send/i }));
 
@@ -283,7 +283,7 @@ describe('ChatThread (Story 2.13: chat scroll behaviour)', () => {
     const scrollToSpy = vi.spyOn(Element.prototype, 'scrollTo');
 
     render(<ChatThread />);
-    const input = (await screen.findByRole('textbox', { name: /message/i })) as HTMLInputElement;
+    const input = (await screen.findByRole('textbox', { name: /message/i })) as HTMLTextAreaElement;
     fireEvent.change(input, { target: { value: 'Give me an example' } });
     fireEvent.click(screen.getByRole('button', { name: /send/i }));
 
@@ -314,7 +314,7 @@ describe('ChatThread (Story 2.13: chat scroll behaviour)', () => {
     const scrollToSpy = vi.spyOn(Element.prototype, 'scrollTo');
 
     render(<ChatThread />);
-    const input = (await screen.findByRole('textbox', { name: /message/i })) as HTMLInputElement;
+    const input = (await screen.findByRole('textbox', { name: /message/i })) as HTMLTextAreaElement;
     fireEvent.change(input, { target: { value: 'Plan my day' } });
     fireEvent.click(screen.getByRole('button', { name: /send/i }));
 
@@ -356,7 +356,7 @@ describe('ChatThread (Story 2.13: chat scroll behaviour)', () => {
     const scrollToSpy = vi.spyOn(Element.prototype, 'scrollTo');
 
     render(<ChatThread />);
-    const input = (await screen.findByRole('textbox', { name: /message/i })) as HTMLInputElement;
+    const input = (await screen.findByRole('textbox', { name: /message/i })) as HTMLTextAreaElement;
     fireEvent.change(input, { target: { value: 'Plan something' } });
     fireEvent.click(screen.getByRole('button', { name: /send/i }));
 
@@ -416,7 +416,7 @@ describe('ChatThread (Story 2.13: chat scroll behaviour)', () => {
       get: () => realContentHeight + spacerNode.offsetHeight,
     });
 
-    const input = (await screen.findByRole('textbox', { name: /message/i })) as HTMLInputElement;
+    const input = (await screen.findByRole('textbox', { name: /message/i })) as HTMLTextAreaElement;
     async function send(content: string): Promise<void> {
       fireEvent.change(input, { target: { value: content } });
       fireEvent.click(screen.getByRole('button', { name: /send/i }));
@@ -484,7 +484,7 @@ describe('ChatThread (Story 5.3 Boundary: chat input independent of feedback)', 
 
     render(<ChatThread footerItems={[createMessageFeedbackItem('/api/chat/messages')]} />);
 
-    const input = (await screen.findByRole('textbox', { name: /message/i })) as HTMLInputElement;
+    const input = (await screen.findByRole('textbox', { name: /message/i })) as HTMLTextAreaElement;
     expect(input).not.toBeDisabled();
 
     fireEvent.click(screen.getByLabelText('Good response'));
