@@ -786,9 +786,13 @@ So that I never see a button flicker, a second wait or an abrupt text swap.
 
 **Acceptance Criteria:**
 
-**Given** the user presses Save on the intake form
+**Given** the user presses Save on the intake form for the FIRST time (no intake stored yet, e.g. right after the first sign-in)
 **When** the save is accepted
 **Then** the ideas view opens at once with generation already in progress: the generate button is shown in its disabled/transparent state and the progress bar is visible from the first frame (never an enabled green button that is then pressed by code); saving, classifying and generating are one continuous progress (stage text changes, the bar never restarts), and generation starts as soon as the intake is stored, without the user waiting on a separate save screen
+
+**Given** an intake already exists and the user edits it via "Review your intake answers"
+**When** they press Save
+**Then** it only saves (with a short confirmation): no redirect to the ideas view, no idea generation, no progress bar, and the "Review your intake answers" entry stays active in the sidebar as before
 
 **Given** the plan is being created after the user confirms a selection (Stories 2.8/3.1)
 **When** it is generated
