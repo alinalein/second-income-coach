@@ -702,7 +702,7 @@ So that I can move between the things I'm working on without hunting through the
 
 **Given** the "My plans" list
 **When** the user has plans
-**Then** each entry is one idea with a plan, titled with the idea, sorted by last activity; the active plan is marked, paused plans are dimmed; selecting an entry opens that plan's workspace (Story 3.1) with that plan's own chat thread (AD-18); with no plans the list shows a short localized note, never an error or blank area
+**Then** each entry is one idea with a plan, titled with the idea, in a stable order that never changes just because the user switches plans (by creation date, newest first; completed plans keep their place and only carry a neutral "Completed" label); no "Active"/"Paused" badges and no dimming; the open plan is shown as the normal selected entry, and the selection change animates smoothly (short colour/background transition, respects reduced motion), with no layout shift between rows; selecting an entry opens that plan's workspace (Story 3.1) with that plan's own chat thread (AD-18); with no plans the list shows a short localized note, never an error or blank area
 
 **Given** the "Bookmarked" list
 **When** the user has bookmarked ideas without a plan
@@ -820,7 +820,7 @@ So that I never see a button flicker, a second wait or an abrupt text swap.
 
 **Given** an intake already exists and the user edits it via "Review your intake answers"
 **When** they press Save
-**Then** it only saves (with a short confirmation): no redirect to the ideas view, no idea generation, no progress bar, and the "Review your intake answers" entry stays active in the sidebar as before
+**Then** it only saves, with the confirmation shown inside the Save button itself ("Saving…" then "Saved" with a check mark for a moment, then back to "Save" once the form is edited again; no separate "Saved." text below the button, and the button never stays stuck on "Saving…"): no redirect to the ideas view, no idea generation, no progress bar, and the "Review your intake answers" entry stays active in the sidebar as before
 
 **Given** the plan is being created after the user confirms a selection (Stories 2.8/3.1)
 **When** it is generated
