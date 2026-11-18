@@ -256,13 +256,13 @@ export function VoiceInput({ fillDraft, disabled }: VoiceInputProps) {
       <Button
         type="button"
         variant={status === 'recording' ? 'default' : 'outline'}
-        className="h-9 w-9 shrink-0 rounded-full p-0"
+        className="h-7 w-7 shrink-0 rounded-full p-0"
         disabled={disabled || status === 'transcribing'}
         aria-label={status === 'recording' ? t('voice.stopLabel') : t('voice.micLabel')}
         aria-pressed={status === 'recording'}
         onClick={handleMicClick}
       >
-        {status === 'recording' ? <Square className="h-4 w-4 fill-current" /> : <Mic className="h-4 w-4" />}
+        {status === 'recording' ? <Square className="h-3.5 w-3.5 fill-current" /> : <Mic className="h-3.5 w-3.5" />}
       </Button>
     </div>
   );

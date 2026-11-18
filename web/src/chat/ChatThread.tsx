@@ -483,7 +483,7 @@ export function ChatThread({ endpoint = DEFAULT_CHAT_ENDPOINT, footerItems = [],
           <div ref={bottomSpacerRef} data-testid="chat-bottom-spacer" aria-hidden="true" />
         </div>
       </CardContent>
-      <CardFooter className="flex flex-col items-stretch gap-2 shrink-0">
+      <CardFooter className="flex flex-col items-stretch gap-1.5 pb-3 shrink-0">
         <form ref={formRef} onSubmit={handleSubmit} className="flex w-full items-end gap-2">
           <textarea
             ref={textareaRef}
@@ -513,9 +513,9 @@ export function ChatThread({ endpoint = DEFAULT_CHAT_ENDPOINT, footerItems = [],
          * text field and Send) — Story 3.1 extension point, empty by
          * default; Story 4.3 fills it with a voice-record control. The
          * disclaimer sits next to it either way. */}
-        <div className="flex items-center gap-2 px-1">
+        <div className="flex items-center gap-2">
           {inputExtra?.(fillDraft, sending)}
-          <p className="text-xs text-muted-foreground">{t('aiDisclaimer')}</p>
+          <p className="rounded bg-muted/60 px-1.5 py-0.5 text-xs text-muted-foreground">{t('aiDisclaimer')}</p>
         </div>
       </CardFooter>
     </Card>
