@@ -7,17 +7,29 @@ type DataAvailableHandler = (event: { data: Blob }) => void;
 
 /** Minimal fake standing in for the real `MediaRecorder` — `start()` is a
  * no-op, `stop()` synchronously fires `ondataavailable` then `onstop`, same
- * as a real (very short) recording would, just without any real audio. */
+ * as a real (very short) recording would, just without any real audio.
+ * `emitChunk()` lets a test simulate one of `MediaRecorder`'s own periodic
+ * `ondataavailable` events while still recording (near-live mode), without
+ * stopping. */
 class FakeMediaRecorder {
   static isTypeSupported = () => true;
+  static instances: FakeMediaRecorder[] = [];
   ondataavailable: DataAvailableHandler | null = null;
   onstop: (() => void) | null = null;
   mimeType = 'audio/webm';
 
+  constructor() {
+    FakeMediaRecorder.instances.push(this);
+  }
+
   start(): void {}
 
-  stop(): void {
+  emitChunk(): void {
     this.ondataavailable?.({ data: new Blob(['fake-audio'], { type: 'audio/webm' }) });
+  }
+
+  stop(): void {
+    this.emitChunk();
     this.onstop?.();
   }
 }
@@ -38,6 +50,7 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   Reflect.deleteProperty(window.navigator, 'mediaDevices');
+  FakeMediaRecorder.instances = [];
 });
 
 // I/O matrix: "No MediaRecorder" -> neutral note instead of a mic button;
@@ -73,6 +86,46 @@ describe('VoiceInput (I/O matrix: happy path)', () => {
     fireEvent.click(screen.getByRole('button', { name: chatEn.voice.stopLabel }));
 
     await waitFor(() => expect(fillDraft).toHaveBeenCalledWith('Ich habe heute gut gearbeitet', 'de'));
+    expect(screen.getByRole('button', { name: chatEn.voice.micLabel })).toBeInTheDocument();
+  });
+});
+
+// User-requested near-live mode: a periodic slice while still recording
+// (not just the final stop) re-transcribes the clip-so-far and updates the
+// draft progressively, without leaving the recording state or showing any
+// notice for an interim call specifically.
+describe('VoiceInput (near-live mode: interim updates while still recording)', () => {
+  it('fills the draft on each interim slice while still recording, then again with the final result on stop', async () => {
+    stubSupportedMediaApis(vi.fn().mockResolvedValue(fakeStream()));
+    let callCount = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => {
+        callCount += 1;
+        const transcript = callCount === 1 ? 'Hallo' : callCount === 2 ? 'Hallo, wie' : 'Hallo, wie geht es dir';
+        return Promise.resolve(new Response(JSON.stringify({ transcript, detectedLanguage: 'de' }), { status: 200 }));
+      }),
+    );
+    const fillDraft = vi.fn();
+
+    render(<VoiceInput fillDraft={fillDraft} disabled={false} />);
+
+    fireEvent.click(screen.getByRole('button', { name: chatEn.voice.micLabel }));
+    await waitFor(() => expect(screen.getByRole('button', { name: chatEn.voice.stopLabel })).toBeInTheDocument());
+
+    const recorder = FakeMediaRecorder.instances.at(-1)!;
+    recorder.emitChunk();
+    await waitFor(() => expect(fillDraft).toHaveBeenNthCalledWith(1, 'Hallo', 'de'));
+    // Still recording — an interim update never moves the control out of
+    // the recording state.
+    expect(screen.getByRole('button', { name: chatEn.voice.stopLabel })).toBeInTheDocument();
+
+    recorder.emitChunk();
+    await waitFor(() => expect(fillDraft).toHaveBeenNthCalledWith(2, 'Hallo, wie', 'de'));
+    expect(screen.getByRole('button', { name: chatEn.voice.stopLabel })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: chatEn.voice.stopLabel }));
+    await waitFor(() => expect(fillDraft).toHaveBeenNthCalledWith(3, 'Hallo, wie geht es dir', 'de'));
     expect(screen.getByRole('button', { name: chatEn.voice.micLabel })).toBeInTheDocument();
   });
 });

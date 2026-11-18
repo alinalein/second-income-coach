@@ -18,6 +18,21 @@ export interface VoiceInputProps {
 type Status = 'idle' | 'recording' | 'transcribing';
 type NoticeKind = 'permissionDenied' | 'unsupported' | 'transcriptionFailed';
 
+/** User-requested near-live mode: `MediaRecorder`'s own periodic
+ * `ondataavailable` (via `recorder.start(CHUNK_INTERVAL_MS)`) is reused as
+ * the cadence for re-transcribing the growing clip-so-far and updating the
+ * draft while still recording — no separate timer needed. OpenRouter's
+ * transcription endpoint has no streaming/WebSocket variant (verified
+ * against its own docs), so this is the closest available approximation:
+ * the text catches up every couple of seconds, not instantly. */
+const CHUNK_INTERVAL_MS = 2500;
+
+/** Each interim call re-transcribes the *entire* clip so far (the endpoint
+ * has no "continue from here" mode), so cost/latency grow with recording
+ * length. Past this many accumulated chunks (~60s), interim updates stop;
+ * the final transcription on stop still covers the whole recording. */
+const MAX_INTERIM_CHUNKS = Math.ceil(60_000 / CHUNK_INTERVAL_MS);
+
 /** AC/Boundary (NFR2): "No MediaRecorder" is a feature-detect failure on
  * mount, not a failed call — checked once, not re-checked per click. */
 function isVoiceSupported(): boolean {
@@ -52,6 +67,13 @@ export function VoiceInput({ fillDraft, disabled }: VoiceInputProps) {
   const mediaRecorderRef = React.useRef<MediaRecorder | null>(null);
   const chunksRef = React.useRef<BlobPart[]>([]);
   const streamRef = React.useRef<MediaStream | null>(null);
+  // Near-live mode: guards against an interim transcription call overlapping
+  // a still-in-flight one (skip this tick, catch up on the next) and
+  // against starting a new interim call once `stopRecording` has already
+  // been requested (the final, authoritative transcription on `onstop`
+  // owns that moment instead).
+  const interimInFlightRef = React.useRef(false);
+  const stoppingRef = React.useRef(false);
   // Guards every state update below against a stop/transcribe callback
   // resolving after this control has already unmounted (e.g. the plan
   // workspace itself unmounts mid-recording or mid-transcription) —
@@ -105,15 +127,28 @@ export function VoiceInput({ fillDraft, disabled }: VoiceInputProps) {
       streamRef.current = stream;
       const recorder = new MediaRecorder(stream);
       chunksRef.current = [];
+      stoppingRef.current = false;
+      interimInFlightRef.current = false;
       recorder.ondataavailable = (event) => {
         if (event.data.size > 0) chunksRef.current.push(event.data);
+        // Near-live mode: re-transcribe the clip-so-far on each periodic
+        // slice while still recording — never overlapping a call already
+        // in flight, never once `stopRecording` has been requested (the
+        // final transcription on `onstop` owns that moment), and capped so
+        // a long recording doesn't keep re-transcribing an ever-growing
+        // clip forever.
+        if (stoppingRef.current || interimInFlightRef.current || chunksRef.current.length > MAX_INTERIM_CHUNKS) return;
+        interimInFlightRef.current = true;
+        void transcribeInterim(new Blob(chunksRef.current, { type: recorder.mimeType || 'audio/webm' })).finally(() => {
+          interimInFlightRef.current = false;
+        });
       };
       recorder.onstop = () => {
-        void transcribe(new Blob(chunksRef.current, { type: recorder.mimeType || 'audio/webm' }));
+        void transcribeFinal(new Blob(chunksRef.current, { type: recorder.mimeType || 'audio/webm' }));
         stopStream();
       };
       mediaRecorderRef.current = recorder;
-      recorder.start();
+      recorder.start(CHUNK_INTERVAL_MS);
       setStatus('recording');
     } catch {
       // I/O matrix: "Mic permission denied" -> neutral note, mic returns to
@@ -126,29 +161,54 @@ export function VoiceInput({ fillDraft, disabled }: VoiceInputProps) {
   }
 
   function stopRecording(): void {
+    stoppingRef.current = true;
     mediaRecorderRef.current?.stop();
     mediaRecorderRef.current = null;
     setStatus('transcribing');
   }
 
-  async function transcribe(blob: Blob): Promise<void> {
-    try {
-      const res = await fetch('/api/voice/transcribe', {
-        method: 'POST',
-        credentials: 'include',
-        body: blob,
-      });
-      if (!res.ok) throw new Error(`transcription failed: ${res.status}`);
-      const body: unknown = await res.json();
-      const parsed = voiceTranscribeResponseSchema.safeParse(body);
-      if (!parsed.success) throw new Error('malformed transcription response');
+  async function requestTranscription(blob: Blob): Promise<{ transcript: string; detectedLanguage?: DetectedLanguage }> {
+    const res = await fetch('/api/voice/transcribe', {
+      method: 'POST',
+      credentials: 'include',
+      body: blob,
+    });
+    if (!res.ok) throw new Error(`transcription failed: ${res.status}`);
+    const body: unknown = await res.json();
+    const parsed = voiceTranscribeResponseSchema.safeParse(body);
+    if (!parsed.success) throw new Error('malformed transcription response');
+    return parsed.data;
+  }
 
+  // Near-live mode: a best-effort update while still recording — a failed
+  // interim call never shows a notice or stops recording (NFR2-adjacent:
+  // the user is still mid-recording, not blocked by anything here), it
+  // just tries again on the next slice.
+  async function transcribeInterim(blob: Blob): Promise<void> {
+    try {
+      const result = await requestTranscription(blob);
+      // `stoppingRef` (not the `status` state) — a plain closure over
+      // `status` here would always see whatever it was when this closure
+      // was created (this callback is set once per recording, long before
+      // any later re-render), never the fresh value.
+      if (!mountedRef.current || stoppingRef.current) return;
+      fillDraft(result.transcript, result.detectedLanguage);
+    } catch {
+      // Silently skipped — see comment above.
+    }
+  }
+
+  // The authoritative result once the user actually stops — covers the
+  // whole recording (including the last slice interim updates may have
+  // missed), and is the one call whose failure the I/O matrix's
+  // "Transcription call fails/503" row applies to.
+  async function transcribeFinal(blob: Blob): Promise<void> {
+    try {
+      const result = await requestTranscription(blob);
       if (!mountedRef.current) return;
-      fillDraft(parsed.data.transcript, parsed.data.detectedLanguage);
+      fillDraft(result.transcript, result.detectedLanguage);
       setStatus('idle');
     } catch {
-      // I/O matrix: "Transcription call fails/503" -> neutral note, back to
-      // idle; typing stays available.
       if (!mountedRef.current) return;
       setNotice('transcriptionFailed');
       setStatus('idle');
