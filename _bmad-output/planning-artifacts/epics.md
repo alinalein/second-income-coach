@@ -686,7 +686,7 @@ So that I can move between the things I'm working on without hunting through the
 
 **Given** the plan workspace of Story 3.1
 **When** shown next to this sidebar on a desktop width
-**Then** it keeps the layout of layout-preview.html: the status panel (current and next step, timeline) is a column beside the chat, side by side, never stacked above it; only on a narrow screen does the status panel become the compact header above the chat that Story 3.1 defines
+**Then** it keeps the layout of layout-preview.html: the status panel (current and next step, timeline) is a column beside the chat, side by side, never stacked above it; only on a narrow screen does the status panel become the compact header above the chat that Story 3.1 defines; the workspace and the chat card fill the full height of the window (the chat card is not shorter than the viewport)
 
 **Given** the sidebar
 **When** the user is on any view
@@ -1026,7 +1026,7 @@ So that I get specific encouragement without empty praise.
 
 **Given** the user starts a step
 **When** `start_step` is called
-**Then** a distinct start-of-action acknowledgment fires, separate from completion
+**Then** a distinct start-of-action acknowledgment fires, separate from completion; it appears as a short, motivating, non-punitive assistant message in the plan chat (written in the user's language, no streaks/points, AD-12 guilt check applies), produced by one direct model call from the start route (AD-4 amendment), not just a hidden button; the status panel shows the day label above the current step's title (not below its description), and the following step is labelled "Next step" (DE/EN), not "Next (locked)"
 
 **Given** the user completes a step
 **When** `complete_step` fires
