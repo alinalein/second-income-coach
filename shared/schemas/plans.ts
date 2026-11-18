@@ -33,8 +33,8 @@ export const createPlanToolSchema = z.object({
 export type CreatePlanToolArgs = z.infer<typeof createPlanToolSchema>;
 
 const MIN_PLAN_STEPS = 3;
-// Story 2.6 AC4: 12 -> 8 (shorter model output, no hard rule weakened).
-const MAX_PLAN_STEPS = 8;
+// User decision 2026-11-18: 3-12 steps; the model picks the count that fits the idea and the user's feedback.
+const MAX_PLAN_STEPS = 12;
 const MIN_STEP_ACTIONS = 1;
 // Story 2.6 AC4: 5 -> 3 (shorter model output, no hard rule weakened).
 const MAX_STEP_ACTIONS = 3;

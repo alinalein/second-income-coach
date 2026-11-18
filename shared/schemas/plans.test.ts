@@ -11,7 +11,7 @@ function draftStep(overrides: Partial<{ title: string; description: string[]; da
 // enforces (step count bounds, non-decreasing dayOffset) — each a case
 // `create_plan.ts`'s own write must never reach with a malformed batch.
 describe('createPlanDraftSchema (AC/AD-4/AD-16: LLM output validated before write)', () => {
-  // Story 2.6 AC4: 12 -> 8 plan steps.
+  // User decision 2026-11-18: 3-12 plan steps.
   it('accepts 3-8 ordered steps with non-decreasing dayOffset', () => {
     const result = createPlanDraftSchema.safeParse({
       steps: [draftStep({ dayOffset: 0 }), draftStep({ dayOffset: 2 }), draftStep({ dayOffset: 2 }), draftStep({ dayOffset: 5 })],
@@ -22,7 +22,7 @@ describe('createPlanDraftSchema (AC/AD-4/AD-16: LLM output validated before writ
 
   it.each([
     ['fewer than 3 steps', [draftStep(), draftStep()]],
-    ['more than 8 steps', Array.from({ length: 9 }, () => draftStep())],
+    ['more than 12 steps', Array.from({ length: 13 }, () => draftStep())],
     ['a decreasing dayOffset', [draftStep({ dayOffset: 5 }), draftStep({ dayOffset: 1 }), draftStep({ dayOffset: 2 })]],
     // UI fix (user-reported): a step's description must be a non-empty,
     // bounded list of bullet actions, not a prose string — `draftStep`'s

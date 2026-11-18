@@ -83,7 +83,7 @@ export function buildCreatePlanPrompt(
     `idea rationale: """${idea.rationale}"""`,
     `weeklyTimeAvailability: ${intakeRow.weeklyTimeAvailability}`,
     `startingBudgetRange: ${intakeRow.startingBudgetRange}`,
-    'Produce between 3 and 8 steps, each with a short title, a dayOffset (an integer number of days from today ' +
+    'Produce between 3 and 12 steps. Choose the number that actually fits this idea and any user feedback (a short plan for a small idea, more steps for a long one); do not default to the same count every time. Each step has a short title, a dayOffset (an integer number of days from today ' +
       'this step should start — dayOffset must never decrease from one step to the next), and a description: ' +
       '1-3 short, distinct, concrete actions (each its own bullet point, never one prose paragraph) that ' +
       'together say exactly what to do for that step.',
