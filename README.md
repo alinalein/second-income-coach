@@ -156,6 +156,10 @@ flowchart TD
 
 An idea that fails the check is rewritten, never saved as it is.
 
+## Roadmap (v2)
+
+- **Feedback on new idea batches.** Every time a user presses "Generate new ideas" after their first batch (never on the very first generation), a dismissible pop-up asks what we should consider for them this time ("What should we improve or consider in your next ideas?"). The answer is moderated, stored as per-user memory (same store as the response feedback of Story 5.3) and folded into the planning and writing prompts of that next batch, so the user's steer visibly changes the ideas. Open points: skip button and never blocking generation, wording in DE/EN, whether the answer is kept for later batches or used once.
+
 ## Project status
 
 Planning is complete and reviewed (spec → architecture → 3-reviewer gate → epics). Implementation hasn't started yet — see [`_bmad-output/implementation-artifacts/sprint-status.yaml`](_bmad-output/implementation-artifacts/sprint-status.yaml) for the 7-epic/28-story breakdown and current status of each.
