@@ -160,6 +160,8 @@ An idea that fails the check is rewritten, never saved as it is.
 
 - **Feedback on new idea batches.** Every time a user presses "Generate new ideas" after their first batch (never on the very first generation), a dismissible pop-up asks what we should consider for them this time ("What should we improve or consider in your next ideas?"). It is asked on every new generation, because users notice more things that matter for their plan over time, so the plans keep matching what the user really has in mind. Skipping is always possible and never blocks generation. The answer is moderated, stored as per-user memory (same store as the response feedback of Story 5.3) and folded into the planning and writing prompts of that next batch; it applies once, to that batch. Open point: wording in DE/EN.
 
+- **Several plans active at once, "paused" only after inactivity.** Today exactly one plan per user is active (AD-14, enforced by a unique index) and switching plans pauses the other one. v2 would allow several concurrently active plans and flag a plan as paused only after 10 days without a started or completed step and without a chat message in that plan (lazy check, separate from the check-in gap logic of AD-15). It reverses AD-14, so it needs its own architecture decision, a migration (the unique index), changes to `activate_plan`, `assertPlanActive`, the sidebar and the status panel. Not part of v1.
+
 ## Project status
 
 Planning is complete and reviewed (spec → architecture → 3-reviewer gate → epics). Implementation hasn't started yet — see [`_bmad-output/implementation-artifacts/sprint-status.yaml`](_bmad-output/implementation-artifacts/sprint-status.yaml) for the 7-epic/28-story breakdown and current status of each.
