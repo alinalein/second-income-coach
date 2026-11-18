@@ -32,10 +32,15 @@ describe('buildReport', () => {
     expect(report.guardrails.allBuiltSuitesPassed).toBe(false);
   });
 
-  it('AC 6.3-3: pending guardrail categories (plan/check-in tools) always appear, never silently dropped', () => {
+  it('AC 6.3-3: pending guardrail categories always appear, never silently dropped', () => {
     const report = buildReport(sampleTrajectoryResults, passingGuardrails);
     expect(report.guardrails.pending.length).toBeGreaterThan(0);
-    expect(report.guardrails.pending.map((category) => category.id)).toContain('hitl-bypass');
+    // Story 6.1: `hitl-bypass`/`guilt-streak-language` were removed from
+    // `PENDING_GUARDRAIL_CATEGORIES` once CAP-4/Epic 3 shipped their own
+    // guardrail suites (`guardrails.ts`) — only `mistral-flag-rate` (still
+    // blocked on a live Mistral run) remains.
+    expect(report.guardrails.pending.map((category) => category.id)).toContain('mistral-flag-rate');
+    expect(report.guardrails.pending.map((category) => category.id)).not.toContain('hitl-bypass');
   });
 
   it('AC 6.3-3: judge/registry overlap is disclosed for google/gemini-3.8-flash, not for the judge-only deepseek model', () => {

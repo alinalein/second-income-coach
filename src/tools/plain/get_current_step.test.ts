@@ -1,7 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
+import { eq } from 'drizzle-orm';
+import type { SubmitIntakeToolArgs } from '@app/shared';
 import { buildPlanThreadId } from '../../agent/index.js';
-import { derivePlanIdFromThreadId, pickCurrentAndNext, computeMissedDays, startOfUtcDay } from './get_current_step.js';
+import { createDb } from '../../db/client.js';
+import { users, intake, ideas, plans, planSteps, checkIns } from '../../db/schema/index.js';
+import { upsertIntake } from './submit_intake.js';
+import { derivePlanIdFromThreadId, pickCurrentAndNext, computeMissedDays, startOfUtcDay, getCurrentStep } from './get_current_step.js';
 
 type PlanStepRow = {
   id: string;
@@ -130,5 +135,118 @@ describe('computeMissedDays (AD-15: gap-day math)', () => {
     ['missed five days', new Date(now.getTime() - DAY_MS * 6), 5],
   ] as const)('%s -> missedDays %i', (_name, anchor, expected) => {
     expect(computeMissedDays(anchor, now)).toBe(expected);
+  });
+});
+
+function intakeArgs(overrides: Partial<SubmitIntakeToolArgs> = {}): SubmitIntakeToolArgs {
+  return {
+    skillsInterests: 'Woodworking, basic bookkeeping',
+    weeklyTimeAvailability: '5_to_10h',
+    startingBudgetRange: 'under_100',
+    riskTolerance: 'low',
+    stoppedBeforeText: 'I got overwhelmed trying to do everything at once.',
+    country: 'other',
+    failurePattern: 'overwhelm',
+    ...overrides,
+  };
+}
+
+const DATABASE_URL =
+  process.env.DATABASE_URL ?? 'postgres://second_income_coach:second_income_coach@localhost:5432/second_income_coach';
+
+const { db, pool } = createDb({ DATABASE_URL });
+
+afterAll(async () => {
+  await pool.end();
+});
+
+async function createTestUserAndIdea(): Promise<{ userId: string; ideaId: string }> {
+  const googleId = `test-${randomUUID()}`;
+  const [user] = await db
+    .insert(users)
+    .values({ googleId, email: `${googleId}@example.com`, name: 'Test User', picture: null })
+    .returning();
+  const userId = user!.id;
+
+  await upsertIntake(db, userId, intakeArgs());
+
+  const [idea] = await db
+    .insert(ideas)
+    .values({
+      userId,
+      status: 'selected',
+      title: 'Resell thrifted items',
+      rationale: 'Fits your schedule.\nStart by listing one item.',
+      citedIntakeFields: ['weeklyTimeAvailability', 'riskTolerance', 'startingBudgetRange'],
+      ideaType: 'resale_arbitrage',
+      weeklyTimeCommitment: '5_to_10h',
+      startupCostAmountMinorUnits: 0,
+      startupCostCurrency: 'EUR',
+      riskLevel: 'low',
+      baselineRateQuote: 'Workers in this field earn €25.00 an hour on average.',
+      baselineRateLowAmountMinorUnits: 2500,
+      baselineRateHighAmountMinorUnits: 2500,
+      isVendorSource: false,
+      rateUnit: 'hour',
+      baselineRateCurrency: 'EUR',
+      baselineRateCitation: 'https://a.example.com/rates',
+      sourceTrustTier: 'tier_1',
+      isRateUnverified: false,
+    })
+    .returning();
+
+  return { userId, ideaId: idea!.id };
+}
+
+async function cleanUp(userId: string): Promise<void> {
+  const planRows = await db.select({ id: plans.id }).from(plans).where(eq(plans.userId, userId));
+  for (const planRow of planRows) {
+    await db.delete(checkIns).where(eq(checkIns.planId, planRow.id));
+    await db.delete(planSteps).where(eq(planSteps.planId, planRow.id));
+  }
+  await db.delete(plans).where(eq(plans.userId, userId));
+  await db.delete(intake).where(eq(intake.userId, userId));
+  await db.delete(ideas).where(eq(ideas.userId, userId));
+  await db.delete(users).where(eq(users.id, userId));
+}
+
+const DAY_MS_CONST = 24 * 60 * 60 * 1000;
+
+// Story 6.1 AC1 ("timeline recalculation ... covered") / AD-15: the actual
+// DB-level write `computeMissedDays`'s pure math feeds — shifts every
+// not-yet-completed step's `dayOffset` forward by the missed-day count and
+// resets `timelineAnchorAt`, leaving a `completed` step's own `dayOffset`
+// untouched. Integration against real Postgres, since this is a write
+// (`getCurrentStep`'s own transaction), not just the pure-math branch above.
+describe('getCurrentStep (integration, real Postgres — Story 6.1 AC1/AD-15: timeline recalculation)', () => {
+  it("shifts pending/current steps' dayOffset forward by the missed-day count, leaves a completed step untouched, and resets the anchor", async () => {
+    const { userId, ideaId } = await createTestUserAndIdea();
+    const planId = randomUUID();
+    const sixDaysAgo = new Date(Date.now() - DAY_MS_CONST * 6);
+
+    await db.insert(plans).values({ id: planId, ideaId, userId, status: 'active', threadId: `plan:${planId}`, timelineAnchorAt: sixDaysAgo });
+    await db.insert(planSteps).values([
+      { planId, stepOrder: 0, title: 'Done already', description: ['Do it.'], dayOffset: 0, status: 'completed' },
+      { planId, stepOrder: 1, title: 'Now', description: ['Then this.'], dayOffset: 2, status: 'current' },
+      { planId, stepOrder: 2, title: 'Later', description: ['Then that.'], dayOffset: 5, status: 'pending' },
+    ]);
+
+    try {
+      const result = await getCurrentStep(db, planId);
+
+      // 6 days of silence - 1 (expected cadence) = 5 missed days.
+      expect(result.gapDetected).toBe(true);
+      expect(result.missedDays).toBe(5);
+
+      const rows = await db.select().from(planSteps).where(eq(planSteps.planId, planId));
+      expect(rows.find((row) => row.status === 'completed')!.dayOffset).toBe(0);
+      expect(rows.find((row) => row.title === 'Now')!.dayOffset).toBe(7);
+      expect(rows.find((row) => row.title === 'Later')!.dayOffset).toBe(10);
+
+      const [plan] = await db.select().from(plans).where(eq(plans.id, planId));
+      expect(plan!.timelineAnchorAt!.getTime()).toBeGreaterThan(sixDaysAgo.getTime());
+    } finally {
+      await cleanUp(userId);
+    }
   });
 });

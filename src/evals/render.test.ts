@@ -39,7 +39,10 @@ describe.each([
   });
 
   it('shows pending guardrail categories, never hidden', () => {
-    expect(output).toContain('activate_plan');
+    // Story 6.1: `activate_plan` (HITL-bypass) shipped its own guardrail
+    // suite and left `PENDING_GUARDRAIL_CATEGORIES` — only `mistral-flag-rate`
+    // (still blocked on a live Mistral run) remains pending there.
+    expect(output).toContain("Mistral Moderation's own jailbreak-flag rate");
   });
 
   it('shows the estimated run cost total', () => {
