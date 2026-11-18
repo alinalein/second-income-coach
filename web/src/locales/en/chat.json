@@ -5,6 +5,7 @@
   "placeholder": "Type a message…",
   "messageAriaLabel": "Message",
   "sendButton": "Send",
+  "aiDisclaimer": "This is an AI and can make mistakes.",
   "error": {
     "modelFailure": "Something went wrong on our end and I couldn't generate a response. Please try again in a moment."
   },

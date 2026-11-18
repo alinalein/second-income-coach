@@ -483,7 +483,7 @@ export function ChatThread({ endpoint = DEFAULT_CHAT_ENDPOINT, footerItems = [],
           <div ref={bottomSpacerRef} data-testid="chat-bottom-spacer" aria-hidden="true" />
         </div>
       </CardContent>
-      <CardFooter className="shrink-0">
+      <CardFooter className="flex flex-col items-stretch gap-2 shrink-0">
         <form ref={formRef} onSubmit={handleSubmit} className="flex w-full items-end gap-2">
           <textarea
             ref={textareaRef}
@@ -505,14 +505,18 @@ export function ChatThread({ endpoint = DEFAULT_CHAT_ENDPOINT, footerItems = [],
             rows={1}
             className="min-h-10 flex-1 resize-none overflow-hidden rounded-md border border-border bg-card px-3 py-2 text-sm leading-normal text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background"
           />
-          {/* Story 3.1 extension point: empty by default — Story 4.3 fills
-           * this with a voice-record control; typed text stays available
-           * either way. */}
-          {inputExtra?.(fillDraft, sending)}
           <Button type="submit" disabled={sending || !draft.trim()}>
             {t('sendButton')}
           </Button>
         </form>
+        {/* User-reported: moved below the composer (was inline between the
+         * text field and Send) — Story 3.1 extension point, empty by
+         * default; Story 4.3 fills it with a voice-record control. The
+         * disclaimer sits next to it either way. */}
+        <div className="flex items-center gap-2 px-1">
+          {inputExtra?.(fillDraft, sending)}
+          <p className="text-xs text-muted-foreground">{t('aiDisclaimer')}</p>
+        </div>
       </CardFooter>
     </Card>
   );
