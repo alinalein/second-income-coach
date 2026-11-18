@@ -155,6 +155,15 @@ function useHasIntake(enabled: boolean): [boolean | null, (value: boolean) => vo
  * already uses. The `requestAnimationFrame` defer is required: flipping
  * `opacity-0` -> `opacity-100` in the same paint as mount never transitions,
  * it just snaps straight to the end state.
+ *
+ * Spec 2.12 AC6 (bug fix): this wrapper used to be a plain auto-height
+ * `div`, which collapsed to its content's own height — `PlanWorkspace`'s
+ * `h-full`/`min-h-0` chain had nothing real to resolve against, since a
+ * `height: 100%` ancestor must itself have a definite height, not just
+ * "whatever its content needs." `flex min-h-0 flex-1 flex-col` makes this
+ * div take `<main>`'s own real, viewport-bounded height instead, the same
+ * way every other link in that chain already does. Harmless for every
+ * non-workspace view — `<main>` already scrolls its content either way.
  */
 function FadeIn({ children }: { children: React.ReactNode }) {
   const [visible, setVisible] = React.useState(false);
@@ -164,7 +173,11 @@ function FadeIn({ children }: { children: React.ReactNode }) {
     return () => cancelAnimationFrame(frame);
   }, []);
 
-  return <div className={`transition-opacity duration-300 ${visible ? 'opacity-100' : 'opacity-0'}`}>{children}</div>;
+  return (
+    <div className={`flex min-h-0 flex-1 flex-col transition-opacity duration-300 ${visible ? 'opacity-100' : 'opacity-0'}`}>
+      {children}
+    </div>
+  );
 }
 
 function signOut(onSignedOut: () => void) {
@@ -411,12 +424,22 @@ export function App() {
             <div className="mx-auto w-full max-w-3xl">
               <IntakeForm
                 onSaved={() => {
-                  // Story 2.8 AC1: `hasIntake` here is the closure's pre-update
-                  // value — `false` means this save is the first-ever intake
-                  // submit, so ideas should auto-generate with no extra click.
-                  if (hasIntake === false) setAutoGenerateIdeas(true);
-                  setHasIntake(true);
-                  setShowIntakeForm(false);
+                  // Story 2.8 AC1 / Spec 2.12 AC1 (amended): `hasIntake` here
+                  // is the closure's pre-update value, detected from the
+                  // stored intake `App` already fetched (never a localStorage
+                  // flag) — `false` means this save is the user's first-ever
+                  // intake submit (no intake stored yet), which auto-
+                  // generates ideas and redirects straight into that view.
+                  // An edit of an *already-existing* intake via "Review your
+                  // intake answers" only saves — no redirect, no generation —
+                  // `IntakeForm` shows its own short confirmation instead,
+                  // and "Review your intake answers" stays the active
+                  // sidebar entry since `showIntakeForm` is left untouched.
+                  if (hasIntake === false) {
+                    setAutoGenerateIdeas(true);
+                    setHasIntake(true);
+                    setShowIntakeForm(false);
+                  }
                 }}
               />
             </div>

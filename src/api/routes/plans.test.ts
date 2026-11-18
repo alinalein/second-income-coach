@@ -4,6 +4,8 @@ import session from 'express-session';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
+import { AIMessage } from '@langchain/core/messages';
+import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import type { CreatePlanDraft, SubmitIntakeToolArgs } from '@app/shared';
 import { createPlansRouter, isUniqueViolationError, type PlansRouterDeps } from './plans.js';
 import { createDb } from '../../db/client.js';
@@ -662,6 +664,111 @@ describe('createPlansRouter GET / (Story 2.9: My-plans list)', () => {
     } finally {
       await cleanUp(userId);
       await cleanUp(otherUserId);
+    }
+  });
+});
+
+/** Spec 2.12 AC8: a plan + its one `current` step, ready for `start_step`. */
+async function insertPlanWithCurrentStep(userId: string): Promise<{ planId: string; stepId: string }> {
+  const ideaId = await insertIdea(userId, 'selected');
+  const [plan] = await db.insert(plans).values({ ideaId, userId, status: 'active', threadId: `plan:${randomUUID()}` }).returning();
+  const [step] = await db
+    .insert(planSteps)
+    .values({ planId: plan!.id, stepOrder: 0, title: 'Post your first listing', description: ['Take a photo.'], dayOffset: 0, status: 'current' })
+    .returning();
+  return { planId: plan!.id, stepId: step!.id };
+}
+
+// Spec 2.12 AC8: `start_step` success triggers one direct, non-agentic model
+// call that produces a short chat acknowledgment, appended to the plan
+// thread and included in the response — fully fail-open on any
+// failure/flag/timeout (the step itself has already started either way).
+describe('createPlansRouter POST /:planId/steps/:stepId/start (Spec 2.12 AC8: chat acknowledgment)', () => {
+  it('returns the acknowledgment and appends it to the plan thread on success', async () => {
+    const userId = await createTestUser();
+    try {
+      const { planId, stepId } = await insertPlanWithCurrentStep(userId);
+      const updateState = vi.fn().mockResolvedValue(undefined);
+      const agent = fakeAgent({ updateState });
+      const model = { invoke: vi.fn().mockResolvedValue(new AIMessage('Nice work getting started!')) } as unknown as BaseChatModel;
+
+      const res = await request(buildTestApp(agent, userId, { model, classify: fakeModeration('pass') }))
+        .post(`/api/plans/${planId}/steps/${stepId}/start`)
+        .send();
+
+      expect(res.status).toBe(200);
+      expect(res.body.chatMessage).toMatchObject({ role: 'assistant', kind: 'message', content: 'Nice work getting started!' });
+      expect(updateState).toHaveBeenCalledWith(
+        { configurable: { thread_id: `plan:${planId}` } },
+        expect.objectContaining({ messages: expect.any(Array) }),
+      );
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+
+  // I/O matrix: "Model call fails/flags/times out → start still returns
+  // success, no chat message is added, no error shown" — one row per
+  // distinct failure branch (security-relevant: the moderation/guilt-
+  // language checks are what keep an unsafe or guilt-laden reply out of the
+  // thread), table-driven into one test per CLAUDE.md's testing policy.
+  it.each([
+    [
+      'model call throws (covers timeout)',
+      (): BaseChatModel => ({ invoke: vi.fn().mockRejectedValue(new Error('boom')) }) as unknown as BaseChatModel,
+      undefined,
+    ],
+    [
+      'model reply flagged by moderation',
+      (): BaseChatModel => ({ invoke: vi.fn().mockResolvedValue(new AIMessage('unsafe reply')) }) as unknown as BaseChatModel,
+      { dangerous: true },
+    ],
+    [
+      'model reply contains guilt language',
+      (): BaseChatModel => ({ invoke: vi.fn().mockResolvedValue(new AIMessage('You missed your check-in again.')) }) as unknown as BaseChatModel,
+      undefined,
+    ],
+  ] as const)('%s -> step still starts, no chat message, no error', async (_name, buildModel, moderationFlags) => {
+    const userId = await createTestUser();
+    try {
+      const { planId, stepId } = await insertPlanWithCurrentStep(userId);
+      const updateState = vi.fn().mockResolvedValue(undefined);
+      const agent = fakeAgent({ updateState });
+      const model = buildModel();
+      const classify = moderationFlags ? vi.fn().mockResolvedValue(moderationFlags) : fakeModeration('pass');
+
+      const res = await request(buildTestApp(agent, userId, { model, classify })).post(`/api/plans/${planId}/steps/${stepId}/start`).send();
+
+      expect(res.status).toBe(200);
+      expect(res.body.chatMessage).toBeUndefined();
+      expect(updateState).not.toHaveBeenCalled();
+
+      const [updatedStep] = await db.select().from(planSteps).where(eq(planSteps.id, stepId));
+      expect(updatedStep!.startedAt).not.toBeNull();
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+
+  // I/O matrix: "AC8 start_step rejection | start_step called on a
+  // non-current step | Unchanged: tool rejects, no model call attempted."
+  it('rejects a non-current step with 409 and never calls the model', async () => {
+    const userId = await createTestUser();
+    try {
+      const { planId } = await insertPlanWithCurrentStep(userId);
+      const [otherStep] = await db
+        .insert(planSteps)
+        .values({ planId, stepOrder: 1, title: 'Later step', description: ['Later.'], dayOffset: 2, status: 'pending' })
+        .returning();
+      const invoke = vi.fn();
+      const model = { invoke } as unknown as BaseChatModel;
+
+      const res = await request(buildTestApp(fakeAgent(), userId, { model })).post(`/api/plans/${planId}/steps/${otherStep!.id}/start`).send();
+
+      expect(res.status).toBe(409);
+      expect(invoke).not.toHaveBeenCalled();
+    } finally {
+      await cleanUp(userId);
     }
   });
 });

@@ -326,6 +326,70 @@ describe('IdeasPanel (Story 2.6: progress bar reaches 100% before the new ideas 
   });
 });
 
+// Spec 2.12 AC1: on the auto-generate path (fired right after a user's
+// first-ever intake save), the very first paint must already show the
+// disabled "Generating…" button and a visible, 0%-started progress bar with
+// the classify stage text — never a frame with an idle, enabled "Generate"
+// button first (the bug this story fixes).
+describe('IdeasPanel (Spec 2.12 AC1: auto-generate mount has no idle frame)', () => {
+  it('shows the disabled button and the classify stage text from first paint, with no idle frame', async () => {
+    const newIdea = fakeIdea();
+    const fetchMock = mockFetch({
+      ...INTAKE_NULL_RESPONSE,
+      '/api/ideas/generate': () =>
+        new Response(
+          JSON.stringify({ ideas: [newIdea], currency: 'EUR', generateLimit: { blocked: false, reason: null, limit: null, resetsAt: null } }),
+          { status: 200 },
+        ),
+      '/api/ideas': () => new Response(JSON.stringify({ ideas: [], currency: 'EUR' }), { status: 200 }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<IdeasPanel autoGenerate />);
+
+    // Synchronous, first-paint assertions — no idle/enabled frame ever
+    // exists for React to flush before this.
+    const generateButton = screen.getByRole('button', { name: 'Generating…' });
+    expect(generateButton).toBeDisabled();
+    const statusRegion = screen.getByRole('status');
+    expect(statusRegion).toHaveTextContent('Reviewing your answers…');
+    expect(within(statusRegion).getByRole('progressbar')).toHaveAttribute('aria-valuenow', '0');
+
+    // The one unbroken timer carries the request through to completion —
+    // the newly generated idea replaces the view once it settles.
+    expect(await screen.findByText(newIdea.title)).toBeInTheDocument();
+  });
+});
+
+// Story 2.11 regression (review fix): this story's own mount-only-effect
+// simplification for AC1 must not drop the pre-existing "never auto-fire
+// into a known-blocked limit" rule (e.g. the shared search budget other
+// users already exhausted) — it still shows the generating UI from first
+// paint (no idle frame), but never actually calls generate once the known-
+// blocked limit comes back from `GET /api/ideas`.
+describe('IdeasPanel (Story 2.11 regression: auto-generate still respects a known-blocked limit)', () => {
+  it('never calls POST /api/ideas/generate when GET /api/ideas reports the limit already blocked', async () => {
+    const generateFetch = vi.fn();
+    const fetchMock = mockFetch({
+      ...INTAKE_NULL_RESPONSE,
+      '/api/ideas/generate': generateFetch,
+      '/api/ideas': () =>
+        new Response(
+          JSON.stringify({ ideas: [], currency: 'EUR', generateLimit: { blocked: true, reason: 'shared_budget', limit: null, resetsAt: null } }),
+          { status: 200 },
+        ),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<IdeasPanel autoGenerate />);
+
+    expect(
+      await screen.findByText("Today's shared search budget of the app is used up. New ideas are available again tomorrow."),
+    ).toBeInTheDocument();
+    expect(generateFetch).not.toHaveBeenCalled();
+  });
+});
+
 // Story 2.11 AC5/AC6: existing ideas stay fully usable after a 429 — never
 // replaced/cleared. UX fix (user-reported): the limit notice text and the
 // button's disabled state moved back here with the button itself.
@@ -454,6 +518,34 @@ describe('IdeasPanel (UX fix: onlyBookmarked shows every bookmarked idea)', () =
     expect(await screen.findByText('First bookmarked idea')).toBeInTheDocument();
     expect(screen.getByText('Second bookmarked idea')).toBeInTheDocument();
     expect(screen.queryByText('A suggested idea')).not.toBeInTheDocument();
+  });
+
+  // User-reported follow-up: Story 2.9's own "Bookmarked" list AC is
+  // explicit — "the user has bookmarked ideas *without* a plan". A
+  // bookmarked idea that already has its own plan (demoted back from
+  // `selected` once a different idea was selected later, Code Map) belongs
+  // in "My plans" only, not duplicated here too.
+  it('excludes a bookmarked idea that already has its own plan', async () => {
+    const stillBookmarked: IdeaWithPlanResponse = { ...fakeIdea(), id: 'idea-1', title: 'Still just bookmarked', status: 'bookmarked', hasPlan: false };
+    const bookmarkedWithPlan: IdeaWithPlanResponse = {
+      ...fakeIdea(),
+      id: 'idea-2',
+      title: 'Bookmarked but already has a plan',
+      status: 'bookmarked',
+      hasPlan: true,
+    };
+    vi.stubGlobal(
+      'fetch',
+      mockFetch({
+        ...INTAKE_NULL_RESPONSE,
+        '/api/ideas': () => new Response(JSON.stringify({ ideas: [stillBookmarked, bookmarkedWithPlan], currency: 'EUR' }), { status: 200 }),
+      }),
+    );
+
+    render(<IdeasPanel onlyBookmarked />);
+
+    expect(await screen.findByText('Still just bookmarked')).toBeInTheDocument();
+    expect(screen.queryByText('Bookmarked but already has a plan')).not.toBeInTheDocument();
   });
 });
 
@@ -928,10 +1020,13 @@ describe('IdeasPanel (Story 2.7: translate idea cards on language change)', () =
       await i18n.changeLanguage('de');
     });
 
-    // Still the stored-language title — no flash, no blank card — plus the
-    // localized loading notice, while the request is still in flight.
-    expect(screen.getByText('Deine Ideen werden übersetzt…')).toBeInTheDocument();
-    expect(screen.getByText(idea.title)).toBeInTheDocument();
+    // Spec 2.12 AC3: the old page-level "is being translated" banner is
+    // gone — the title field itself shimmers in place instead
+    // (`aria-busy`), with the stored-language text kept only for a screen
+    // reader (`sr-only`) while the request is still in flight.
+    expect(screen.queryByText('Deine Ideen werden übersetzt…')).not.toBeInTheDocument();
+    const titleDuringTranslation = screen.getByText(idea.title, { selector: '.sr-only' });
+    expect(titleDuringTranslation.closest('[aria-busy="true"]')).toBeInTheDocument();
 
     resolveTranslate(
       new Response(

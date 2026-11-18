@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { planStepResponseSchema } from './plans.js';
+import { chatMessageSchema } from './chat.js';
 
 /**
  * Story 4.1 (CAP-4/AD-4): the 3 energy/status levels `record_check_in`
@@ -45,8 +46,16 @@ export const stepActionToolSchema = z.object({
 
 export type StepActionToolArgs = z.infer<typeof stepActionToolSchema>;
 
+/**
+ * Spec 2.12 AC8: `chatMessage` is present only when the server's own one
+ * direct, non-agentic model call produced a start-of-step acknowledgment
+ * that passed moderation/guilt-language checks — absent (not an error) on
+ * any model-call failure/flag/timeout, same fail-open precedent as every
+ * other best-effort extra in this codebase.
+ */
 export const startStepResponseSchema = z.object({
   step: planStepResponseSchema,
+  chatMessage: chatMessageSchema.optional(),
 });
 
 export type StartStepResponse = z.infer<typeof startStepResponseSchema>;

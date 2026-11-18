@@ -7,7 +7,7 @@
     "loading": "Loading…",
     "loadFailed": "Couldn't load your current step.",
     "noCurrentStep": "No current step yet.",
-    "nextLabel": "Next (locked)",
+    "nextLabel": "Next step",
     "dayLabel": "Day {{day}}",
     "gapBanner": "Good to have you back — no need to explain a gap. We've adjusted your timeline, so pick up whenever you're ready."
   },

@@ -73,7 +73,14 @@ describe('StatusPanel (AC: only current+next step visible)', () => {
     expect(screen.getByText('Take one photo.')).toBeInTheDocument();
     expect(screen.getByText('Write a caption.')).toBeInTheDocument();
 
-    const nextRegion = screen.getByText('Next (locked)').closest('div')!;
+    // Spec 2.12 AC7: the day label sits above the step's own title, not
+    // below the description.
+    const dayLabel = screen.getByText('Day 0');
+    const title = screen.getByText('List your first item');
+    expect(dayLabel.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    // Spec 2.12 AC7: "Next (locked)" is renamed "Next step".
+    const nextRegion = screen.getByText('Next step').closest('div')!;
     expect(nextRegion).toHaveTextContent('List a second item');
     // The next step's own description never renders — only its title
     // (AC: "only ... immediate-next step are visible", not its full detail).
@@ -96,6 +103,6 @@ describe('StatusPanel (AC: only current+next step visible)', () => {
     render(<StatusPanel planId="plan-1" ideaTitle="Resell thrifted clothing" />);
 
     expect(await screen.findByText('Last step')).toBeInTheDocument();
-    expect(screen.queryByText('Next (locked)')).not.toBeInTheDocument();
+    expect(screen.queryByText('Next step')).not.toBeInTheDocument();
   });
 });

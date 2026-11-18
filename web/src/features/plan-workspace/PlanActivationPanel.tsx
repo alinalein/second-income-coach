@@ -8,10 +8,12 @@ import {
   type PlanResponse,
   type CreatePlanDraft,
 } from '@app/shared';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from 'shadcn-glass-ui';
 import { Button } from '../../components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Label } from '../../components/ui/label';
 import { Textarea } from '../../components/ui/textarea';
+import { stripLeadingBulletMarker } from '../../lib/utils';
 
 export interface PlanActivationPanelProps {
   planId: string;
@@ -289,14 +291,14 @@ export function PlanActivationPanel({ planId, onActivated }: PlanActivationPanel
     );
   }
 
-  if (phase === 'failed') {
+  if (phase === 'failed' && !review) {
     return (
       <Card>
         <CardContent className="flex flex-col gap-2 p-6 text-sm">
           <p role="alert" className="text-muted-foreground">
             {t('activation.failed')}
           </p>
-          <Button type="button" variant="outline" size="sm" onClick={() => setPhase(review ? 'reviewing' : 'idle')}>
+          <Button type="button" variant="outline" size="sm" onClick={() => setPhase('idle')}>
             {t('activation.cancelButton')}
           </Button>
         </CardContent>
@@ -306,135 +308,177 @@ export function PlanActivationPanel({ planId, onActivated }: PlanActivationPanel
 
   if (!review) return null;
 
-  if (phase === 'editing') {
-    return (
-      <Card>
-        <CardHeader>
-          <CardTitle>{t('activation.modifyButton')}</CardTitle>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-4 text-sm">
-          {editableSteps.map((step, index) => (
-            <div key={index} className="flex flex-col gap-2 border-b border-dashed border-border pb-3 last:border-none">
-              <Label htmlFor={`activation-title-${index}`}>
-                {t('activation.stepLabel', { index: index + 1 })} — {t('activation.titleLabel')}
-              </Label>
-              <input
-                id={`activation-title-${index}`}
-                className="h-10 w-full rounded-md border border-border bg-card px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-                value={step.title}
-                onChange={(event) => {
-                  const value = event.target.value;
-                  setEditableSteps((prev) => prev.map((s, i) => (i === index ? { ...s, title: value } : s)));
-                }}
-              />
-              <Label htmlFor={`activation-description-${index}`}>{t('activation.descriptionLabel')}</Label>
-              <Textarea
-                id={`activation-description-${index}`}
-                value={step.descriptionText}
-                onChange={(event) => {
-                  const value = event.target.value;
-                  setEditableSteps((prev) => prev.map((s, i) => (i === index ? { ...s, descriptionText: value } : s)));
-                }}
-              />
-              <Label htmlFor={`activation-day-${index}`}>{t('activation.dayOffsetLabel')}</Label>
-              <input
-                id={`activation-day-${index}`}
-                type="number"
-                min={0}
-                className="h-10 w-24 rounded-md border border-border bg-card px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-                value={step.dayOffset}
-                onChange={(event) => {
-                  const value = Number(event.target.value);
-                  setEditableSteps((prev) => prev.map((s, i) => (i === index ? { ...s, dayOffset: value } : s)));
-                }}
-              />
-            </div>
-          ))}
-          {editError ? (
-            <p role="alert" className="text-muted-foreground">
-              {t('activation.invalidDraft')}
-            </p>
-          ) : null}
-          <div className="flex gap-2">
-            <Button type="button" onClick={saveEdits} disabled={phase === ('busy' as Phase)}>
-              {t('activation.saveChangesButton')}
-            </Button>
-            <Button type="button" variant="outline" onClick={() => setPhase('reviewing')}>
-              {t('activation.cancelButton')}
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-    );
-  }
-
-  if (phase === 'rejecting') {
-    return (
-      <Card>
-        <CardHeader>
-          <CardTitle>{t('activation.rejectButton')}</CardTitle>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-3 text-sm">
-          <Label htmlFor="activation-feedback">{t('activation.feedbackLabel')}</Label>
-          <Textarea
-            id="activation-feedback"
-            placeholder={t('activation.feedbackPlaceholder') ?? ''}
-            value={feedback}
-            onChange={(event) => setFeedback(event.target.value)}
-          />
-          {feedbackError ? (
-            <p role="alert" className="text-muted-foreground">
-              {t('activation.feedbackRequired')}
-            </p>
-          ) : null}
-          <div className="flex gap-2">
-            <Button type="button" onClick={submitReject}>
-              {t('activation.submitFeedbackButton')}
-            </Button>
-            <Button type="button" variant="outline" onClick={() => setPhase('reviewing')}>
-              {t('activation.cancelButton')}
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-    );
-  }
-
-  // phase === 'reviewing' | 'busy' (with a review already loaded)
+  // Spec 2.12 AC4: every review-needing phase (reviewing/editing/rejecting),
+  // plus a `busy`/`failed` state reached while a review is already loaded,
+  // renders inside this one backdropped `Dialog` (same `shadcn-glass-ui`
+  // import/usage as `IdeasPanel.tsx`'s idea-select confirm dialog) instead
+  // of its own inline `Card` — so it never pushes `PlanWorkspace`'s status
+  // column or chat down. User-reported follow-up: the X/Escape/backdrop
+  // close now works (it used to no-op) — closing returns to the `'idle'`
+  // trigger card below, same target `phase === 'failed' && !review`'s own
+  // Cancel button already uses; it's a no-op while `'busy'` (a confirm/
+  // modify/reject request in flight), so an in-progress mutation is never
+  // abandoned from under itself. User-reported follow-up: `size="lg"`
+  // (800px — was the library default `'sm'`/480px, then widened once
+  // already to `'md'`/640px; this is the next tier up, ~25% wider than
+  // that, closest available to a further +20% ask) plus a bounded,
+  // scrollable height — a 6-step review's own content was tall enough to
+  // clip the footer buttons past the viewport's bottom edge with no way to
+  // reach them. `[--modal-bg:var(--card)]` overrides the library's own
+  // glass/translucent card background (by design elsewhere) with this
+  // app's solid `--card` token — user-reported: a review this
+  // information-dense reads better opaque, not semi-see-through over the
+  // blurred page behind it. Set via a CSS custom-property class, not a
+  // `style` prop: the library's own `DialogContent` sets
+  // `background`/`backdropFilter`/etc inline and a `style` prop would
+  // replace that whole object, dropping its border/shadow/glow too.
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{t('activation.reviewTitle')}</CardTitle>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-4 text-sm">
-        {review.steps
-          .slice()
-          .sort((a, b) => a.stepOrder - b.stepOrder)
-          .map((step, index) => (
-            <div key={step.id} className="border-b border-dashed border-border pb-3 last:border-none">
-              <p className="font-semibold">
-                {t('activation.stepLabel', { index: index + 1 })}: {step.title}
-              </p>
-              <ul className="list-disc space-y-0.5 pl-4 text-muted-foreground">
-                {step.description.map((action, actionIndex) => (
-                  <li key={actionIndex}>{action}</li>
-                ))}
-              </ul>
-              <p className="mt-1 text-xs text-muted-foreground">{t('activation.dayLabel', { day: step.dayOffset })}</p>
+    <Dialog
+      open
+      onOpenChange={(open: boolean) => {
+        if (!open && phase !== 'busy') setPhase('idle');
+      }}
+    >
+      <DialogContent size="lg" className="max-h-[85vh] overflow-y-auto [--modal-bg:var(--card)]">
+        {phase === 'editing' ? (
+          <>
+            <DialogHeader>
+              <DialogTitle>{t('activation.modifyButton')}</DialogTitle>
+            </DialogHeader>
+            <div className="flex flex-col gap-4 text-sm">
+              {editableSteps.map((step, index) => (
+                <div key={index} className="flex flex-col gap-2 border-b border-dashed border-border pb-3 last:border-none">
+                  <Label htmlFor={`activation-title-${index}`}>
+                    {t('activation.stepLabel', { index: index + 1 })} — {t('activation.titleLabel')}
+                  </Label>
+                  <input
+                    id={`activation-title-${index}`}
+                    className="h-10 w-full rounded-md border border-border bg-card px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                    value={step.title}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      setEditableSteps((prev) => prev.map((s, i) => (i === index ? { ...s, title: value } : s)));
+                    }}
+                  />
+                  <Label htmlFor={`activation-description-${index}`}>{t('activation.descriptionLabel')}</Label>
+                  <Textarea
+                    id={`activation-description-${index}`}
+                    value={step.descriptionText}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      setEditableSteps((prev) => prev.map((s, i) => (i === index ? { ...s, descriptionText: value } : s)));
+                    }}
+                  />
+                  <Label htmlFor={`activation-day-${index}`}>{t('activation.dayOffsetLabel')}</Label>
+                  <input
+                    id={`activation-day-${index}`}
+                    type="number"
+                    min={0}
+                    className="h-10 w-24 rounded-md border border-border bg-card px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                    value={step.dayOffset}
+                    onChange={(event) => {
+                      const value = Number(event.target.value);
+                      setEditableSteps((prev) => prev.map((s, i) => (i === index ? { ...s, dayOffset: value } : s)));
+                    }}
+                  />
+                </div>
+              ))}
+              {editError ? (
+                <p role="alert" className="text-muted-foreground">
+                  {t('activation.invalidDraft')}
+                </p>
+              ) : null}
             </div>
-          ))}
-        <div className="flex flex-wrap gap-2">
-          <Button type="button" onClick={confirm} disabled={phase === 'busy'}>
-            {phase === 'busy' ? t('activation.activating') : t('activation.confirmButton')}
-          </Button>
-          <Button type="button" variant="outline" onClick={startEditing} disabled={phase === 'busy'}>
-            {t('activation.modifyButton')}
-          </Button>
-          <Button type="button" variant="ghost" onClick={startRejecting} disabled={phase === 'busy'}>
-            {t('activation.rejectButton')}
-          </Button>
-        </div>
-      </CardContent>
-    </Card>
+            <DialogFooter>
+              <Button type="button" onClick={saveEdits} disabled={phase === ('busy' as Phase)}>
+                {t('activation.saveChangesButton')}
+              </Button>
+              <Button type="button" variant="outline" onClick={() => setPhase('reviewing')}>
+                {t('activation.cancelButton')}
+              </Button>
+            </DialogFooter>
+          </>
+        ) : phase === 'rejecting' ? (
+          <>
+            <DialogHeader>
+              <DialogTitle>{t('activation.rejectButton')}</DialogTitle>
+            </DialogHeader>
+            <div className="flex flex-col gap-3 text-sm">
+              <Label htmlFor="activation-feedback">{t('activation.feedbackLabel')}</Label>
+              <Textarea
+                id="activation-feedback"
+                placeholder={t('activation.feedbackPlaceholder') ?? ''}
+                value={feedback}
+                onChange={(event) => setFeedback(event.target.value)}
+              />
+              {feedbackError ? (
+                <p role="alert" className="text-muted-foreground">
+                  {t('activation.feedbackRequired')}
+                </p>
+              ) : null}
+            </div>
+            <DialogFooter>
+              <Button type="button" onClick={submitReject}>
+                {t('activation.submitFeedbackButton')}
+              </Button>
+              <Button type="button" variant="outline" onClick={() => setPhase('reviewing')}>
+                {t('activation.cancelButton')}
+              </Button>
+            </DialogFooter>
+          </>
+        ) : phase === 'failed' ? (
+          <>
+            <DialogHeader>
+              <DialogTitle>{t('activation.reviewTitle')}</DialogTitle>
+            </DialogHeader>
+            <p role="alert" className="text-sm text-muted-foreground">
+              {t('activation.failed')}
+            </p>
+            <DialogFooter>
+              <Button type="button" variant="outline" size="sm" onClick={() => setPhase('reviewing')}>
+                {t('activation.cancelButton')}
+              </Button>
+            </DialogFooter>
+          </>
+        ) : (
+          // phase === 'reviewing' | 'busy' (with a review already loaded)
+          <>
+            <DialogHeader>
+              <DialogTitle>{t('activation.reviewTitle')}</DialogTitle>
+              <DialogDescription>{t('activation.hint')}</DialogDescription>
+            </DialogHeader>
+            <div className="flex flex-col gap-4 text-sm">
+              {review.steps
+                .slice()
+                .sort((a, b) => a.stepOrder - b.stepOrder)
+                .map((step, index) => (
+                  <div key={step.id} className="border-b border-dashed border-border pb-3 last:border-none">
+                    <p className="font-semibold">
+                      {t('activation.stepLabel', { index: index + 1 })}: {step.title}
+                    </p>
+                    <ul className="list-disc space-y-0.5 pl-4 text-muted-foreground">
+                      {step.description.map((action, actionIndex) => (
+                        <li key={actionIndex}>{stripLeadingBulletMarker(action)}</li>
+                      ))}
+                    </ul>
+                    <p className="mt-1 text-xs text-muted-foreground">{t('activation.dayLabel', { day: step.dayOffset })}</p>
+                  </div>
+                ))}
+            </div>
+            <DialogFooter>
+              <Button type="button" onClick={confirm} disabled={phase === 'busy'}>
+                {phase === 'busy' ? t('activation.activating') : t('activation.confirmButton')}
+              </Button>
+              <Button type="button" variant="outline" onClick={startEditing} disabled={phase === 'busy'}>
+                {t('activation.modifyButton')}
+              </Button>
+              <Button type="button" variant="ghost" onClick={startRejecting} disabled={phase === 'busy'}>
+                {t('activation.rejectButton')}
+              </Button>
+            </DialogFooter>
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }

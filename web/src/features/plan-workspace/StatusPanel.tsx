@@ -1,7 +1,8 @@
 import * as React from 'react';
 import { useTranslation } from 'react-i18next';
-import { currentStepResponseSchema, type CurrentStepResponse } from '@app/shared';
+import { currentStepResponseSchema, type CurrentStepResponse, type ChatMessage } from '@app/shared';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
+import { stripLeadingBulletMarker } from '../../lib/utils';
 import { CheckInControl } from './CheckInControl';
 import { StepActions } from './StepActions';
 
@@ -10,6 +11,11 @@ export interface StatusPanelProps {
   /** UI fix (user-reported): "it should not say 'your plan', it should say
    * 'your plan for <idea>'" — interpolated into `statusPanel.title`. */
   ideaTitle: string;
+  /** Spec 2.12 AC8: forwarded from `PlanWorkspace` down through `StepActions`
+   * — fires with the server's own start-of-step chat acknowledgment once
+   * `start_step` succeeds and produced one (fail-open: omitted entirely on
+   * any model-call failure/flag/timeout). */
+  onStepStarted?: (message: ChatMessage) => void;
 }
 
 /**
@@ -31,7 +37,7 @@ export interface StatusPanelProps {
  * directly, no fade on this card's own content — `StepActions`'s own
  * button animates its own disappearance instead.
  */
-export function StatusPanel({ planId, ideaTitle }: StatusPanelProps) {
+export function StatusPanel({ planId, ideaTitle, onStepStarted }: StatusPanelProps) {
   const { t } = useTranslation('plan');
   const [step, setStep] = React.useState<CurrentStepResponse | null>(null);
   const [failed, setFailed] = React.useState(false);
@@ -95,21 +101,27 @@ export function StatusPanel({ planId, ideaTitle }: StatusPanelProps) {
         ) : step.current ? (
           <>
             <div>
+              {/* Spec 2.12 AC7: the day label sits above the step's own
+               * title now (was below the description) — the first thing
+               * read is "which day", then what the step is. */}
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">{t('statusPanel.dayLabel', { day: step.current.dayOffset })}</p>
               <p className="font-semibold">{step.current.title}</p>
               {/* UI fix (user-reported): a step's description is a short
                * list of distinct actions (Code Map/create_plan.ts) —
-               * rendered as a bullet list, never one prose paragraph. */}
+               * rendered as a bullet list, never one prose paragraph.
+               * Spec 2.12 AC4: `stripLeadingBulletMarker` drops a doubled
+               * leading marker some descriptions already carry, so the
+               * list's own CSS bullet is never doubled. */}
               <ul className="list-disc space-y-0.5 pl-4 text-muted-foreground">
                 {step.current.description.map((action, index) => (
-                  <li key={index}>{action}</li>
+                  <li key={index}>{stripLeadingBulletMarker(action)}</li>
                 ))}
               </ul>
-              <p className="mt-1 text-xs text-muted-foreground">{t('statusPanel.dayLabel', { day: step.current.dayOffset })}</p>
             </div>
             {/* Story 4.1: the start/complete step actions and the
              * energy/status check-in control, as their own components —
              * this file's own layout otherwise unchanged. */}
-            <StepActions planId={planId} step={step.current} onStepChanged={loadCurrentStep} />
+            <StepActions planId={planId} step={step.current} onStepChanged={loadCurrentStep} onStepStarted={onStepStarted} />
             <CheckInControl planId={planId} checkedInToday={step.checkedInToday} />
             {step.next ? (
               <div className="border-t border-dashed border-border pt-2">

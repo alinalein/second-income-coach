@@ -3,7 +3,7 @@ import { and, desc, eq } from 'drizzle-orm';
 import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { Command } from '@langchain/langgraph';
-import { AIMessage } from '@langchain/core/messages';
+import { AIMessage, HumanMessage } from '@langchain/core/messages';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import {
   planResponseSchema,
@@ -14,13 +14,16 @@ import {
   checkInResponseSchema,
   startStepResponseSchema,
   completeStepResponseSchema,
+  chatMessageSchema,
   type PlanResponse,
+  type ChatMessage,
 } from '@app/shared';
 import type { Env } from '../../config/env.js';
 import type { createDb } from '../../db/client.js';
 import type { CoachAgent } from '../../agent/index.js';
 import { buildPlanThreadId, buildDiscoveryThreadId, buildPlanActivationThreadId } from '../../agent/index.js';
-import { evaluateUserMessage, defaultClassify, type ClassifyText } from '../../agent/moderation.js';
+import { evaluateUserMessage, evaluateAssistantMessage, defaultClassify, type ClassifyText } from '../../agent/moderation.js';
+import { containsGuiltLanguage } from '../../agent/guilt-language.js';
 import { handleCreatePlan, type CreatePlanDeps } from '../../tools/llm/create_plan.js';
 import { getCurrentStep } from '../../tools/plain/get_current_step.js';
 import { recordCheckIn } from '../../tools/plain/record_check_in.js';
@@ -127,6 +130,84 @@ const PLAN_READY_MESSAGE_EN =
   "Your plan is ready — you can see your first step on the left. Once you've done it, let me know here and the next step will unlock.";
 const PLAN_READY_MESSAGE_DE =
   'Dein Plan ist fertig — deinen ersten Schritt siehst du links. Sag mir hier Bescheid, sobald du ihn erledigt hast, dann wird der nächste Schritt freigeschaltet.';
+
+/**
+ * Spec 2.12 AC8: one direct, non-agentic model call produces a short
+ * start-of-step acknowledgment — a single bounded attempt, no retry (same
+ * "one attempt" precedent as `translate-idea-cards.ts`'s own
+ * `TRANSLATE_TIMEOUT_MS`), scaled down since this is a much smaller prompt
+ * with no structured output. Any failure/flag/timeout fails open to no chat
+ * message at all (AC: "the step start still succeeds and no chat message or
+ * error appears") — never a retry loop, never an error surfaced to the
+ * caller. Review fix: kept short (not `TRANSLATE_TIMEOUT_MS`'s 30s) —
+ * `chatMessage` is included in the same HTTP response as the step-start
+ * result itself (Code Map), so this budget is also the worst-case extra
+ * wait a "Start this step" click can add; a plain one-or-two-sentence
+ * completion with no structured output has no real need for a long one.
+ */
+const START_STEP_ACK_TIMEOUT_MS = 10_000;
+
+function buildStartStepAckPrompt(language: 'de' | 'en', stepTitle: string): string {
+  return language === 'de'
+    ? `Die Person hat gerade mit dem Plan-Schritt "${stepTitle}" begonnen. Schreibe eine kurze (ein bis zwei Sätze), ` +
+        'motivierende und nicht-belehrende Bestätigung auf Deutsch, die diesen Start anerkennt. Erwähne nichts ' +
+        'Verpasstes, keine Verzögerung und keine frühere Pause — nur diesen Start selbst. Antworte nur mit der ' +
+        'Bestätigung selbst, ohne Anführungszeichen oder zusätzlichen Text.'
+    : `The person just started the plan step "${stepTitle}". Write a short (one to two sentences), motivating, ` +
+        'non-judgmental acknowledgment in English that recognizes this start. Never mention anything missed, any ' +
+        'delay, or a past pause — only this start itself. Reply with only the acknowledgment itself, no quotes or ' +
+        'extra text.';
+}
+
+/**
+ * AC8: builds the chat acknowledgment for a successful `start_step`, fully
+ * fail-open — any error, timeout, or moderation/guilt-language flag returns
+ * `undefined` rather than throwing, so the step-start response itself is
+ * never affected by this best-effort extra.
+ */
+async function buildStartStepAckMessage(
+  model: BaseChatModel,
+  classify: ClassifyText,
+  threadId: string,
+  language: 'de' | 'en',
+  stepTitle: string,
+): Promise<ChatMessage | undefined> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new Error('start_step ack: exceeded its budget')), START_STEP_ACK_TIMEOUT_MS);
+
+  try {
+    const response = await model.invoke([new HumanMessage(buildStartStepAckPrompt(language, stepTitle))], {
+      signal: controller.signal,
+    });
+    const text = (response.text ?? '').trim();
+    if (!text) return undefined;
+
+    // AD-11-equivalent: the same unsafe-output check the agent's own
+    // `afterModel` moderation middleware applies to every reply.
+    const verdict = await evaluateAssistantMessage(text, classify, threadId);
+    if (verdict.action === 'replace') return undefined;
+    // AD-12: the same guilt-language guard CAP-4 replies get — this
+    // acknowledgment must never slip into "you missed/broke a streak"
+    // phrasing, even though nothing prompted it to.
+    if (containsGuiltLanguage(text)) return undefined;
+
+    return chatMessageSchema.parse({
+      id: randomUUID(),
+      role: 'assistant',
+      kind: 'message',
+      content: text,
+      createdAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.warn('[plans] start_step acknowledgment failed/timed out, omitting it:', {
+      threadId,
+      error: (error as Error)?.message,
+    });
+    return undefined;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 /**
  * `createPlansRouter`: `POST /select/:ideaId` (AC: lazy create-or-fetch —
@@ -383,7 +464,37 @@ export function createPlansRouter({ env, db, agent, model, createDraft, activate
       }
 
       const result = await startStep(db, planId, stepIdParse.data);
-      res.json(startStepResponseSchema.parse(result));
+
+      // Spec 2.12 AC8: one direct model call produces a short, motivating
+      // start-of-step acknowledgment, appended live to the plan thread —
+      // fully fail-open (see `buildStartStepAckMessage`'s own doc comment),
+      // so nothing here can turn a successful start into an error response.
+      // Review fix: the reply language is detected from the *discovery*
+      // thread (same `detectUserReplyLanguage` call this file's own
+      // plan-creation welcome message already uses, Code Map line 221), not
+      // the plan thread itself — a user who hasn't yet typed anything into
+      // this specific plan's chat would otherwise always fall back to 'en'
+      // even though their discovery answers were in German.
+      const threadId = buildPlanThreadId(planId);
+      const replyLanguage = await detectUserReplyLanguage(agent, buildDiscoveryThreadId(userId));
+      let chatMessage = await buildStartStepAckMessage(model, classify, threadId, replyLanguage, result.step.title);
+      if (chatMessage) {
+        try {
+          await agent.updateState(
+            { configurable: { thread_id: threadId } },
+            { messages: [new AIMessage({ id: chatMessage.id, content: chatMessage.content })] },
+          );
+        } catch (error) {
+          // Fail open, same as every other branch of this best-effort
+          // extra — the step itself already started successfully above;
+          // never persisting the acknowledgment is reason to drop it from
+          // the response, never to fail the whole request.
+          console.error('[plans] start_step acknowledgment persistence failed:', { userId, planId, error: (error as Error)?.message });
+          chatMessage = undefined;
+        }
+      }
+
+      res.json(startStepResponseSchema.parse({ ...result, chatMessage }));
     } catch (error) {
       if (error instanceof StepNotCurrentError) {
         res.status(409).json({ error: 'Step is not this plan\'s current step' });

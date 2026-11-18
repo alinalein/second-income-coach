@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { microMoneySchema } from '../money.js';
+import { chatMessageSchema } from './chat.js';
 
 /**
  * Story 1.1 placeholder schema.
@@ -43,51 +43,12 @@ export const authSessionSchema = z.object({
 export type AuthSession = z.infer<typeof authSessionSchema>;
 
 /**
- * Story 1.3: the shared chat message shape, used by both the backend's
- * `POST`/`GET /api/chat/messages` routes and the frontend's `ChatThread`/
- * `ChatMessage` components. `kind` distinguishes a normal agent reply
- * (`'message'`) from the two fixed moderation/safety texts (`'notice'`) and a
- * model-failure fallback (`'error'`), so the UI can render each distinctly
- * (Code Map: "message list, text input, 'notice'/'error' kinds styled
- * distinctly from 'message' bubbles").
+ * Story 1.3 / Spec 2.12: `messageCostSchema`/`chatMessageSchema` (+ their
+ * inferred types) now live in `./chat.js`, imported above and re-exported
+ * below via `export * from './chat.js'` — not redefined here. See that
+ * file's own doc comment for why (breaking a circular import `check-ins.ts`
+ * and `progress.ts` both need).
  */
-/**
- * Story 5.2 (AD-21/AD-27): the display-only shape attached to an assistant
- * `ChatMessage` that was produced by a `chat.ts`/`plan-chat.ts` turn
- * (Boundary: a direct-path flow or a user message never carries this).
- * `amount` is `null` only when the turn's resolved model had no registry
- * price match — token counts still show either way, never a guessed/zero
- * figure. `isEstimate` mirrors `ConvertedMoney.isEstimate` (`shared/
- * money.ts`): `true` only for a genuine currency conversion, never for a
- * same-currency (or no-price) amount.
- *
- * Bug fix (epics.md amendment): `amount` is `MicroMoney`, not `Money` — a
- * typical per-message AI cost is a fraction of a cent, which `Money`'s
- * minor-unit (cent) granularity rounds straight to zero.
- */
-export const messageCostSchema = z.object({
-  modelId: z.string().min(1),
-  inputTokens: z.number().int().nonnegative(),
-  outputTokens: z.number().int().nonnegative(),
-  amount: microMoneySchema.nullable(),
-  isEstimate: z.boolean(),
-});
-
-export type MessageCost = z.infer<typeof messageCostSchema>;
-
-export const chatMessageSchema = z.object({
-  id: z.string().min(1),
-  role: z.enum(['user', 'assistant']),
-  kind: z.enum(['message', 'notice', 'error']),
-  content: z.string().min(1),
-  createdAt: z.iso.datetime(),
-  /** Story 5.2: present only on an assistant reply from a `chat.ts`/
-   * `plan-chat.ts` turn that carried a model call — absent on every user
-   * message and on any direct-path reply (Boundary). */
-  cost: messageCostSchema.optional(),
-});
-
-export type ChatMessage = z.infer<typeof chatMessageSchema>;
 
 /**
  * Story 5.3 (AD-4/AD-22): thumbs up/down plus an optional comment, posted to
@@ -163,6 +124,7 @@ export type ChatHistoryResponse = z.infer<typeof chatHistoryResponseSchema>;
 export const MODEL_FAILURE_MESSAGE =
   "Something went wrong on our end and I couldn't generate a response. Please try again in a moment.";
 
+export * from './chat.js';
 export * from './intake.js';
 export * from './ideas.js';
 export * from './idea-translations.js';
@@ -171,12 +133,9 @@ export * from '../money.js';
 export * from '../region.js';
 export * from './settings.js';
 export * from './check-ins.js';
-
 /**
- * Story 1.5: the turn-scoped SSE progress/result wire contract. Re-exported
- * at the END of this file (not the top) — `progress.ts` imports
- * `chatMessageSchema` back from this module, and this file's own
- * `chatMessageSchema` export must already be initialized by the time that
- * circular import is resolved.
+ * Story 1.5: the turn-scoped SSE progress/result wire contract.
+ * `progress.ts` imports `chatMessageSchema` from `./chat.js` directly
+ * (Spec 2.12) — no circular import back into this file any more.
  */
 export * from './progress.js';

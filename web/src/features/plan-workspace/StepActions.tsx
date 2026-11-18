@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { useTranslation } from 'react-i18next';
-import { startStepResponseSchema, completeStepResponseSchema, type PlanStepResponse } from '@app/shared';
+import { startStepResponseSchema, completeStepResponseSchema, type PlanStepResponse, type ChatMessage } from '@app/shared';
 import { Button } from '../../components/ui/button';
 import { cn } from '../../lib/utils';
 
@@ -10,6 +10,10 @@ export interface StepActionsProps {
   /** Re-fetches `get_current_step` once an action succeeds, so the
    * newly-current/next step shows without a page reload. */
   onStepChanged: () => void;
+  /** Spec 2.12 AC8: fires once, only on a successful `start`, with the
+   * server's own chat acknowledgment — separate from `onStepChanged` so
+   * `complete()` (which never produces one) can't accidentally trigger it. */
+  onStepStarted?: (message: ChatMessage) => void;
 }
 
 type Phase = 'idle' | 'busy' | 'failed';
@@ -29,7 +33,7 @@ type Phase = 'idle' | 'busy' | 'failed';
  * so it fades and collapses smoothly in place while everything around it
  * (the "Mark as done" button, the next-step region) stays put.
  */
-export function StepActions({ planId, step, onStepChanged }: StepActionsProps) {
+export function StepActions({ planId, step, onStepChanged, onStepStarted }: StepActionsProps) {
   const { t } = useTranslation('plan');
   const [phase, setPhase] = React.useState<Phase>('idle');
   const [planCompleted, setPlanCompleted] = React.useState(false);
@@ -43,7 +47,12 @@ export function StepActions({ planId, step, onStepChanged }: StepActionsProps) {
           return;
         }
         const body: unknown = await res.json();
-        setPhase(startStepResponseSchema.safeParse(body).success ? 'idle' : 'failed');
+        const parsed = startStepResponseSchema.safeParse(body);
+        setPhase(parsed.success ? 'idle' : 'failed');
+        // Spec 2.12 AC8: `chatMessage` is present only when the server's own
+        // direct model call produced one (fail-open — absent on any
+        // failure/flag/timeout, never an error on its own).
+        if (parsed.success && parsed.data.chatMessage) onStepStarted?.(parsed.data.chatMessage);
         onStepChanged();
       })
       .catch(() => setPhase('failed'));
@@ -90,7 +99,12 @@ export function StepActions({ planId, step, onStepChanged }: StepActionsProps) {
           {phase === 'busy' ? t('stepActions.completing') : t('stepActions.completeButton')}
         </Button>
       </div>
-      {step.startedAt ? <p className="text-xs text-muted-foreground">{t('stepActions.startedHint')}</p> : null}
+      {/* Spec 2.12 AC8: the old static "You've started this step." hint is
+       * removed — the server's own live chat acknowledgment (appended to
+       * the plan thread, shown via `ChatThread`'s `incomingMessage` prop)
+       * replaces it; `stepActions.startedHint` itself stays in the locale
+       * files, unused, per the Code Map (avoids touching unrelated i18n
+       * key-coverage tests). */}
       {phase === 'failed' ? (
         <p role="alert" className="text-xs text-muted-foreground">
           {t('stepActions.failed')}

@@ -9,7 +9,7 @@ import {
 } from '@app/shared';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '../components/ui/card';
-import { cn } from '../lib/utils';
+import { cn, prefersReducedMotion } from '../lib/utils';
 import { ChatMessage, type ChatMessageFooterItem } from './ChatMessage';
 import { createProgressLabelScheduler } from './progressLabelScheduler';
 import { parseSseStream } from './sse';
@@ -90,9 +90,16 @@ export interface ChatThreadProps {
    * modes beside the text field)") — empty by default; Story 4.3 fills it
    * with a voice-record control. */
   inputExtra?: React.ReactNode;
+  /** Spec 2.12 AC8: a message the caller wants shown live the moment it
+   * arrives (here: `start_step`'s own direct-model-call acknowledgment),
+   * without waiting for a reload/re-fetch of this thread's history. Id-
+   * guarded below — the same message also lands in a later `GET .../messages`
+   * history read (it was persisted server-side too), so it must never be
+   * appended twice. */
+  incomingMessage?: ChatMessageType;
 }
 
-export function ChatThread({ endpoint = DEFAULT_CHAT_ENDPOINT, footerItems = [], inputExtra }: ChatThreadProps = {}) {
+export function ChatThread({ endpoint = DEFAULT_CHAT_ENDPOINT, footerItems = [], inputExtra, incomingMessage }: ChatThreadProps = {}) {
   const { t } = useTranslation('chat');
   const [messages, setMessages] = React.useState<ChatMessageType[]>([]);
   const [historyLoaded, setHistoryLoaded] = React.useState(false);
@@ -145,14 +152,6 @@ export function ChatThread({ endpoint = DEFAULT_CHAT_ENDPOINT, footerItems = [],
     node.addEventListener('scroll', handleScroll);
     return () => node.removeEventListener('scroll', handleScroll);
   }, []);
-
-  // Story 2.13 AC: "reduced-motion settings ... instant instead of
-  // animated." `matchMedia` is read fresh at scroll time (not memoized) —
-  // this never changes mid-session in practice, but there's no reason to
-  // cache a system setting read this cheaply.
-  function prefersReducedMotion(): boolean {
-    return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
-  }
 
   // The one case the pin-to-top behavior below doesn't cover: opening/
   // reloading the thread — there's no "just sent" message to pin, so this
@@ -280,6 +279,19 @@ export function ChatThread({ endpoint = DEFAULT_CHAT_ENDPOINT, footerItems = [],
       cancelled = true;
     };
   }, [endpoint]);
+
+  // Spec 2.12 AC8: appends `incomingMessage` the moment it arrives (a prop
+  // change, not a fetch) — id-guarded against both an already-appended copy
+  // of itself (a re-render with the same prop value) and the history GET
+  // above, which may have already loaded this same server-persisted message
+  // by the time this fires. Animated the same way a fresh SSE `result`
+  // message is, so it reads as just having arrived rather than always
+  // having been there.
+  React.useEffect(() => {
+    if (!incomingMessage) return;
+    setMessages((prev) => (prev.some((message) => message.id === incomingMessage.id) ? prev : [...prev, incomingMessage]));
+    setAnimatedIds((prev) => (prev.has(incomingMessage.id) ? prev : new Set(prev).add(incomingMessage.id)));
+  }, [incomingMessage]);
 
   const handleSubmit = React.useCallback(
     (event: React.FormEvent) => {

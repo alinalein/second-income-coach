@@ -21,7 +21,7 @@ import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '../../components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from 'shadcn-glass-ui';
-import { IdeaEvidence, foreignSourceRegion, useViewerCountry, hasDemandEvidence } from './IdeaEvidence';
+import { IdeaEvidence, foreignSourceRegion, useViewerCountry, hasDemandEvidence, TranslatingBlock } from './IdeaEvidence';
 
 /**
  * Story 2.2 follow-up fix round 2, fix 2 (amended round 4, fix 4d): "potential
@@ -221,6 +221,20 @@ function translationKey(ideaId: string, language: string): string {
 const TYPICAL_GENERATE_DURATION_MS = 35_000;
 const PROGRESS_HOLD_PERCENT = 90;
 const PROGRESS_TICK_MS = 300;
+
+/**
+ * Spec 2.12 AC1: only the auto-generate path (fired right after a user's
+ * first-ever intake save, `autoGenerate` prop — `App.tsx`) shows a
+ * classify->generate stage-text split; manual generate/regenerate keeps
+ * `TYPICAL_GENERATE_DURATION_MS` and the one existing stage text, unchanged
+ * (I/O matrix: "AC1 manual generate"). `AUTO_GENERATE_CLASSIFY_DURATION_MS`
+ * is a rough estimate for the server's own intake-classification step
+ * (unmeasured — no dedicated timing instrumentation exists for it yet);
+ * `AUTO_GENERATE_TOTAL_DURATION_MS` is the combined bar duration so the one
+ * timer still carries through both stages without resetting.
+ */
+const AUTO_GENERATE_CLASSIFY_DURATION_MS = 3_000;
+const AUTO_GENERATE_TOTAL_DURATION_MS = TYPICAL_GENERATE_DURATION_MS + AUTO_GENERATE_CLASSIFY_DURATION_MS;
 /** Story 2.6 (bug fix): matches `DeterminateProgressBar`'s own fill
  * transition (`transition-[width] duration-300` below) — the delay before
  * the new ideas replace this view, so the bar's fill is actually visible
@@ -433,11 +447,17 @@ function IdeaCard({
   onSetStatus,
   onRequestSelect,
   pending,
+  translating,
 }: {
   idea: IdeaWithPlanResponse;
   /** Story 2.7: the cached translation for this idea into the current UI
    * language, if one exists and is needed; `undefined` otherwise. */
   translation: IdeaTranslation | undefined;
+  /** Spec 2.12 AC3: true while a batched translate call for the current UI
+   * language, covering this idea, is in flight — drives the shimmer
+   * placeholder on title/rationale/demandEvidenceNote/growthPath instead
+   * of the old page-level "is being translated" banner. */
+  translating: boolean;
   currency: CurrencyCode;
   locale: string;
   /** Story 2.6 AC5: lifted into the parent `IdeasPanel` and passed down —
@@ -522,20 +542,24 @@ function IdeaCard({
           ) : null}
           <Badge variant="muted">{t(`ideaType.${idea.ideaType}`)}</Badge>
         </div>
-        <CardTitle className="leading-snug">{displayIdea.title}</CardTitle>
+        <TranslatingBlock translating={translating} shimmerLinesCount={1} srText={displayIdea.title}>
+          <CardTitle className="leading-snug">{displayIdea.title}</CardTitle>
+        </TranslatingBlock>
       </div>
 
       {/* Block: rationale, as a real list — why it fits / first step /
        * optional caveat (Boundary: AC still requires this directly on the
        * card, in both languages, never behind an expansion). */}
-      <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
-        {rationaleLines.map((line, index) => (
-          // Index-keyed is fine here: this list is never reordered,
-          // filtered, or edited in place — only ever rendered once from
-          // a persisted, already-validated idea.
-          <li key={index}>{line}</li>
-        ))}
-      </ul>
+      <TranslatingBlock translating={translating} shimmerLinesCount={rationaleLines.length} srText={rationaleLines.join(' ')}>
+        <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
+          {rationaleLines.map((line, index) => (
+            // Index-keyed is fine here: this list is never reordered,
+            // filtered, or edited in place — only ever rendered once from
+            // a persisted, already-validated idea.
+            <li key={index}>{line}</li>
+          ))}
+        </ul>
+      </TranslatingBlock>
 
       {/* Block: structured stats. Story 2.3 AC2: every label cell shares
        * `labelClassName`'s fixed width so values start at a consistent
@@ -671,7 +695,7 @@ function IdeaCard({
           {/* User-requested follow-up: demand evidence + growth path lead
            * the panel, ahead of the cited-fields chips and the baseline-
            * rate citation line below. */}
-          <IdeaEvidence idea={displayIdea} viewerCountry={viewerCountry} />
+          <IdeaEvidence idea={displayIdea} viewerCountry={viewerCountry} translating={translating} />
           <span className="text-xs text-muted-foreground">
             {t('card.citedFieldsSummary', { count: idea.citedIntakeFields.length })}
           </span>
@@ -792,8 +816,29 @@ export function IdeasPanel({
   // after every generate response — `null` only until the first `GET
   // /api/ideas` response lands.
   const [generateLimit, setGenerateLimit] = React.useState<GenerateLimitStatus | null>(null);
-  const [phase, setPhase] = React.useState<Phase>('loading');
+  // Spec 2.12 AC1: on the auto-generate path, `phase` starts at
+  // `'generating'` already — before this component's first real paint —
+  // instead of `'loading'` then flipping to `'idle'` (a frame with an
+  // idle, enabled "Generate" button) and only then to `'generating'` once a
+  // separate effect notices. The lazy initializer runs once, synchronously,
+  // ahead of that first paint.
+  const [phase, setPhase] = React.useState<Phase>(() => (autoGenerate ? 'generating' : 'loading'));
   const [progress, setProgress] = React.useState(0);
+  // Spec 2.12 AC1: which stage text the generating footer shows — only the
+  // auto-generate path ever sets this to `'classifying'` (for the first
+  // ~`AUTO_GENERATE_CLASSIFY_DURATION_MS`); a manual generate/regenerate
+  // never touches this, so it stays at the existing single stage text.
+  const [generatingStage, setGeneratingStage] = React.useState<'classifying' | 'generating'>(
+    autoGenerate ? 'classifying' : 'generating',
+  );
+  // Review fix (Story 2.11 regression): true once the first `GET /api/ideas`
+  // has settled, success or failure — lets the auto-generate effect below
+  // wait for `generateLimit` to actually be known before firing, so it
+  // never auto-fires into an already-known-blocked (e.g. shared-budget-
+  // exhausted) limit, while still never showing an idle/enabled frame in
+  // the meantime (`phase` is already `'generating'` the whole time it
+  // waits — see that lazy initializer above).
+  const [initialLoadSettled, setInitialLoadSettled] = React.useState(false);
   // Fail-fast (every web_search call in a round failed): distinct from the
   // generic `generateFailed` message — set alongside `setPhase('generate-
   // error')`, read only while `phase === 'generate-error'`. Never falls
@@ -856,6 +901,16 @@ export function IdeasPanel({
     };
   }, []);
 
+  // Spec 2.12 AC1: guards every `setPhase` call below against clobbering an
+  // already-`'generating'` phase — on the auto-generate path, this effect's
+  // own GET can resolve (success or failure) while the separate mount-only
+  // auto-generate effect's own `handleGenerate()` call is already running,
+  // and must never flip the visible phase back to `'idle'`/`'load-error'`
+  // out from under it.
+  function setPhaseUnlessGenerating(next: Phase) {
+    setPhase((prev) => (prev === 'generating' ? prev : next));
+  }
+
   React.useEffect(() => {
     let cancelled = false;
 
@@ -863,22 +918,28 @@ export function IdeasPanel({
       .then(async (res) => {
         if (cancelled) return;
         if (!res.ok) {
-          setPhase('load-error');
+          setPhaseUnlessGenerating('load-error');
           return;
         }
         const body: unknown = await res.json();
         const result = ideasWithPlanResponseSchema.safeParse(body);
         if (!result.success) {
-          setPhase('load-error');
+          setPhaseUnlessGenerating('load-error');
           return;
         }
         setIdeas(result.data.ideas);
         setCurrency(result.data.currency);
         setGenerateLimit(result.data.generateLimit);
-        setPhase('idle');
+        setPhaseUnlessGenerating('idle');
       })
       .catch(() => {
-        if (!cancelled) setPhase('load-error');
+        if (!cancelled) setPhaseUnlessGenerating('load-error');
+      })
+      .finally(() => {
+        // Review fix: set regardless of outcome — even a failed/unparseable
+        // load must release the auto-generate effect below rather than
+        // leaving it waiting on a `generateLimit` that will never arrive.
+        if (!cancelled) setInitialLoadSettled(true);
       });
 
     return () => {
@@ -1083,9 +1144,16 @@ export function IdeasPanel({
     if (succeeded && isMountedRef.current) onViewPlan?.(idea.id, idea.title);
   }, [confirmIdea, postIdeaStatus, onViewPlan]);
 
-  const handleGenerate = React.useCallback(() => {
+  const handleGenerate = React.useCallback((options: { auto?: boolean } = {}) => {
+    const isAuto = options.auto ?? false;
+    // Spec 2.12 AC1: only the auto path uses the longer combined duration
+    // and the classify->generate stage-text split; a manual call (`isAuto`
+    // false, including the default with no argument at all) keeps the
+    // existing single-stage timing exactly as before.
+    const durationMs = isAuto ? AUTO_GENERATE_TOTAL_DURATION_MS : TYPICAL_GENERATE_DURATION_MS;
     setPhase('generating');
     setProgress(0);
+    setGeneratingStage(isAuto ? 'classifying' : 'generating');
 
     const controller = new AbortController();
     const timeoutId = window.setTimeout(() => controller.abort(), GENERATE_TIMEOUT_MS);
@@ -1093,7 +1161,8 @@ export function IdeasPanel({
     const startedAt = Date.now();
     const progressIntervalId = window.setInterval(() => {
       const elapsedMs = Date.now() - startedAt;
-      setProgress(Math.min(PROGRESS_HOLD_PERCENT, (elapsedMs / TYPICAL_GENERATE_DURATION_MS) * PROGRESS_HOLD_PERCENT));
+      setProgress(Math.min(PROGRESS_HOLD_PERCENT, (elapsedMs / durationMs) * PROGRESS_HOLD_PERCENT));
+      if (isAuto) setGeneratingStage(elapsedMs < AUTO_GENERATE_CLASSIFY_DURATION_MS ? 'classifying' : 'generating');
     }, PROGRESS_TICK_MS);
 
     // Story 2.7 (AC4): a button click is not a written chat message, so the
@@ -1180,21 +1249,39 @@ export function IdeasPanel({
       });
   }, [i18n.language]);
 
-  // Story 2.8 AC1: fires `handleGenerate()` exactly once, automatically,
-  // the first time this panel is idle with no ideas yet *and* `autoGenerate`
-  // is set — never on a later re-render of the same mount (the ref is set
-  // before calling, per the Code Map), and never again after a manual
-  // generate/regenerate changes `phase` away from `idle`+empty and back.
+  // Story 2.8 AC1 / Spec 2.12 AC1: fires `handleGenerate({ auto: true })`
+  // automatically — never on a later re-render of the same mount (the ref
+  // is set before calling) — once the GET-ideas effect above has settled
+  // (`initialLoadSettled`), so there's still no frame where `phase` is
+  // anything but `'generating'` already (see the lazy `phase` initializer):
+  // this effect only decides *whether a real request starts*, never when
+  // the generating UI itself first shows.
+  //
+  // Review fix (Story 2.11 regression): waiting for `initialLoadSettled`
+  // (rather than firing unconditionally on mount) restores that story's
+  // "never auto-fire into a known-blocked limit" rule — e.g. the shared
+  // search budget already exhausted by other users — without reintroducing
+  // the idle-frame bug this story fixes; `generateLimit` is only ever
+  // non-null once that GET has actually resolved. A failed/unparseable GET
+  // still releases this effect (`initialLoadSettled` is set either way) and
+  // falls through to firing anyway, since a transient load failure says
+  // nothing about whether the limit is actually blocked.
   const autoGenerateFiredRef = React.useRef(false);
   React.useEffect(() => {
-    // Story 2.11: never auto-fires into a known-blocked limit — same as
-    // the button itself being disabled, this never "fails after the fact"
-    // when the state was already known.
-    if (phase === 'idle' && ideas.length === 0 && autoGenerate && !autoGenerateFiredRef.current && !(generateLimit?.blocked ?? false)) {
-      autoGenerateFiredRef.current = true;
-      handleGenerate();
+    if (!autoGenerate || autoGenerateFiredRef.current || !initialLoadSettled) return;
+    autoGenerateFiredRef.current = true;
+    if (generateLimit?.blocked) {
+      // Never fires into a known-blocked limit — same as the button
+      // itself being disabled, this never "fails after the fact" once the
+      // state was already known. Bypasses `setPhaseUnlessGenerating`
+      // deliberately: this is the one legitimate way out of the
+      // auto-generate path's synthetic `'generating'` phase when no real
+      // request is ever going to start.
+      setPhase('idle');
+      return;
     }
-  }, [phase, ideas.length, autoGenerate, handleGenerate, generateLimit]);
+    handleGenerate({ auto: true });
+  }, [autoGenerate, initialLoadSettled, generateLimit, handleGenerate]);
 
   const locale = LOCALE_BY_LANGUAGE[i18n.language] ?? 'en-US';
   // UX fix (user-reported): the "Generate new ideas" button moved out of
@@ -1207,6 +1294,14 @@ export function IdeasPanel({
       ? new Intl.DateTimeFormat(locale, { hour: '2-digit', minute: '2-digit' }).format(new Date(generateLimit.resetsAt))
       : '';
   const generating = phase === 'generating';
+  // Spec 2.12 AC1: computed once, used for both the progress bar's own
+  // `aria-label` and the visible status text below it, so they can never
+  // drift out of sync with each other. `generatingStage` only ever reads
+  // `'classifying'` on the auto-generate path's first
+  // ~`AUTO_GENERATE_CLASSIFY_DURATION_MS` — a manual generate/regenerate
+  // stays on `'generating'` the whole time, rendering the exact same
+  // `generatingStatus` text as before.
+  const generatingStatusLabel = generatingStage === 'classifying' ? t('generatingStatusClassifying') : t('generatingStatus');
   // UX fix (user-reported, live): three views share this one grid.
   // `onlyIdeaId` (a stale/hand-typed single-idea URL) shows *only* that one
   // idea's card. `onlyBookmarked` (the sidebar's "Bookmarked" button) shows
@@ -1217,9 +1312,16 @@ export function IdeasPanel({
   // source of truth for the auto-generate effect above and the status
   // actions below, which care about "does the user have any ideas at all",
   // not what this grid happens to be showing right now.
+  //
+  // User-reported follow-up: Story 2.9's own AC is explicit — "the
+  // 'Bookmarked' list ... the user has bookmarked ideas *without* a plan" —
+  // once a bookmarked idea is demoted from `selected` back to `bookmarked`
+  // (a later `selected` sweeps every non-rejected/non-bookmarked sibling,
+  // Code Map) it keeps `hasPlan: true` from its earlier selection and
+  // belongs in "My plans" only, not duplicated here too.
   const visibleIdeas = React.useMemo(() => {
     if (onlyIdeaId) return ideas.filter((idea) => idea.id === onlyIdeaId);
-    if (onlyBookmarked) return ideas.filter((idea) => idea.status === 'bookmarked');
+    if (onlyBookmarked) return ideas.filter((idea) => idea.status === 'bookmarked' && !idea.hasPlan);
     return ideas.filter((idea) => idea.status === 'suggested');
   }, [ideas, onlyIdeaId, onlyBookmarked]);
 
@@ -1261,14 +1363,11 @@ export function IdeasPanel({
               {t('error.statusUpdateFailed')}
             </Badge>
           ) : null}
-          {/* Story 2.7: independent of `phase`/`statusUpdateFailed` too — the
-           * translation runs in the background while the cards keep their
-           * stored-language text. */}
-          {translatingLanguages.has(i18n.language) ? (
-            <Badge variant="muted" role="status" aria-live="polite">
-              {t('translating')}
-            </Badge>
-          ) : null}
+          {/* Spec 2.12 AC3: the old page-level "is being translated" banner
+           * is gone — each translating field now shimmers in place
+           * (`TranslatingBlock`, passed `translating` below) instead, so
+           * there's no separate "is being translated" text anywhere on the
+           * page while a batch is in flight. */}
           {failedLanguages.has(i18n.language) && !translatingLanguages.has(i18n.language) ? (
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant="muted" role="alert">
@@ -1286,23 +1385,33 @@ export function IdeasPanel({
           ) : null}
           {visibleIdeas.length > 0 ? (
             <div className="grid grid-cols-1 items-stretch gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {visibleIdeas.map((idea) => (
-                <IdeaCard
-                  key={idea.id}
-                  idea={idea}
-                  translation={translations.get(translationKey(idea.id, i18n.language))}
-                  currency={currency}
-                  locale={locale}
-                  viewerCountry={viewerCountry}
-                  onSetStatus={handleSetIdeaStatus}
-                  onRequestSelect={handleRequestSelect}
-                  // Only the card(s) this specific action touches disable —
-                  // the target, plus any siblings a `selected` sweep demotes
-                  // (those are genuinely changing too). An unrelated card's
-                  // own action is unaffected.
-                  pending={pendingIdeaIds.has(idea.id)}
-                />
-              ))}
+              {visibleIdeas.map((idea) => {
+                const cardTranslation = translations.get(translationKey(idea.id, i18n.language));
+                return (
+                  <IdeaCard
+                    key={idea.id}
+                    idea={idea}
+                    translation={cardTranslation}
+                    // Spec 2.12 AC3: this specific idea is still missing its
+                    // own translation for the current language *and* a
+                    // batch covering it is in flight right now — never true
+                    // once the batch resolves (either this idea gets a
+                    // cached translation, or the whole language's own
+                    // `translatingLanguages` entry clears either way).
+                    translating={translatingLanguages.has(i18n.language) && idea.language !== i18n.language && !cardTranslation}
+                    currency={currency}
+                    locale={locale}
+                    viewerCountry={viewerCountry}
+                    onSetStatus={handleSetIdeaStatus}
+                    onRequestSelect={handleRequestSelect}
+                    // Only the card(s) this specific action touches disable —
+                    // the target, plus any siblings a `selected` sweep demotes
+                    // (those are genuinely changing too). An unrelated card's
+                    // own action is unaffected.
+                    pending={pendingIdeaIds.has(idea.id)}
+                  />
+                );
+              })}
             </div>
           ) : null}
         </CardContent>
@@ -1324,7 +1433,18 @@ export function IdeasPanel({
          */}
         {phase !== 'loading' ? (
           <CardFooter className="flex flex-col items-start gap-3">
-            <Button type="button" size="sm" className="gap-2" disabled={generating || generateBlocked} onClick={handleGenerate}>
+            {/* Spec 2.12 AC1: called with no arguments here — a manual
+             * click always takes the unchanged, single-stage timing (never
+             * `isAuto`); passing `handleGenerate` directly as the handler
+             * would otherwise forward the click's own `SyntheticEvent` as
+             * its first argument. */}
+            <Button
+              type="button"
+              size="sm"
+              className="gap-2"
+              disabled={generating || generateBlocked}
+              onClick={() => handleGenerate()}
+            >
               {generating ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : null}
               {generating ? t('generatingButton') : ideas.length > 0 ? t('generateNewButton') : t('generateButton')}
             </Button>
@@ -1347,8 +1467,8 @@ export function IdeasPanel({
               role={generating ? 'status' : undefined}
               aria-hidden={!generating}
             >
-              <DeterminateProgressBar percent={progress} label={t('generatingStatus')} />
-              <p className="text-sm font-medium">{t('generatingStatus')}</p>
+              <DeterminateProgressBar percent={progress} label={generatingStatusLabel} />
+              <p className="text-sm font-medium">{generatingStatusLabel}</p>
               <p className="text-xs text-muted-foreground">{t('generatingHint')}</p>
             </div>
           </CardFooter>

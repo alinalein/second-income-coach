@@ -7,7 +7,7 @@
     "loading": "Lädt…",
     "loadFailed": "Dein aktueller Schritt konnte nicht geladen werden.",
     "noCurrentStep": "Noch kein aktueller Schritt.",
-    "nextLabel": "Als Nächstes (gesperrt)",
+    "nextLabel": "Nächster Schritt",
     "dayLabel": "Tag {{day}}",
     "gapBanner": "Schön, dass du wieder da bist — du musst keine Pause erklären. Wir haben deinen Zeitplan angepasst, leg einfach los, sobald du bereit bist."
   },

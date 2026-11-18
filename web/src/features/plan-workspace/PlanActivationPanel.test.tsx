@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react';
 import type { PlanActivationReview } from '@app/shared';
 import { PlanActivationPanel } from './PlanActivationPanel';
 
@@ -77,5 +77,39 @@ describe('PlanActivationPanel (bug fix: modify/reject must re-POST /activate, ne
     // The follow-up fetch after modify must be the fixed `POST`, not `GET`.
     expect(getActivateCalls).toBe(1); // only the initial mount check
     expect(postActivateCalls).toBe(2); // "Review plan" click + the post-modify re-request
+  });
+});
+
+// Spec 2.12 AC4: the review renders inside a backdropped Dialog (never
+// pushing anything else on the page down), and a step description that
+// already carries its own leading bullet marker renders as exactly one
+// bullet once placed in the list's own `<li>`, not two.
+describe('PlanActivationPanel (Spec 2.12 AC4: review-needing phases render inside a Dialog)', () => {
+  it('renders the review inside a role="dialog" element, stripping a doubled leading bullet marker', async () => {
+    const review = fakeReview({
+      steps: [
+        { id: 'step-1', stepOrder: 0, title: 'First action', description: ['• Take one photo.'], dayOffset: 0, status: 'current', startedAt: null },
+      ],
+    });
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      const method = init?.method ?? 'GET';
+      if (url.endsWith('/activate') && method === 'POST') {
+        return Promise.resolve(new Response(JSON.stringify(review), { status: 200 }));
+      }
+      if (url.endsWith('/activate') && method === 'GET') {
+        return Promise.resolve(new Response(JSON.stringify({ review: null }), { status: 200 }));
+      }
+      throw new Error(`Unmocked fetch: ${method} ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<PlanActivationPanel planId="plan-1" onActivated={() => undefined} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Review plan' }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Take one photo.')).toBeInTheDocument();
+    expect(within(dialog).queryByText('• Take one photo.')).not.toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Confirm & activate' })).toBeInTheDocument();
   });
 });

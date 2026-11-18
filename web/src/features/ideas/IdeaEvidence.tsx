@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { useTranslation } from 'react-i18next';
 import { getIntakeResponseSchema, classifyCitationRegion, type IdeaResponse, type CountryCode } from '@app/shared';
+import { prefersReducedMotion } from '../../lib/utils';
 
 /**
  * Story 2.5. Mirrors `IdeasPanel.tsx`'s own (unexported, not reusable here)
@@ -104,6 +105,86 @@ export function hasDemandEvidence(idea: IdeaResponse): boolean {
 }
 
 /**
+ * Spec 2.12 AC3: replaces the old page-level "is being translated" banner —
+ * while a field's own batched translation for the current UI language is
+ * in flight, this renders a blurred/shimmer placeholder (sized to roughly
+ * match real text, so swapping in the translated content causes no layout
+ * jump) in place of the real content, then crossfades the real content in
+ * once it's ready. `aria-busy` marks the wrapping block while translating;
+ * `srText` keeps the original (pre-translation) text available to a screen
+ * reader during the wait, rather than leaving the block silent.
+ * `prefers-reduced-motion` skips both the shimmer pulse and the crossfade
+ * transition — an instant swap instead. Shared by `IdeasPanel.tsx`'s
+ * `IdeaCard` (title/rationale) and this file's own `IdeaEvidence`
+ * (demandEvidenceNote/growthPath) — the one translation batch covers all
+ * four fields together (Boundary), so this is the one place their
+ * loading-state *presentation* is defined.
+ */
+export function TranslatingBlock({
+  translating,
+  shimmerLinesCount,
+  srText,
+  children,
+}: {
+  translating: boolean;
+  shimmerLinesCount: number;
+  srText: string;
+  children: React.ReactNode;
+}) {
+  // Review fix: reuses the shared `prefersReducedMotion()` helper (`lib/
+  // utils.ts`) instead of reimplementing the same `matchMedia` check here —
+  // `ChatThread.tsx`'s own reduced-motion check was extracted to the same
+  // place.
+  const reducedMotion = prefersReducedMotion();
+  // Lazy-initialized from `translating` so a field that was never mid-
+  // translation (the common case) renders at full opacity immediately, with
+  // no fade-in delay/flash on first mount — the crossfade only ever plays
+  // for a field that's actually finishing a real translation wait.
+  const [crossfadeIn, setCrossfadeIn] = React.useState(() => !translating);
+
+  // `useLayoutEffect` (not `useEffect`): commits `crossfadeIn` before the
+  // browser paints, so there's never a one-frame flash of the wrong opacity
+  // between the shimmer branch unmounting and this state settling —
+  // matters most for the reduced-motion case, which sets the final value
+  // synchronously rather than via the next `requestAnimationFrame`.
+  React.useLayoutEffect(() => {
+    if (translating) {
+      setCrossfadeIn(false);
+      return undefined;
+    }
+    if (reducedMotion) {
+      setCrossfadeIn(true);
+      return undefined;
+    }
+    const frame = requestAnimationFrame(() => setCrossfadeIn(true));
+    return () => cancelAnimationFrame(frame);
+  }, [translating, reducedMotion]);
+
+  if (translating) {
+    return (
+      <div aria-busy="true">
+        <span className="sr-only">{srText}</span>
+        <div aria-hidden="true" className="flex flex-col gap-1.5 py-0.5">
+          {Array.from({ length: shimmerLinesCount }).map((_, index) => (
+            <span
+              key={index}
+              className={`block h-3.5 rounded bg-muted ${reducedMotion ? '' : 'animate-pulse'}`}
+              style={{ width: shimmerLinesCount > 1 && index === shimmerLinesCount - 1 ? '70%' : '100%' }}
+            />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`${reducedMotion ? '' : 'transition-opacity duration-300'} ${crossfadeIn ? 'opacity-100' : 'opacity-0'}`}>
+      {children}
+    </div>
+  );
+}
+
+/**
  * AC: discovery-sourced demand/trend evidence (note + citation) and a
  * translated growth-path note. The baseline-rate region label used to live
  * here too (the baseline citation itself renders in `IdeasPanel.tsx`), but
@@ -114,8 +195,21 @@ export function hasDemandEvidence(idea: IdeaResponse): boolean {
  * per card by the caller (`useViewerCountry`) and shared with its own
  * compact citation line, instead of this component fetching independently
  * a second time for the same data.
+ *
+ * `translating` (Spec 2.12 AC3): true while a batched translate call for
+ * the current UI language is in flight for this idea — shimmers
+ * `demandEvidenceNote`/`growthPath` in place via `TranslatingBlock` instead
+ * of the old page-level banner.
  */
-export function IdeaEvidence({ idea, viewerCountry }: { idea: IdeaResponse; viewerCountry: CountryCode | undefined }) {
+export function IdeaEvidence({
+  idea,
+  viewerCountry,
+  translating,
+}: {
+  idea: IdeaResponse;
+  viewerCountry: CountryCode | undefined;
+  translating: boolean;
+}) {
   const { t } = useTranslation('ideas');
 
   if (!hasDemandEvidence(idea) && !idea.growthPath) return null;
@@ -135,7 +229,9 @@ export function IdeaEvidence({ idea, viewerCountry }: { idea: IdeaResponse; view
         // here — the always-visible toggle-row teaser in `IdeasPanel.tsx`
         // already announces it once, right before this panel opens.
         <div className="flex flex-col gap-1">
-          <p>{idea.demandEvidenceNote}</p>
+          <TranslatingBlock translating={translating} shimmerLinesCount={2} srText={idea.demandEvidenceNote ?? ''}>
+            <p>{idea.demandEvidenceNote}</p>
+          </TranslatingBlock>
           {/* User-requested follow-up: same plain, comma-separated style as
            * `IdeasPanel.tsx`'s baseline-rate citation line (citation,
            * region if foreign, "unverified" if applicable) — no bordered
@@ -151,7 +247,9 @@ export function IdeaEvidence({ idea, viewerCountry }: { idea: IdeaResponse; view
       {idea.growthPath ? (
         <div className="flex flex-col gap-1">
           <span className="text-xs font-medium text-muted-foreground">{t('card.growthPathLabel')}</span>
-          <p>{idea.growthPath}</p>
+          <TranslatingBlock translating={translating} shimmerLinesCount={2} srText={idea.growthPath}>
+            <p>{idea.growthPath}</p>
+          </TranslatingBlock>
         </div>
       ) : null}
     </div>

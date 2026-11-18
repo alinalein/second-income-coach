@@ -4,6 +4,7 @@
   "loading": "Loading…",
   "submitButton": "Save and continue",
   "savingButton": "Saving…",
+  "savedConfirmation": "Saved.",
   "revisitLink": "Review your intake answers",
   "skillsInterests": {
     "label": "Skills and interests",

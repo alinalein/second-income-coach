@@ -84,6 +84,12 @@ export function IntakeForm({ onSaved }: IntakeFormProps) {
   // `onSaved` fires immediately (no separate confirmation phase/delay).
   const [phase, setPhase] = React.useState<'idle' | 'submitting' | 'error'>('idle');
   const [fieldErrors, setFieldErrors] = React.useState<FieldErrors>({});
+  // Spec 2.12 AC1 (amended): an edit of an existing intake (via "Review your
+  // intake answers") now stays on this form instead of being redirected away
+  // by `App.tsx` — this is the only feedback the user gets that the save
+  // actually happened. Cleared on the next edit, or after a short delay,
+  // whichever comes first.
+  const [justSaved, setJustSaved] = React.useState(false);
   const submitting = phase === 'submitting';
   const disabled = submitting;
 
@@ -129,6 +135,7 @@ export function IntakeForm({ onSaved }: IntakeFormProps) {
     (key: keyof SubmitIntakeRequest) =>
       (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
         setForm((prev) => ({ ...prev, [key]: event.target.value }));
+        setJustSaved(false);
       },
     [],
   );
@@ -175,7 +182,13 @@ export function IntakeForm({ onSaved }: IntakeFormProps) {
             if (isMountedRef.current) setPhase('error');
             return;
           }
-          if (isMountedRef.current) onSaved(result.data.intake);
+          if (isMountedRef.current) {
+            onSaved(result.data.intake);
+            setJustSaved(true);
+            window.setTimeout(() => {
+              if (isMountedRef.current) setJustSaved(false);
+            }, 4000);
+          }
         })
         .catch(() => {
           // Covers both a thrown network error and the timeout abort above —
@@ -308,6 +321,11 @@ export function IntakeForm({ onSaved }: IntakeFormProps) {
               t('submitButton')
             )}
           </Button>
+          {justSaved ? (
+            <p role="status" aria-live="polite" className="text-sm text-muted-foreground">
+              {t('savedConfirmation')}
+            </p>
+          ) : null}
         </CardFooter>
       </form>
     </Card>

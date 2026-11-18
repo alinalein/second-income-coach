@@ -266,6 +266,68 @@ describe('App (Story 2.1: intake gates the ideas panel)', () => {
   });
 });
 
+// Spec 2.12 AC1 (amended 2026-11-18, epics.md): the continuous save -> ideas
+// redirect + auto-generation applies ONLY to a user's first-ever intake save
+// (no intake stored yet). Editing an already-existing intake via "Review
+// your intake answers" only saves (with a short confirmation), stays put,
+// and never redirects or generates. One table-driven test, two rows.
+describe('App (Spec 2.12 AC1 amendment: redirect/auto-generate only on first-ever intake save)', () => {
+  it.each([
+    ['no intake yet -> redirects to ideas and starts generation', null, true],
+    ['intake already exists -> saves only, no redirect, no generate call', existingIntakeRecord(), false],
+  ])('%s', async (_name, initialIntake, expectRedirect) => {
+    const generateFetch = vi.fn(() => Promise.resolve(new Response(JSON.stringify({ ideas: [], currency: 'EUR' }), { status: 200 })));
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url.includes('/api/auth/session')) return Promise.resolve(authSessionResponse());
+        if (url.includes('/api/intake')) {
+          if (init?.method === 'POST') {
+            return Promise.resolve(new Response(JSON.stringify({ intake: existingIntakeRecord() }), { status: 200 }));
+          }
+          return Promise.resolve(new Response(JSON.stringify({ intake: initialIntake }), { status: 200 }));
+        }
+        if (url.includes('/api/ideas/generate')) return generateFetch();
+        if (url.includes('/api/ideas')) return Promise.resolve(new Response(JSON.stringify({ ideas: [], currency: 'EUR' }), { status: 200 }));
+        if (url.includes('/api/plans')) return Promise.resolve(new Response(JSON.stringify({ plans: [] }), { status: 200 }));
+        if (url.includes('/api/settings')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ personality: 'friendly', model: 'openai/gpt-6-luna', selectableModels: [], uiLanguage: 'English' }),
+              { status: 200 },
+            ),
+          );
+        }
+        throw new Error(`Unmocked fetch: ${url}`);
+      }),
+    );
+
+    renderApp();
+
+    if (initialIntake) {
+      fireEvent.click(await screen.findByRole('button', { name: intakeEn.revisitLink }));
+      await screen.findByDisplayValue('Woodworking');
+    } else {
+      await screen.findByLabelText(intakeEn.skillsInterests.label);
+    }
+    fireEvent.change(screen.getByLabelText(intakeEn.skillsInterests.label), { target: { value: 'Woodworking' } });
+    fireEvent.change(screen.getByLabelText(intakeEn.stoppedBeforeText.label), { target: { value: 'I got overwhelmed.' } });
+    fireEvent.click(screen.getByRole('button', { name: intakeEn.submitButton }));
+
+    if (expectRedirect) {
+      expect(await screen.findByRole('heading', { name: /your tailored income ideas/i })).toBeInTheDocument();
+      await waitFor(() => expect(generateFetch).toHaveBeenCalledOnce());
+    } else {
+      expect(await screen.findByText(intakeEn.savedConfirmation)).toBeInTheDocument();
+      expect(screen.getByLabelText(intakeEn.skillsInterests.label)).toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: /your tailored income ideas/i })).not.toBeInTheDocument();
+      expect(generateFetch).not.toHaveBeenCalled();
+    }
+  });
+});
+
 // Story 2.9 (AC: "the active view/plan survives a reload — use the URL").
 // A reload is simulated by setting the URL before the first render, same as
 // a fresh browser navigation to that path would.
