@@ -55,7 +55,7 @@ development_status:
   2-9-app-navigation-sidebar: done
   2-10-direct-paths-for-button-triggered-flows: done
   2-11-search-budget-guard: done
-  2-12-smooth-generation-flow: backlog
+  2-12-smooth-generation-flow: done
   2-13-chat-scroll-behaviour: review
   2-6-faster-idea-generation-optional: done
   epic-2-retrospective: optional
@@ -71,7 +71,7 @@ development_status:
   4-1-text-check-in-with-start-finish-acknowledgment: done
   4-2-non-punitive-missed-check-in-handling: done
   4-3-voice-check-in-with-editable-transcript: backlog
-  4-4-live-income-opportunity-projection: backlog
+  4-4-live-income-opportunity-projection: done
   epic-4-retrospective: optional
 
   epic-5: backlog
