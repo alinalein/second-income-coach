@@ -44,10 +44,6 @@ const PROGRESS_LABEL_FADE_MS = 200;
  * 0.85, before that 0.7. */
 const ALMOST_FULL_THRESHOLD_RATIO = 1;
 
-/** User-reported: the composer text field's auto-grow cap — about 6 lines
- * of text, beyond which it scrolls internally instead of growing forever
- * and pushing the rest of the layout around. */
-const MAX_TEXTAREA_HEIGHT_PX = 150;
 
 function makeLocalMessage(role: ChatMessageType['role'], kind: ChatMessageType['kind'], content: string): ChatMessageType {
   return {
@@ -125,17 +121,17 @@ export function ChatThread({ endpoint = DEFAULT_CHAT_ENDPOINT, footerItems = [],
   // an edit is still the same (voice-originated) message.
   const [pendingVoiceLanguage, setPendingVoiceLanguage] = React.useState<DetectedLanguage | undefined>(undefined);
   // User-reported: the composer's text field stayed a fixed one-line
-  // height even as `draft` grew past it (typed, or filled by voice) —
-  // the end of a long message was never visible without scrolling inside
-  // a single visible line. Auto-grows with content up to `MAX_TEXTAREA_
-  // HEIGHT_PX`, then scrolls internally rather than growing forever.
+  // height even as `draft` grew past it (typed, or filled by voice) — the
+  // end of a long message was never visible at once. Uncapped auto-grow
+  // (user-reported follow-up: no internal scrollbar, the field itself
+  // just gets taller to fit everything).
   const textareaRef = React.useRef<HTMLTextAreaElement | null>(null);
   const formRef = React.useRef<HTMLFormElement | null>(null);
   React.useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, MAX_TEXTAREA_HEIGHT_PX)}px`;
+    el.style.height = `${el.scrollHeight}px`;
   }, [draft]);
   // AC1/AC3: the current turn's localized progress label, sourced from the
   // SSE `progress` frames (Code Map).
@@ -507,8 +503,7 @@ export function ChatThread({ endpoint = DEFAULT_CHAT_ENDPOINT, footerItems = [],
             disabled={sending}
             aria-label={t('messageAriaLabel')}
             rows={1}
-            className="min-h-10 flex-1 resize-none overflow-y-auto rounded-md border border-border bg-card px-3 py-2 text-sm leading-normal text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-            style={{ maxHeight: MAX_TEXTAREA_HEIGHT_PX }}
+            className="min-h-10 flex-1 resize-none overflow-hidden rounded-md border border-border bg-card px-3 py-2 text-sm leading-normal text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background"
           />
           {/* Story 3.1 extension point: empty by default — Story 4.3 fills
            * this with a voice-record control; typed text stays available
