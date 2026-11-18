@@ -9,7 +9,24 @@ import { MODEL_FAILURE_MESSAGE, MODEL_FAILURE_MESSAGE_DE } from '../../agent/res
 import { DEFAULT_MODEL_ID } from '../../agent/registry.js';
 import { messageCosts, userSettings } from '../../db/schema/index.js';
 
-const testEnv: ChatRouterDeps['env'] = { RATE_LIMIT_WINDOW_MS: 60_000, MISTRAL_API_KEY: 'test-key' };
+// Story 5.3b: `ChatRouterDeps['env']` grew the LangSmith keys
+// `recordFeedbackExample` reads — `LANGSMITH_TRACING: 'false'` keeps every
+// feedback-route test below a no-op on that path, same as `record_feedback.
+// test.ts`'s own `TEST_ENV`.
+const testEnv: ChatRouterDeps['env'] = {
+  RATE_LIMIT_WINDOW_MS: 60_000,
+  MISTRAL_API_KEY: 'test-key',
+  LANGSMITH_TRACING: 'false',
+  LANGSMITH_API_KEY: 'test-key',
+  LANGSMITH_FEEDBACK_DATASET: 'test-dataset',
+};
+
+// Story 5.3b: `ChatRouterDeps` gained `memoryStore` — no test in this file
+// exercises a commented rating (the only path that touches it), so a
+// never-called stub is enough.
+function fakeMemoryStore(): ChatRouterDeps['memoryStore'] {
+  return { put: vi.fn(), get: vi.fn(), delete: vi.fn(), search: vi.fn() } as unknown as ChatRouterDeps['memoryStore'];
+}
 
 type Db = ChatRouterDeps['db'];
 
@@ -115,7 +132,7 @@ function buildTestApp(agent: FakeAgent, userId = 'user-1', db: Db = fakeDb()) {
     req.session.userId = userId;
     next();
   });
-  app.use('/api/chat', createChatRouter({ env: testEnv, agent, db }));
+  app.use('/api/chat', createChatRouter({ env: testEnv, agent, db, memoryStore: fakeMemoryStore() }));
   return app;
 }
 
@@ -269,7 +286,12 @@ describe('createChatRouter POST /messages', () => {
     expect(stream).toHaveBeenCalledTimes(2);
     const [, firstConfig] = stream.mock.calls[0]!;
     const [, secondConfig] = stream.mock.calls[1]!;
-    expect(firstConfig).toEqual({ configurable: { thread_id: 'discovery:user-42' }, streamMode: ['custom', 'values'] });
+    // Story 5.3b review fix: `userId` is now passed explicitly alongside
+    // `thread_id` (see `agent/index.ts`'s `resolveUserId`).
+    expect(firstConfig).toEqual({
+      configurable: { thread_id: 'discovery:user-42', userId: 'user-42' },
+      streamMode: ['custom', 'values'],
+    });
     expect(secondConfig).toEqual(firstConfig);
   });
 

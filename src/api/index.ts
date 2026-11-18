@@ -2,6 +2,7 @@ import '../config/loadDotenv.js';
 import { EnvValidationError, loadEnv } from '../config/env.js';
 import { createDb } from '../db/client.js';
 import { createCheckpointer } from '../agent/checkpointer.js';
+import { createMemoryStore } from '../agent/memory.js';
 import { createCoachAgent } from '../agent/index.js';
 import { createChatModel } from '../agent/model.js';
 import { IDEAS_MODEL_NODE_TIMEOUT_MS, IDEAS_MODEL_NODE_RETRY_POLICY, PLAN_MODEL_NODE_TIMEOUT_MS, PLAN_MODEL_NODE_RETRY_POLICY } from '../agent/resilience.js';
@@ -13,6 +14,7 @@ import { createApp } from './app.js';
 
 const CHECKPOINTER_SETUP_TIMEOUT_MS = 10_000;
 const WEB_SEARCH_TOOL_SETUP_TIMEOUT_MS = 10_000;
+const MEMORY_STORE_SETUP_TIMEOUT_MS = 10_000;
 
 class StartupTimeoutError extends Error {}
 
@@ -72,6 +74,12 @@ try {
   // startup (its own schema — not a Drizzle migration)."
   const checkpointer = createCheckpointer(env);
   await withTimeout(checkpointer.setup(), CHECKPOINTER_SETUP_TIMEOUT_MS, 'Checkpointer setup');
+  // Story 5.3b (AD-2): same "library owns its own schema, called once at
+  // startup" precedent as `checkpointer.setup()` above — `PostgresStore`'s
+  // own `setup()` runs `CREATE EXTENSION vector` plus its migrations, never
+  // a Drizzle migration (Boundary).
+  const memoryStore = createMemoryStore(env);
+  await withTimeout(memoryStore.setup(), MEMORY_STORE_SETUP_TIMEOUT_MS, 'Memory store setup');
   // Boundary: "`src/api/index.ts` gets a small, necessary exception: 2-3
   // lines to `await` the async `MCPAdapter`-backed web-search tool
   // construction before `createCoachAgent(...)`" — `MCPAdapter.listTools()`
@@ -89,7 +97,7 @@ try {
   // own `createChatModel(env)` internally when no override was given — two
   // separate client instances for the exact same model/env).
   const chatModel = createChatModel(env);
-  const agent = createCoachAgent({ env, checkpointer, db, webSearchTool, model: chatModel });
+  const agent = createCoachAgent({ env, checkpointer, db, webSearchTool, model: chatModel, memoryStore });
   // Follow-up fix 1 (AD-7): a second compiled agent — identical tools/
   // middleware/checkpointer, only the outer node's timeout differs — used
   // only by the ideas route (`generate_ideas` routinely runs longer than
@@ -106,6 +114,7 @@ try {
     // Round 9, fix (a): no whole-turn retry for the ideas-only agent — a
     // timeout there is a failure, never a re-run of every search.
     modelNodeRetryPolicy: IDEAS_MODEL_NODE_RETRY_POLICY,
+    memoryStore,
   });
   // Story 3.1: a third compiled agent — same checkpointer/db/model as the
   // other two, but its own tool set (`create_plan`/`get_current_step`,
@@ -122,6 +131,7 @@ try {
     modelNodeTimeoutMs: PLAN_MODEL_NODE_TIMEOUT_MS,
     modelNodeRetryPolicy: PLAN_MODEL_NODE_RETRY_POLICY,
     tools: [createCreatePlanTool(db, chatModel), createGetCurrentStepTool(db)],
+    memoryStore,
   });
 
   // Story 3.2 (AD-14): the dedicated, checkpointed `activate_plan` graph —
@@ -134,7 +144,7 @@ try {
   // `ideasAgent`/`plansAgent` stay constructed unchanged (still needed for
   // `.getState`/`.updateState`), but `createApp`'s ideas/plans routes now
   // also call `handleGenerateIdeas`/`handleCreatePlan` directly.
-  const app = createApp({ env, db, pool, agent, ideasAgent, plansAgent, chatModel, webSearchTool, activatePlanGraph });
+  const app = createApp({ env, db, pool, agent, ideasAgent, plansAgent, chatModel, webSearchTool, activatePlanGraph, memoryStore });
 
   const server = app.listen(env.PORT, () => {
     console.log(`[api] listening on http://localhost:${env.PORT} (${env.NODE_ENV})`);

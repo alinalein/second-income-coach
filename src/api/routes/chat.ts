@@ -24,13 +24,17 @@ import { getUserSettings } from '../../db/settings-repository.js';
 import { computeMessageCost, convertStoredCost, toMessageCostDisplay } from '../../agent/turn-cost.js';
 import { getMessageCosts, saveMessageCost } from '../../db/message-cost-repository.js';
 import { FeedbackOwnershipError, removeFeedback, setFeedback } from '../../tools/plain/record_feedback.js';
+import type { MemoryDeleteStore, MemoryPutStore } from '../../agent/memory.js';
 
 export interface ChatRouterDeps {
-  env: Pick<Env, 'RATE_LIMIT_WINDOW_MS' | 'MISTRAL_API_KEY'>;
+  env: Pick<Env, 'RATE_LIMIT_WINDOW_MS' | 'MISTRAL_API_KEY' | 'LANGSMITH_TRACING' | 'LANGSMITH_API_KEY' | 'LANGSMITH_FEEDBACK_DATASET'>;
   agent: CoachAgent;
   /** Story 5.2/5.3: reads `user_settings.currency` for cost conversion
    * (AD-27) and persists/reads `message_costs`/`message_feedback` rows. */
   db: ReturnType<typeof createDb>['db'];
+  /** Story 5.3b (AD-2): threaded into `setFeedback`/`removeFeedback` so a
+   * rated comment is remembered/forgotten in the user's semantic memory. */
+  memoryStore: MemoryPutStore & MemoryDeleteStore;
 }
 
 /** AD-27: the default when a user has no settings row yet — same default
@@ -66,7 +70,7 @@ function toChatMessage(message: BaseMessage): ChatMessage | undefined {
  * is mounted (Code Map: "mount the chat router after `app.use(requireAuth)`")
  * — neither route re-applies it itself.
  */
-export function createChatRouter({ env, agent, db }: ChatRouterDeps) {
+export function createChatRouter({ env, agent, db, memoryStore }: ChatRouterDeps) {
   const router = Router();
   // Intent: "`POST /api/chat/messages` uses `createStrictRateLimiter`" — the
   // first LLM-backed, cost-bearing route to consume the stricter tier
@@ -84,7 +88,8 @@ export function createChatRouter({ env, agent, db }: ChatRouterDeps) {
       return;
     }
 
-    const threadId = buildDiscoveryThreadId(req.session.userId!);
+    const userId = req.session.userId!;
+    const threadId = buildDiscoveryThreadId(userId);
     const userMessage = new HumanMessage(parseResult.data.content);
     // I/O matrix: "Model call exhausts retries, German message" -> the fixed
     // failure text is picked via `detectReplyLanguage` on the submitted
@@ -157,9 +162,14 @@ export function createChatRouter({ env, agent, db }: ChatRouterDeps) {
       // alongside 'custom' on this same stream() call instead yields this
       // invocation's own state after each superstep as `['values', payload]`
       // tuples, scoped to only this call.
+      // Story 5.3b (AD-2) review fix: `userId` is passed explicitly here
+      // (same `configurable` bag `plan-chat.ts` already uses for its own
+      // `userId`) rather than relying on `extractUserIdFromThreadId`'s
+      // string-parsing of `thread_id` — the settings lookup and memory
+      // retrieval in `agent/index.ts` both read this directly now.
       const stream = await agent.stream(
         { messages: [userMessage] },
-        { configurable: { thread_id: threadId }, streamMode: ['custom', 'values'] },
+        { configurable: { thread_id: threadId, userId }, streamMode: ['custom', 'values'] },
       );
 
       let lastValuesPayload: { messages?: BaseMessage[]; turnUsage?: TurnUsageWithModel } | undefined;
@@ -324,13 +334,18 @@ export function createChatRouter({ env, agent, db }: ChatRouterDeps) {
 
     const threadId = buildDiscoveryThreadId(userId);
     try {
-      const feedback = await setFeedback(db, env, {
-        messageId,
-        threadId,
-        userId,
-        rating: parseResult.data.rating,
-        comment: parseResult.data.comment,
-      });
+      const feedback = await setFeedback(
+        db,
+        env,
+        {
+          messageId,
+          threadId,
+          userId,
+          rating: parseResult.data.rating,
+          comment: parseResult.data.comment,
+        },
+        { memoryStore },
+      );
       res.json({ feedback });
     } catch (error) {
       if (error instanceof FeedbackOwnershipError) {
@@ -351,7 +366,7 @@ export function createChatRouter({ env, agent, db }: ChatRouterDeps) {
     }
 
     try {
-      await removeFeedback(db, messageId, userId);
+      await removeFeedback(db, messageId, userId, { memoryStore });
       res.status(204).end();
     } catch (error) {
       console.error('[chat] feedback removal failed:', { error: (error as Error)?.message });

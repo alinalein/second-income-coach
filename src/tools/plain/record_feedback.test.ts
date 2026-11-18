@@ -1,10 +1,23 @@
 import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
-import { afterAll, describe, expect, it } from 'vitest';
-import { resolveFeedbackComment, setFeedback, removeFeedback, FeedbackOwnershipError } from './record_feedback.js';
+import { afterAll, describe, expect, it, vi } from 'vitest';
+import { resolveFeedbackComment, setFeedback, removeFeedback, FeedbackOwnershipError, type RecordFeedbackDeps } from './record_feedback.js';
 import { createDb } from '../../db/client.js';
 import { users, messageFeedback } from '../../db/schema/index.js';
 import { evaluateAssistantMessage } from '../../agent/moderation.js';
+
+// Story 5.3b: `setFeedback`'s `env` param grew the LangSmith keys
+// `recordFeedbackExample` reads — `LANGSMITH_TRACING: 'false'` keeps every
+// existing test below a no-op on that path (I/O matrix: "LangSmith not
+// tracing -> dataset write is a no-op with a log line"), so none of them
+// need a fake `Client`/network mock just to compile against the new
+// signature.
+const TEST_ENV = {
+  MISTRAL_API_KEY: 'unused',
+  LANGSMITH_TRACING: 'false' as const,
+  LANGSMITH_API_KEY: 'unused',
+  LANGSMITH_FEEDBACK_DATASET: 'unused',
+};
 
 // AD-11/AD-22 I/O matrix: "Feedback jailbreak comment -> rating stored,
 // comment dropped" / "Feedback PII comment -> rating + redacted comment
@@ -60,7 +73,7 @@ describe('setFeedback / removeFeedback (real Postgres: the message_id unique con
     try {
       const created = await setFeedback(
         db,
-        { MISTRAL_API_KEY: 'unused' },
+        TEST_ENV,
         { messageId, threadId: 'discovery:test', userId, rating: 'up' },
         { classify: async () => ({}) },
       );
@@ -71,7 +84,7 @@ describe('setFeedback / removeFeedback (real Postgres: the message_id unique con
       // or creating a second row.
       const changed = await setFeedback(
         db,
-        { MISTRAL_API_KEY: 'unused' },
+        TEST_ENV,
         { messageId, threadId: 'discovery:test', userId, rating: 'down', comment: 'Actually not quite right' },
         { classify: async () => ({}) },
       );
@@ -97,7 +110,7 @@ describe('setFeedback / removeFeedback (real Postgres: the message_id unique con
     try {
       await setFeedback(
         db,
-        { MISTRAL_API_KEY: 'unused' },
+        TEST_ENV,
         { messageId, threadId: 'discovery:owner', userId: ownerUserId, rating: 'up' },
         { classify: async () => ({}) },
       );
@@ -105,7 +118,7 @@ describe('setFeedback / removeFeedback (real Postgres: the message_id unique con
       await expect(
         setFeedback(
           db,
-          { MISTRAL_API_KEY: 'unused' },
+          TEST_ENV,
           { messageId, threadId: 'discovery:other', userId: otherUserId, rating: 'down' },
           { classify: async () => ({}) },
         ),
@@ -135,7 +148,7 @@ describe('record_feedback never excuses a hard-constraint violation (AD-22)', ()
     try {
       await setFeedback(
         db,
-        { MISTRAL_API_KEY: 'unused' },
+        TEST_ENV,
         { messageId, threadId: 'discovery:test', userId, rating: 'up' },
         { classify: async () => ({}) },
       );
@@ -146,5 +159,90 @@ describe('record_feedback never excuses a hard-constraint violation (AD-22)', ()
     } finally {
       await cleanUp(userId);
     }
+  });
+});
+
+// Story 5.3b (AD-2/AD-22): the memory/dataset wiring itself — fully faked
+// `db`/`memoryStore`/`dataset` (no real Postgres/LangSmith), since the DB
+// constraint behavior (upsert/ownership) is already covered above and
+// `memory.ts`/`feedback-dataset.ts` cover their own internals.
+function fakeFeedbackDb(existingUserId?: string): Parameters<typeof setFeedback>[0] {
+  return {
+    select: () => ({
+      from: () => ({
+        where: () => ({ limit: () => Promise.resolve(existingUserId ? [{ userId: existingUserId }] : []) }),
+      }),
+    }),
+    insert: () => ({ values: () => ({ onConflictDoUpdate: () => Promise.resolve(undefined) }) }),
+    delete: () => ({ where: () => Promise.resolve(undefined) }),
+  } as unknown as Parameters<typeof setFeedback>[0];
+}
+
+function fakeMemoryStore(): NonNullable<RecordFeedbackDeps['memoryStore']> {
+  return {
+    put: vi.fn().mockResolvedValue(undefined),
+    get: vi.fn(),
+    delete: vi.fn().mockResolvedValue(undefined),
+  } as unknown as NonNullable<RecordFeedbackDeps['memoryStore']>;
+}
+
+describe('setFeedback memory/LangSmith wiring (Story 5.3b)', () => {
+  // I/O matrix: "Rating + comment stored -> memory upserted, LangSmith
+  // example added" / "Thumbs only, no comment -> no memory/dataset write
+  // (nothing to embed)".
+  it.each([
+    ['a comment is present', 'Great plan!', 1],
+    ['no comment (thumbs only)', undefined, 0],
+  ] as const)('%s', async (_label, comment, expectedCalls) => {
+    const memoryStore = fakeMemoryStore();
+    const dataset = {
+      hasDataset: vi.fn().mockResolvedValue(true),
+      createDataset: vi.fn(),
+      createExample: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await setFeedback(
+      fakeFeedbackDb(),
+      { MISTRAL_API_KEY: 'unused', LANGSMITH_TRACING: 'true', LANGSMITH_API_KEY: 'unused', LANGSMITH_FEEDBACK_DATASET: 'ds' },
+      { messageId: 'msg-x', threadId: 'discovery:test', userId: 'user-x', rating: 'up', comment },
+      { classify: async () => ({}), memoryStore, dataset },
+    );
+
+    // Review fix: memory/dataset writes are fire-and-forget (never block the
+    // feedback response) — `vi.waitFor` polls rather than asserting the
+    // instant `setFeedback` resolves, which is no longer when these land.
+    await vi.waitFor(() => {
+      expect(memoryStore.put).toHaveBeenCalledTimes(expectedCalls);
+      expect(dataset.createExample).toHaveBeenCalledTimes(expectedCalls);
+    });
+  });
+
+  // I/O matrix: "Rating changed/removed -> memory entry updated / deleted
+  // to match" — the memory-specific half (the DB row's own upsert is
+  // already covered by the real-Postgres test above): a commented rating
+  // changed to thumbs-only drops the now-stale memory entry.
+  it('forgets the memory entry when a commented rating is changed to thumbs-only', async () => {
+    const memoryStore = fakeMemoryStore();
+
+    await setFeedback(
+      fakeFeedbackDb(),
+      TEST_ENV,
+      { messageId: 'msg-y', threadId: 'discovery:test', userId: 'user-y', rating: 'down' },
+      { classify: async () => ({}), memoryStore },
+    );
+
+    await vi.waitFor(() => {
+      expect(memoryStore.delete).toHaveBeenCalledWith(['memory', 'user-y'], 'msg-y');
+    });
+  });
+
+  it('removeFeedback forgets the memory entry too', async () => {
+    const memoryStore = fakeMemoryStore();
+
+    await removeFeedback(fakeFeedbackDb() as never, 'msg-z', 'user-z', { memoryStore });
+
+    await vi.waitFor(() => {
+      expect(memoryStore.delete).toHaveBeenCalledWith(['memory', 'user-z'], 'msg-z');
+    });
   });
 });

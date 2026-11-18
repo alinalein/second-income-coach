@@ -26,13 +26,17 @@ import { getUserSettings } from '../../db/settings-repository.js';
 import { computeMessageCost, convertStoredCost, toMessageCostDisplay } from '../../agent/turn-cost.js';
 import { getMessageCosts, saveMessageCost } from '../../db/message-cost-repository.js';
 import { FeedbackOwnershipError, removeFeedback, setFeedback } from '../../tools/plain/record_feedback.js';
+import type { MemoryDeleteStore, MemoryPutStore } from '../../agent/memory.js';
 
 export interface PlanChatRouterDeps {
-  env: Pick<Env, 'RATE_LIMIT_WINDOW_MS' | 'MISTRAL_API_KEY'>;
+  env: Pick<Env, 'RATE_LIMIT_WINDOW_MS' | 'MISTRAL_API_KEY' | 'LANGSMITH_TRACING' | 'LANGSMITH_API_KEY' | 'LANGSMITH_FEEDBACK_DATASET'>;
   db: ReturnType<typeof createDb>['db'];
   /** The plans-only compiled agent (`plansAgent`) — so a free-form
    * follow-up in the plan thread can still call `get_current_step`. */
   agent: CoachAgent;
+  /** Story 5.3b (AD-2): threaded into `setFeedback`/`removeFeedback` so a
+   * rated comment is remembered/forgotten in the user's semantic memory. */
+  memoryStore: MemoryPutStore & MemoryDeleteStore;
 }
 
 type Db = PlanChatRouterDeps['db'];
@@ -90,7 +94,7 @@ async function loadOwnedPlanIdeaId(db: Db, userId: string, planId: string): Prom
  * Map) — the only difference is the thread id it resolves (`plan:${planId}`
  * instead of `discovery:${userId}`) and the ownership check that gates it.
  */
-export function createPlanChatRouter({ env, db, agent }: PlanChatRouterDeps) {
+export function createPlanChatRouter({ env, db, agent, memoryStore }: PlanChatRouterDeps) {
   const router = Router();
   const strictLimiter = createStrictRateLimiter(env);
 
@@ -343,13 +347,18 @@ export function createPlanChatRouter({ env, db, agent }: PlanChatRouterDeps) {
 
     const threadId = buildPlanThreadId(planId);
     try {
-      const feedback = await setFeedback(db, env, {
-        messageId,
-        threadId,
-        userId,
-        rating: parseResult.data.rating,
-        comment: parseResult.data.comment,
-      });
+      const feedback = await setFeedback(
+        db,
+        env,
+        {
+          messageId,
+          threadId,
+          userId,
+          rating: parseResult.data.rating,
+          comment: parseResult.data.comment,
+        },
+        { memoryStore },
+      );
       res.json({ feedback });
     } catch (error) {
       if (error instanceof FeedbackOwnershipError) {
@@ -385,7 +394,7 @@ export function createPlanChatRouter({ env, db, agent }: PlanChatRouterDeps) {
     }
 
     try {
-      await removeFeedback(db, messageId, userId);
+      await removeFeedback(db, messageId, userId, { memoryStore });
       res.status(204).end();
     } catch (error) {
       console.error('[plan-chat] feedback removal failed:', { error: (error as Error)?.message });

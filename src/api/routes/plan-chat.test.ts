@@ -12,7 +12,24 @@ import { createCoachAgent } from '../../agent/index.js';
 import { createDb } from '../../db/client.js';
 import { users, ideas, plans, messageCosts } from '../../db/schema/index.js';
 
-const testEnv: PlanChatRouterDeps['env'] = { RATE_LIMIT_WINDOW_MS: 60_000, MISTRAL_API_KEY: 'test-key' };
+// Story 5.3b: `PlanChatRouterDeps['env']` grew the LangSmith keys
+// `recordFeedbackExample` reads — `LANGSMITH_TRACING: 'false'` keeps every
+// feedback-route test below a no-op on that path, same as `record_feedback.
+// test.ts`'s own `TEST_ENV`.
+const testEnv: PlanChatRouterDeps['env'] = {
+  RATE_LIMIT_WINDOW_MS: 60_000,
+  MISTRAL_API_KEY: 'test-key',
+  LANGSMITH_TRACING: 'false',
+  LANGSMITH_API_KEY: 'test-key',
+  LANGSMITH_FEEDBACK_DATASET: 'test-dataset',
+};
+
+// Story 5.3b: `PlanChatRouterDeps` gained `memoryStore` — no test in this
+// file exercises a commented rating (the only path that touches it), so a
+// never-called stub is enough.
+function fakeMemoryStore(): PlanChatRouterDeps['memoryStore'] {
+  return { put: vi.fn(), get: vi.fn(), delete: vi.fn(), search: vi.fn() } as unknown as PlanChatRouterDeps['memoryStore'];
+}
 
 type FakeAgent = PlanChatRouterDeps['agent'];
 
@@ -80,7 +97,7 @@ function buildTestApp(agent: FakeAgent, userId: string, overrideDb: PlanChatRout
     req.session.userId = userId;
     next();
   });
-  app.use('/api/plans', createPlanChatRouter({ env: testEnv, db: overrideDb, agent }));
+  app.use('/api/plans', createPlanChatRouter({ env: testEnv, db: overrideDb, agent, memoryStore: fakeMemoryStore() }));
   return app;
 }
 

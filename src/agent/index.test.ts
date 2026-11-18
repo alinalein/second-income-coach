@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { tool } from 'langchain';
 import { fakeModel } from '@langchain/core/testing';
@@ -237,6 +237,66 @@ describe('createCoachAgent (hook integration: personality flows from user_settin
     const lastMessage = result.messages[result.messages.length - 1];
     expect(lastMessage?.text).toBe(JAILBREAK_REJECTION_MESSAGE);
     expect(model.calls).toHaveLength(0);
+  });
+});
+
+/**
+ * Story 5.3b (AD-2) I/O matrix: "Later turn, same topic -> system prompt
+ * includes the stored memory" / "Later turn, different user -> no memory
+ * surfaced (no cross-user leak)". `search` is faked to return a result only
+ * for one exact namespace, so the second test's assertion only passes if
+ * `recallMemories` is actually scoped by `userId`, not a global lookup.
+ */
+describe('createCoachAgent (memory retrieval into the system prompt: Story 5.3b, AD-2 review fix)', () => {
+  const MEMORY_COMMENT = 'Loved the budgeting tip from before';
+
+  /** Fakes `PostgresStore.search` keyed by namespace userId — only
+   * `OWNER_USER_ID` has a stored comment; any other namespace (including
+   * `NO_MEMORY_USER_ID`) returns no results. */
+  const OWNER_USER_ID = 'user-with-memory';
+  const NO_MEMORY_USER_ID = 'user-without-memory';
+  function fakeMemoryStore(): CreateCoachAgentDeps['memoryStore'] {
+    return {
+      search: vi.fn(async (namespace: string[]) =>
+        namespace[1] === OWNER_USER_ID ? [{ namespace, key: 'msg-1', value: { comment: MEMORY_COMMENT } }] : [],
+      ),
+    } as unknown as CreateCoachAgentDeps['memoryStore'];
+  }
+
+  // Table-driven per CLAUDE.md: one case — does this turn's system prompt
+  // carry the owner's stored memory — with three variants, all on a
+  // *plan*-shaped thread id (`plan:${planId}`, no userId embedded in it at
+  // all) to prove the fix: `userId` now comes from the explicit
+  // `configurable.userId` both `chat.ts` and `plan-chat.ts` pass, not from
+  // parsing `thread_id` (which never worked for a plan thread).
+  it.each([
+    ['a plan-chat turn for the memory owner', 'plan:plan-1', OWNER_USER_ID, true],
+    ['a plan-chat turn for a user with no stored memory', 'plan:plan-2', NO_MEMORY_USER_ID, false],
+    ["a plan-chat turn for a different user (never the owner's memory)", 'plan:plan-3', 'a-different-user', false],
+  ] as const)('%s: memory surfaces = %s', async (_label, threadId, userId, shouldSurface) => {
+    const model = fakeModel().respond(new AIMessage('Sure, happy to help!'));
+    const agent = createCoachAgent({
+      env: { OPENROUTER_API_KEY: 'test-key', MISTRAL_API_KEY: 'test-key', IDEAS_PER_BATCH: 2, DAILY_SEARCH_BUDGET: 500 },
+      checkpointer: new MemorySaver(),
+      db: fakeDb(undefined),
+      webSearchTool: {} as never,
+      model,
+      classify: async () => ({}),
+      memoryStore: fakeMemoryStore(),
+    });
+
+    await agent.invoke(
+      { messages: [new HumanMessage('Tell me more about budgeting')] },
+      { configurable: { thread_id: threadId, userId } },
+    );
+
+    const [call] = model.calls;
+    const systemMessage = call?.messages.find((message) => message._getType() === 'system');
+    if (shouldSurface) {
+      expect(systemMessage?.text).toContain(MEMORY_COMMENT);
+    } else {
+      expect(systemMessage?.text).not.toContain(MEMORY_COMMENT);
+    }
   });
 });
 

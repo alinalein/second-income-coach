@@ -12,11 +12,12 @@ import { getUserSettings } from '../db/settings-repository.js';
 import { createChatModel, createModelSelectionMiddleware } from './model.js';
 import { DEFAULT_MODEL_ID } from './registry.js';
 import { DEFAULT_PERSONALITY, PERSONALITY_PROMPTS, resolvePersonality, type Personality } from './personality.js';
-import { createModerationMiddleware, type ClassifyText } from './moderation.js';
+import { createModerationMiddleware, lastMessageOfType, type ClassifyText } from './moderation.js';
 import { createProgressMiddleware } from './progress.js';
 import { createForceToolChoiceMiddleware } from './toolChoice.js';
 import { applyModelNodeResilience, MODEL_NODE_TIMEOUT_MS } from './resilience.js';
 import { sumTurnUsage, type TurnUsage } from './turn-cost.js';
+import { recallMemories, type MemorySearchStore } from './memory.js';
 import { createSubmitIntakeTool } from '../tools/plain/submit_intake.js';
 import { createGenerateIdeasTool } from '../tools/llm/generate_ideas.js';
 
@@ -50,9 +51,25 @@ const REPLY_LANGUAGE_INSTRUCTION =
  * `api/routes/chat.ts`). `buildSystemPrompt` is exported standalone so its
  * output can be asserted directly in a unit test without constructing a
  * LangGraph runtime.
+ *
+ * Story 5.3b (AD-2): `memories` is this turn's already-retrieved,
+ * already-bounded (top-3, similarity floor, char cap — `recallMemories`)
+ * per-user semantic memories, folded in as one more prompt section when
+ * present. Omitted (or empty) when there's nothing to recall, or when the
+ * caller has no `memoryStore` configured at all — the prompt is then
+ * byte-identical to before this story. Review fix: phrased as an explicit
+ * standing instruction (not a soft "if useful" hint) — a user's past
+ * feedback is meant to actually change behavior on a similar topic, not be
+ * optional color commentary the model can take or leave.
  */
-export function buildSystemPrompt(personality: Personality = DEFAULT_PERSONALITY): string {
-  return `${PERSONALITY_PROMPTS[personality]} ${REPLY_LANGUAGE_INSTRUCTION}`;
+export function buildSystemPrompt(personality: Personality = DEFAULT_PERSONALITY, memories: string[] = []): string {
+  const base = `${PERSONALITY_PROMPTS[personality]} ${REPLY_LANGUAGE_INSTRUCTION}`;
+  if (memories.length === 0) return base;
+
+  const memorySection = memories
+    .map((memory) => `- The user previously said: "${memory}". Follow it for similar topics.`)
+    .join('\n');
+  return `${base}\n\nThe user gave this feedback on earlier replies. Treat each as a standing instruction:\n${memorySection}`;
 }
 
 /**
@@ -123,6 +140,23 @@ export function extractUserIdFromThreadId(threadId: string | undefined): string 
   if (!threadId?.startsWith(DISCOVERY_THREAD_PREFIX)) return undefined;
   const userId = threadId.slice(DISCOVERY_THREAD_PREFIX.length);
   return userId.length > 0 ? userId : undefined;
+}
+
+/**
+ * Story 5.3b (AD-2) review fix: prefers an explicitly passed `configurable.
+ * userId` — the mechanism `chat.ts`/`plan-chat.ts` both now use when
+ * invoking the agent — over parsing it out of `thread_id` via
+ * `extractUserIdFromThreadId`, which only ever resolves a userId for the
+ * `discovery:` thread kind. A `plan:${planId}` thread has no embedded
+ * userId at all, so without this, both the `user_settings` lookup below and
+ * memory retrieval silently no-op on every plan-chat turn even though the
+ * route already knows the userId. Falls back to the old thread-id parsing
+ * so any caller that still only passes `thread_id` keeps working unchanged.
+ */
+export function resolveUserId(configurable: Record<string, unknown> | undefined): string | undefined {
+  const explicit = configurable?.userId;
+  if (typeof explicit === 'string' && explicit.length > 0) return explicit;
+  return extractUserIdFromThreadId(configurable?.thread_id as string | undefined);
 }
 
 /** The per-turn values the outer node resolves from `user_settings` and
@@ -232,6 +266,11 @@ export interface CreateCoachAgentDeps {
    * real `submit_intake` tool unmodified. Omitted in production — defaults
    * to today's exact two-tool wiring, so this is purely additive. */
   tools?: DynamicStructuredTool[];
+  /** Story 5.3b (AD-2): the per-user semantic memory store — optional so
+   * every existing caller (and every test that doesn't care about memory)
+   * keeps working unchanged. When omitted, the system prompt is built
+   * exactly as before this story (no memory lookup at all). */
+  memoryStore?: MemorySearchStore;
 }
 
 /**
@@ -259,13 +298,44 @@ export function createCoachAgent({
   modelNodeTimeoutMs = MODEL_NODE_TIMEOUT_MS,
   modelNodeRetryPolicy,
   tools,
+  memoryStore,
 }: CreateCoachAgentDeps) {
   const chatModel = model ?? createChatModel(env, DEFAULT_MODEL_ID);
   const progress = createProgressMiddleware();
   const moderation = createModerationMiddleware(env, { classify });
-  const systemPrompt = dynamicSystemPromptMiddleware<{ personality?: string }>((_state, runtime) =>
-    buildSystemPrompt(resolvePersonality(runtime.context?.personality)),
-  );
+  // Story 5.3b (AD-2): async so this can call `recallMemories` before each
+  // model call (`dynamicSystemPromptMiddleware`'s own callback type accepts
+  // `Promise<string | SystemMessage>` — see its `.d.ts`). `userId` is
+  // resolved via `resolveUserId` — the explicit `configurable.userId` both
+  // `chat.ts` and `plan-chat.ts` now pass, so memory surfaces on both the
+  // discovery thread and a plan thread alike (review fix: the thread-id-
+  // parsing fallback alone only ever worked for the discovery thread).
+  // Boundary: "Retrieval failure never blocks a turn" — `recallMemories`
+  // itself never throws, and no `memoryStore` at all is just as safe a
+  // no-memory path as a `userId`/human-text miss below.
+  const systemPrompt = dynamicSystemPromptMiddleware<{ personality?: string }>(async (state, runtime) => {
+    const personality = resolvePersonality(runtime.context?.personality);
+    if (!memoryStore) return buildSystemPrompt(personality);
+
+    // Hardening: the Boundary ("retrieval failure never blocks a turn")
+    // previously only covered `recallMemories`'s own internals. Wrapping
+    // the whole lookup closes any other path here (e.g. an unexpected
+    // `resolveUserId`/`lastMessageOfType` edge case) too — a model call
+    // this middleware feeds must never fail because memory lookup did.
+    try {
+      const userId = resolveUserId(runtime.configurable);
+      const lastHuman = lastMessageOfType(state.messages, 'human');
+      if (!userId || !lastHuman?.text) return buildSystemPrompt(personality);
+
+      const memories = await recallMemories(memoryStore, userId, lastHuman.text);
+      return buildSystemPrompt(personality, memories);
+    } catch (error) {
+      console.error('[agent] memory-augmented system prompt failed, falling back to the base prompt:', {
+        error: (error as Error)?.message,
+      });
+      return buildSystemPrompt(personality);
+    }
+  });
   const forceToolChoice = createForceToolChoiceMiddleware();
 
   // Story 5.1 (AD-20): per-turn model swapping only applies to the real,
@@ -288,9 +358,12 @@ export function createCoachAgent({
 
   const graph = new StateGraph(CoachAgentState).addNode('model', async (state, runtime) => {
     // Story 5.1 (AD-20): resolve this turn's personality/model from
-    // `user_settings`, keyed by the `userId` embedded in the thread id — no
-    // settings lookup (and defaults throughout) when `db` wasn't supplied.
-    const userId = extractUserIdFromThreadId(runtime.configurable?.thread_id as string | undefined);
+    // `user_settings`, keyed by `userId` (review fix, Story 5.3b:
+    // `resolveUserId` prefers the explicit `configurable.userId` both
+    // routes now pass, so this lookup also now works on a plan thread,
+    // not just the discovery thread) — no settings lookup (and defaults
+    // throughout) when `db` wasn't supplied.
+    const userId = resolveUserId(runtime.configurable);
     const settings = db && userId ? await getUserSettings(db, userId) : undefined;
 
     // `runtime` (a `LangGraphRunnableConfig`, which extends `RunnableConfig`)

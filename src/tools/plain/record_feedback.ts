@@ -4,6 +4,8 @@ import type { createDb } from '../../db/client.js';
 import type { Env } from '../../config/env.js';
 import { messageFeedback } from '../../db/schema/index.js';
 import { defaultClassify, evaluateUserMessage, type ClassifyText } from '../../agent/moderation.js';
+import { forgetFeedback, rememberFeedback, type MemoryDeleteStore, type MemoryPutStore } from '../../agent/memory.js';
+import { recordFeedbackExample, type FeedbackDatasetDeps } from '../../agent/feedback-dataset.js';
 
 type Db = ReturnType<typeof createDb>['db'];
 
@@ -40,6 +42,14 @@ export interface RecordFeedbackDeps {
   /** Test-only seam (same DI pattern as `createModerationMiddleware`'s
    * `classify`): a fake Mistral Moderation 2 call instead of a real one. */
   classify?: ClassifyText;
+  /** Story 5.3b (AD-2): the per-user semantic memory store. Optional —
+   * when omitted, no memory read/write happens at all (e.g. a test that
+   * only cares about the DB write, or a deployment that hasn't finished
+   * wiring it up). */
+  memoryStore?: MemoryPutStore & MemoryDeleteStore;
+  /** Story 5.3b (AD-22): test-only seam for the LangSmith dataset write —
+   * see `FeedbackDatasetDeps`. */
+  dataset?: FeedbackDatasetDeps['client'];
 }
 
 /**
@@ -68,10 +78,22 @@ export class FeedbackOwnershipError extends Error {}
  * change") — but only when the existing row (if any) already belongs to this
  * same `userId`; otherwise throws `FeedbackOwnershipError` before writing
  * anything.
+ *
+ * Story 5.3b (AD-2/AD-22): once the Postgres write above has succeeded, a
+ * moderated comment (I/O matrix: "Thumbs only, no comment -> no memory/
+ * dataset write — nothing to embed") is upserted into the user's semantic
+ * memory and added as a LangSmith example — both best-effort (Boundary:
+ * "Memory/dataset writes never fail or block the feedback HTTP response").
+ * Review fix: these calls are never `await`ed here — a live Mistral embed
+ * call plus a LangSmith round trip would otherwise sit directly in this
+ * function's own (and so the HTTP response's) critical path, which is
+ * exactly what the Boundary forbids. `rememberFeedback`/`recordFeedbackExample`
+ * already catch and log internally and never reject, so firing them without
+ * awaiting can never produce an unhandled rejection either.
  */
 export async function setFeedback(
   db: Db,
-  env: Pick<Env, 'MISTRAL_API_KEY'>,
+  env: Pick<Env, 'MISTRAL_API_KEY' | 'LANGSMITH_TRACING' | 'LANGSMITH_API_KEY' | 'LANGSMITH_FEEDBACK_DATASET'>,
   params: SetFeedbackParams,
   deps: RecordFeedbackDeps = {},
 ): Promise<MessageFeedback> {
@@ -97,6 +119,23 @@ export async function setFeedback(
       set: { rating, comment, updatedAt: new Date() },
     });
 
+  if (comment) {
+    if (deps.memoryStore) {
+      void rememberFeedback(deps.memoryStore, { userId: params.userId, messageId: params.messageId, comment });
+    }
+    void recordFeedbackExample(
+      env,
+      { userId: params.userId, threadId: params.threadId, messageId: params.messageId, rating, comment },
+      { client: deps.dataset },
+    );
+  } else if (deps.memoryStore) {
+    // A rating that previously had a comment (and so a memory entry) can be
+    // changed to a thumbs-only rating on the same message id — drop the
+    // now-stale memory entry rather than leaving it behind under a rating
+    // that no longer has a comment backing it.
+    void forgetFeedback(deps.memoryStore, params.userId, params.messageId);
+  }
+
   return { rating, comment };
 }
 
@@ -104,7 +143,19 @@ export async function setFeedback(
  * Removes an existing rating — a no-op (never throws) when none exists for
  * this message/user, same "harmless no-op" precedent as `set_idea_status.
  * ts`'s re-reject case (I/O matrix: "... row deleted on remove").
+ *
+ * Story 5.3b: also deletes that message's memory entry, if any (I/O
+ * matrix: "Rating changed/removed ... memory entry updated / deleted to
+ * match") — best-effort, same as `setFeedback`'s own memory write.
  */
-export async function removeFeedback(db: Db, messageId: string, userId: string): Promise<void> {
+export async function removeFeedback(
+  db: Db,
+  messageId: string,
+  userId: string,
+  deps: Pick<RecordFeedbackDeps, 'memoryStore'> = {},
+): Promise<void> {
   await db.delete(messageFeedback).where(and(eq(messageFeedback.messageId, messageId), eq(messageFeedback.userId, userId)));
+  if (deps.memoryStore) {
+    void forgetFeedback(deps.memoryStore, userId, messageId);
+  }
 }
