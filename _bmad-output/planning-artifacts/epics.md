@@ -132,7 +132,35 @@ Users turn a chosen idea into a concrete, timed plan and explicitly confirm it b
 Users can check in via text or voice on their own terms - never guilt-tripped for a missed day - and see tangible proof their effort matters: specific acknowledgments and a live income/opportunity projection that grows with real progress. Within this epic, the text check-in path is built and working before the voice path - voice remains a mandatory requirement (NFR2), just sequenced second so the core check-in logic (start/finish acknowledgment, missed-check-in handling, projection) is proven on the simpler channel first.
 **FRs covered:** FR6, FR7, FR8, FR9.
 
-### Epic 5: Settings, Cost Transparency & Feedback
+#### Story 4.5: Plan Completion View
+
+As a user who has finished every step of a plan,
+I want to see a clear, warm finish instead of an empty panel,
+So that completing a plan feels like an actual result.
+
+**Acceptance Criteria:**
+
+**Given** a plan whose status is `completed` (Story 4.1)
+**When** its workspace is opened or the last step is just completed
+**Then** the status column shows a "Plan completed" card (completion date, number of completed steps) instead of "No current step yet", with no points, streaks, levels or badges (non-goal), and no Start/Mark-as-done controls; the energy pop-up is not shown for it
+
+**Given** the completed plan
+**When** the projection card renders
+**Then** it shows the final income estimate (Story 4.4 data) in the completed state, labelled as the result of the finished plan
+
+**Given** the last step was just completed
+**When** the acknowledgment is produced
+**Then** the plan chat receives one personal, warm, non-punitive completion message from one direct model call (AD-4 amendment; AD-12 guilt check; user's language, AD-25) that names what the user achieved in plain words and neutrally points to "New ideas" in the sidebar as an option, never as pressure; failure of the model call leaves the existing fixed completion hint and never blocks completion
+
+**Given** a completed plan
+**When** the user opens its chat
+**Then** the chat stays fully usable (read history, ask about completed steps, follow-up questions); only step state changes are blocked at the tool level (`start_step`/`complete_step` reject, as for any non-current step)
+
+**Given** the plan list in the sidebar
+**When** a plan is completed
+**Then** it shows a neutral "Completed" label (not paused/dimmed like a paused plan) and stays selectable
+
+## Epic 5: Settings, Cost Transparency & Feedback
 Users can set the agent's personality, choose which LLM answers from a transparent never-hardcoded price list, switch the UI between German and English, choose a currency (EUR/USD) for every displayed amount, see what every response actually costs, and rate responses without that rating ever blocking them. The agent itself replies in whichever language (German or English) the user writes or speaks in, independent of the UI language choice.
 **FRs covered:** FR11, FR12, FR13, FR14, FR15, FR16.
 
