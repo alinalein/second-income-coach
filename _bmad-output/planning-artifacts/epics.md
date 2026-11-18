@@ -1154,7 +1154,7 @@ So that I stay in control of what gets recorded.
 
 **Given** the voice recorder and transcript-review UI
 **When** built
-**Then** they are an input mode registered into the chat input extension point from Story 3.1, in their own component - the workspace layout and the text input are not edited by this story
+**Then** the recorder is an input mode registered into the chat input extension point from Story 3.1, in its own component; amended after user testing: there is no review popup, the transcript is placed into the existing message box (via the extension point's draft-setter, a minimal addition to the chat input) where the user reviews and edits it, then sends it with the normal Send button; the recording state is unmistakable (the mic button changes to a clearly labelled Stop state with a visible running timer and a pulsing indicator, respecting reduced motion); the workspace layout is not edited
 
 **Given** this story introduces the voice transcription credential (`gpt-transcribe`)
 **When** it is built
