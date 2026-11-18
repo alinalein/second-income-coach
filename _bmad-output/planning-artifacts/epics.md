@@ -798,7 +798,11 @@ So that I never see a button flicker, a second wait or an abrupt text swap.
 **When** the translation runs
 **Then** no "is being translated" text appears; the translated text parts of the cards (title, rationale, demand note, growth path) show a soft blur/shimmer placeholder for the duration, then crossfade to the new language; the card layout does not jump; the effect respects reduced-motion settings and the cards stay accessible (`aria-busy` while translating)
 
-**Given** any of the three transitions above
+**Given** the draft plan is ready for review (Story 3.2 modify/reject/confirm panel)
+**When** it is shown
+**Then** it opens as a modal card over the page, the same dialog pattern as the "select this idea" confirmation (Story 2.8), with a backdrop; it does not expand inline and does not push the status column and chat down; confirm, edit and regenerate stay inside it, and closing it by confirm or regenerate returns to the workspace; step descriptions render as one bullet each (no doubled bullet marker); Escape/backdrop behaviour and focus handling match the existing dialog
+
+**Given** any of the transitions above
 **When** a request fails
 **Then** the existing neutral error and retry behaviours stay unchanged
 
