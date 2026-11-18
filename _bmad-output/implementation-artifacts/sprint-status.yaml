@@ -83,7 +83,7 @@ development_status:
   epic-5-retrospective: optional
 
   epic-6: backlog
-  6-1-deterministic-tool-guardrail-tests: backlog
+  6-1-deterministic-tool-guardrail-tests: done
   6-2-trajectory-eval-suite-across-all-models: done
   6-3-evaluation-report-generation: done
   epic-6-retrospective: optional
