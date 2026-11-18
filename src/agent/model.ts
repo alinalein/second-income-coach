@@ -83,7 +83,36 @@ function withFallbackNotice(response: AIMessage, messages: BaseMessage[]): AIMes
   // triggering human message, not any UI-language setting (AD-25).
   const lastHuman = lastMessageOfType(messages, 'human');
   const notice = detectReplyLanguage(lastHuman?.text ?? '') === 'de' ? MODEL_FALLBACK_NOTICE_DE : MODEL_FALLBACK_NOTICE;
-  return new AIMessage({ id: response.id, content: `${notice}\n\n${response.text}` });
+  // Story 5.2 bug fix (Code Map): previously dropped `usage_metadata` (and
+  // `response_metadata`, which now also carries `resolvedModelId` —
+  // `tagResolvedModelId` below) by constructing a bare `AIMessage` with only
+  // `id`/`content` — a latent gap for AD-21's "sum every model call's
+  // tokens", since a fallback call's own usage would silently vanish from
+  // the turn's total the moment its notice was prepended. Both fields are
+  // now carried forward onto the notice-prefixed message.
+  return new AIMessage({
+    id: response.id,
+    content: `${notice}\n\n${response.text}`,
+    usage_metadata: response.usage_metadata,
+    response_metadata: response.response_metadata,
+  });
+}
+
+/**
+ * Story 5.2 (AD-21): tags every returned `AIMessage` with the model id that
+ * actually answered this call — read back by `src/agent/turn-cost.ts`'s
+ * cost computation (via `src/agent/index.ts`'s outer node) to price the
+ * turn against the model that really ran, not just the one the user had
+ * selected (a fallback swaps this to `DEFAULT_MODEL_ID`). Mutates
+ * `response_metadata` in place rather than reconstructing the message — a
+ * reconstruction would need to carry forward every other field (notably
+ * `tool_calls`, which the inner ReAct loop depends on to resolve its next
+ * step), which is exactly the class of bug `withFallbackNotice` had before
+ * the fix above; mutating the one field in place can't drop anything else.
+ */
+function tagResolvedModelId(response: AIMessage, modelId: string): AIMessage {
+  response.response_metadata = { ...response.response_metadata, resolvedModelId: modelId };
+  return response;
 }
 
 export interface CreateModelSelectionMiddlewareDeps {
@@ -127,19 +156,21 @@ export function createModelSelectionMiddleware({ env, buildModel = createChatMod
       const resolvedId = entry && entry.category === 'chat' ? entry.id : DEFAULT_MODEL_ID;
 
       if (resolvedId === DEFAULT_MODEL_ID) {
-        return handler({ ...request, model: getOrBuildModel(DEFAULT_MODEL_ID) });
+        const response = await handler({ ...request, model: getOrBuildModel(DEFAULT_MODEL_ID) });
+        return tagResolvedModelId(response, DEFAULT_MODEL_ID);
       }
 
       if (!isProviderConfigured(entry!.provider, env)) {
         const fallback = await handler({ ...request, model: getOrBuildModel(DEFAULT_MODEL_ID) });
-        return withFallbackNotice(fallback, request.messages);
+        return withFallbackNotice(tagResolvedModelId(fallback, DEFAULT_MODEL_ID), request.messages);
       }
 
       try {
-        return await withTimeout(
+        const response = await withTimeout(
           Promise.resolve(handler({ ...request, model: getOrBuildModel(resolvedId) })),
           MODEL_CALL_TIMEOUT_MS,
         );
+        return tagResolvedModelId(response, resolvedId);
       } catch (error) {
         // Boundary (same as `moderation.ts`'s `logModerationIncident`): log
         // the model id and error message only, never message content.
@@ -148,7 +179,7 @@ export function createModelSelectionMiddleware({ env, buildModel = createChatMod
           error: (error as Error)?.message,
         });
         const fallback = await handler({ ...request, model: getOrBuildModel(DEFAULT_MODEL_ID) });
-        return withFallbackNotice(fallback, request.messages);
+        return withFallbackNotice(tagResolvedModelId(fallback, DEFAULT_MODEL_ID), request.messages);
       }
     },
   });

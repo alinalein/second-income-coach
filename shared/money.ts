@@ -68,3 +68,62 @@ export function formatMoney(money: Money, locale: string): string {
     money.amountMinorUnits / 100,
   );
 }
+
+/**
+ * Story 5.2 bug fix (epics.md amendment: "a typical chat turn that costs a
+ * fraction of a cent ... never rounded to a misleading '0.00'"). A per-
+ * message AI cost is routinely a small fraction of a cent (e.g. 869/532
+ * tokens at `gpt-6-luna`'s price is ~$0.00035) — `Money`'s minor-unit (cent)
+ * granularity can't represent that at all; this is the micro-unit
+ * (millionths of the currency unit) sibling, used only for this one
+ * amount, never a replacement for `Money` elsewhere (ideas' startup costs,
+ * baseline rates, etc. stay cent-granularity — real-world prices there
+ * never need sub-cent precision).
+ */
+export const microMoneySchema = z.object({
+  amountMicroUnits: z.number().int(),
+  currencyCode: currencyCodeSchema,
+});
+
+export type MicroMoney = z.infer<typeof microMoneySchema>;
+
+export interface ConvertedMicroMoney extends MicroMoney {
+  /** Same meaning as `ConvertedMoney.isEstimate`. */
+  isEstimate: boolean;
+}
+
+/**
+ * Reuses `convertMoney`'s exact math (`Math.round(amount * RATE)`/`/ RATE`)
+ * — it's scale-invariant, so feeding it micro-units instead of minor units
+ * (cents) through the same field name produces a correct micro-unit result;
+ * this wrapper is what keeps that "unit reuse" contained to one place
+ * instead of every call site reaching for `convertMoney` directly with a
+ * misleading `amountMinorUnits` field actually holding micro-units.
+ */
+export function convertMicroMoney(money: MicroMoney, targetCurrency: CurrencyCode): ConvertedMicroMoney {
+  const converted = convertMoney({ amountMinorUnits: money.amountMicroUnits, currencyCode: money.currencyCode }, targetCurrency);
+  return { amountMicroUnits: converted.amountMinorUnits, currencyCode: converted.currencyCode, isEstimate: converted.isEstimate };
+}
+
+/**
+ * Epics.md amendment: "the shared money helper formats it with enough
+ * decimals to be meaningful (for example '€0.0014 (est.)')" — but "keeps
+ * the usual 2 decimals for amounts of a cent or more" (Intent, as given to
+ * the implementer). `minimumFractionDigits: 2` always pads a whole/exact
+ * value to the usual 2 (so `0` still shows as "€0.00", not "€0", matching
+ * the amendment's own "an amount of exactly zero ... shows nothing
+ * special"); `maximumFractionDigits` only widens past 2 when the amount is
+ * genuinely sub-cent, and even then `Intl.NumberFormat` only emits as many
+ * digits as the value actually needs (up to that cap) — never padded with
+ * trailing zeros beyond what's significant.
+ */
+export function formatMicroMoney(money: MicroMoney, locale: string): string {
+  const majorUnits = money.amountMicroUnits / 1_000_000;
+  const isSubCent = majorUnits !== 0 && Math.abs(majorUnits) < 0.01;
+  return new Intl.NumberFormat(locale, {
+    style: 'currency',
+    currency: money.currencyCode,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: isSubCent ? 6 : 2,
+  }).format(majorUnits);
+}

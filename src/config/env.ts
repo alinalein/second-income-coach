@@ -63,6 +63,11 @@ const envSchema = z.object({
   }),
   LANGSMITH_API_KEY: z.string().min(1, 'LANGSMITH_API_KEY is required (see .env.example)'),
   LANGSMITH_PROJECT: z.string().min(1, 'LANGSMITH_PROJECT is required (see .env.example)'),
+  // Story 5.3b (AD-22): the LangSmith dataset name `feedback-dataset.ts`'s
+  // `recordFeedbackExample` writes rated traces into. Optional with a
+  // sensible default — not a new required key, since it's just a dataset
+  // name, not a credential.
+  LANGSMITH_FEEDBACK_DATASET: z.string().min(1).default('second-income-coach-feedback'),
   // Story 2.2: the `web_search` MCP tool's provider (Tavily). No degraded
   // mode exists for this capability (Boundary) — unlike AD-20's optional
   // registry providers, this is required at startup like every other key.

@@ -3,6 +3,8 @@ import { Loader2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { planResponseSchema, type PlanResponse } from '@app/shared';
 import { ChatThread } from '../../chat/ChatThread';
+import { MessageCost } from '../../chat/MessageCost';
+import { createMessageFeedbackItem } from '../../chat/MessageFeedback';
 import { StatusPanel } from './StatusPanel';
 import { PlanActivationPanel } from './PlanActivationPanel';
 
@@ -87,6 +89,11 @@ export function PlanWorkspace({ ideaId, ideaTitle }: PlanWorkspaceProps) {
     };
   }, [ideaId]);
 
+  const footerItems = React.useMemo(
+    () => (plan ? [MessageCost, createMessageFeedbackItem(`/api/plans/${plan.id}/messages`)] : []),
+    [plan],
+  );
+
   return (
     // Bug fix (user-reported): "the chat should have the full height of the
     // window" — `sm:h-full sm:min-h-0` give the desktop layout a definite
@@ -132,7 +139,13 @@ export function PlanWorkspace({ ideaId, ideaTitle }: PlanWorkspaceProps) {
                * sidebar/header) ... renders nothing until 4.4". */}
             </div>
             <div className="flex min-h-0 flex-1 flex-col">
-              <ChatThread endpoint={`/api/plans/${plan.id}/messages`} />
+              {/* Story 5.2/5.3: `MessageCost` + `MessageFeedback` registered
+               * into the footer extension point built in Story 3.1 — alongside
+               * each other, no restructuring of `ChatThread`/`ChatMessage`.
+               * Memoized on `plan.id` so each `MessageFeedback` instance keeps
+               * its own component identity (and its in-session rating state)
+               * across unrelated `PlanWorkspace` re-renders. */}
+              <ChatThread endpoint={`/api/plans/${plan.id}/messages`} footerItems={footerItems} />
             </div>
           </div>
         </div>

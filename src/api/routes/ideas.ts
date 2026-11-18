@@ -80,11 +80,19 @@ export interface IdeasRouterDeps {
   /** Story 2.10: the shared `web_search` MCP tool, passed through to the
    * same direct `handleGenerateIdeas` call. */
   webSearchTool: DynamicStructuredTool;
-  /** Test-only seam: same DI precedent as `GenerateIdeasDeps.generateDrafts`
-   * (`generate_ideas.ts`) — replaces the real nested-agent draft call with a
-   * fake. */
-  generateDrafts?: GenerateIdeasDeps['generateDrafts'];
-  /** Test-only seam — same DI precedent as `GenerateIdeasDeps.generateDrafts`
+  /** Test-only seam: same DI precedent as `GenerateIdeasDeps.planQueries`
+   * (`generate_ideas.ts`) — replaces the real query-planning model call
+   * with a fake. */
+  planQueries?: GenerateIdeasDeps['planQueries'];
+  /** Test-only seam: same DI precedent as `GenerateIdeasDeps.searchWeb`
+   * (`generate_ideas.ts`) — replaces the real direct `web_search` call
+   * with a fake. */
+  searchWeb?: GenerateIdeasDeps['searchWeb'];
+  /** Test-only seam: same DI precedent as `GenerateIdeasDeps.writeIdea`
+   * (`generate_ideas.ts`) — replaces the real per-idea writing model call
+   * with a fake. */
+  writeIdea?: GenerateIdeasDeps['writeIdea'];
+  /** Test-only seam — same DI precedent as `GenerateIdeasDeps.planQueries`
    * (`generate_ideas.ts`): lets a test replace the real model-backed
    * `translateIdeaCards` call with a fake, so `POST /translate`'s own
    * routing/ownership-check/error-mapping logic is exercised without a real
@@ -190,7 +198,9 @@ export function createIdeasRouter({
   agent,
   model,
   webSearchTool,
-  generateDrafts,
+  planQueries,
+  searchWeb,
+  writeIdea,
   translateIdeaCards: translateIdeaCardsOverride,
 }: IdeasRouterDeps) {
   const router = Router();
@@ -368,7 +378,7 @@ export function createIdeasRouter({
       // exported function `generate_ideas.ts`'s own tool wrapper calls, same
       // `Deps`/`Config`/`Args` shape, no `agent.invoke` around it.
       await handleGenerateIdeas(
-        { db, model, webSearchTool, env, generateDrafts },
+        { db, model, webSearchTool, env, planQueries, searchWeb, writeIdea },
         { configurable: { thread_id: triggerThreadId }, signal: abortController.signal },
         { replyLanguage },
       );

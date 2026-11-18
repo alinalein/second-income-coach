@@ -184,8 +184,30 @@ export function ChatMessage({ message, animate = false, footerItems = [] }: Chat
   // never a different bubble style.
   const role = message.kind === 'error' ? 'alert' : message.kind === 'notice' ? 'status' : undefined;
 
+  // Bug fix (user-reported): footer items (cost/feedback) used to render
+  // for the full duration of the typing reveal, inviting a click (e.g.
+  // thumbs up/down) on text that hadn't finished appearing yet. Stays
+  // mounted throughout (so `MessageFeedback`'s own in-session state is
+  // never lost to an unmount) but is invisible and non-interactive while
+  // revealing, then fades in — never an abrupt pop — once the full text is
+  // showing. A history read (`isRevealing` false from the first render,
+  // `shouldAnimate` false) shows it immediately, no delay.
+  const [footerVisible, setFooterVisible] = React.useState(!isRevealing);
+
+  React.useEffect(() => {
+    if (isRevealing) {
+      setFooterVisible(false);
+      return undefined;
+    }
+    const timeoutId = setTimeout(() => setFooterVisible(true), 50);
+    return () => clearTimeout(timeoutId);
+  }, [isRevealing]);
+
   return (
-    <div className={cn('flex', isUser ? 'justify-end' : 'justify-start')}>
+    // `data-message-id`: lets `ChatThread` scroll a specific message into
+    // view (bug fix, below) without needing a ref threaded in through this
+    // component's own props.
+    <div data-message-id={message.id} className={cn('flex', isUser ? 'justify-end' : 'justify-start')}>
       <div
         role={role}
         className={cn(
@@ -210,9 +232,18 @@ export function ChatMessage({ message, animate = false, footerItems = [] }: Chat
         )}
         {/* Story 3.1 extension point: empty by default (no items registered
          * yet) — renders nothing until 5.2/5.3 register their own footer
-         * item components. */}
+         * item components. Bug fix: kept mounted but faded/non-interactive
+         * until the typing reveal finishes (see `footerVisible` above). */}
         {footerItems.length > 0 ? (
-          <div className="mt-1 flex items-center gap-2">
+          <div
+            className={cn(
+              // Layout fix (user-reported): each footer item (cost, then
+              // feedback) on its own row, not squeezed inline beside the
+              // token/amount text.
+              'mt-1 flex flex-col items-start gap-1 transition-opacity duration-300',
+              footerVisible ? 'opacity-100' : 'pointer-events-none opacity-0',
+            )}
+          >
             {footerItems.map((FooterItem, index) => (
               <FooterItem key={index} message={message} />
             ))}

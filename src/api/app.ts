@@ -7,6 +7,7 @@ import type { DynamicStructuredTool } from '@langchain/core/tools';
 import type { Env } from '../config/env.js';
 import type { createDb } from '../db/client.js';
 import type { CoachAgent } from '../agent/index.js';
+import type { MemoryPutStore, MemoryDeleteStore } from '../agent/memory.js';
 import type { ActivatePlanGraph } from '../tools/plain/activate_plan.js';
 import { createCorsMiddleware } from './middleware/cors.js';
 import { createGeneralRateLimiter } from './middleware/rateLimit.js';
@@ -49,6 +50,10 @@ export interface AppDeps {
    * its `/:planId/activate*` routes. Never `plansAgent`: this graph has its
    * own topology/thread kind, not another tool on the chat ReAct loop. */
   activatePlanGraph: ActivatePlanGraph;
+  /** Story 5.3b (AD-2): the per-user semantic memory store — threaded to
+   * `createChatRouter`/`createPlanChatRouter` so `setFeedback`/
+   * `removeFeedback` can remember/forget a rated comment. */
+  memoryStore: MemoryPutStore & MemoryDeleteStore;
 }
 
 /**
@@ -63,7 +68,18 @@ export interface AppDeps {
  * Built as a factory (not a top-level `listen()`) so tests can construct the
  * app against injected deps without binding a real port or a real database.
  */
-export function createApp({ env, db, pool, agent, ideasAgent, plansAgent, chatModel, webSearchTool, activatePlanGraph }: AppDeps) {
+export function createApp({
+  env,
+  db,
+  pool,
+  agent,
+  ideasAgent,
+  plansAgent,
+  chatModel,
+  webSearchTool,
+  activatePlanGraph,
+  memoryStore,
+}: AppDeps) {
   const app = express();
 
   // Behind a reverse proxy (Cloud Run, or any future load balancer), trust the
@@ -111,7 +127,7 @@ export function createApp({ env, db, pool, agent, ideasAgent, plansAgent, chatMo
   // above — every route on this router is reachable only by a signed-in
   // session (Boundary: "Every route this story adds sits behind the existing
   // `requireAuth` gate").
-  app.use('/api/chat', createChatRouter({ env, agent }));
+  app.use('/api/chat', createChatRouter({ env, agent, db, memoryStore }));
 
   // Story 2.1: structured intake, same auth-gated/post-chat mounting as the
   // chat router above. Story 2.10: no `agent` dep anymore — `POST /` stores
@@ -132,7 +148,7 @@ export function createApp({ env, db, pool, agent, ideasAgent, plansAgent, chatMo
   // the shared `chatModel` is threaded in too; `plansAgent` stays needed for
   // `detectUserReplyLanguage`/`.updateState` (the plan welcome message).
   app.use('/api/plans', createPlansRouter({ env, db, agent: plansAgent, model: chatModel, activatePlanGraph }));
-  app.use('/api/plans', createPlanChatRouter({ env, db, agent: plansAgent }));
+  app.use('/api/plans', createPlanChatRouter({ env, db, agent: plansAgent, memoryStore }));
 
   // Story 5.1: personality + model settings, same auth gate as /api/chat.
   app.use('/api/settings', createSettingsRouter({ env, db }));

@@ -1,6 +1,10 @@
 services:
   postgres:
-    image: postgres:17-alpine
+    # Story 5.3b (AD-2): pgvector pre-installed, same major version (17) as
+    # before — `PostgresStore.setup()` runs `CREATE EXTENSION vector` at
+    # startup, which needs the extension's shared library present in the
+    # image; plain postgres:17-alpine doesn't ship it.
+    image: pgvector/pgvector:pg17
     container_name: second-income-coach-postgres
     restart: unless-stopped
     environment:

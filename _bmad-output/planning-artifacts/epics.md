@@ -802,6 +802,34 @@ So that I never see a button flicker, a second wait or an abrupt text swap.
 **When** a request fails
 **Then** the existing neutral error and retry behaviours stay unchanged
 
+### Story 2.13: Chat Scroll Behaviour
+
+As a user,
+I want a long chat to scroll the way Claude's does,
+So that I can read the whole answer to my question without scrolling by hand.
+
+**Acceptance Criteria:**
+
+**Given** a chat (discovery or plan thread) whose messages still fit comfortably in the visible area (the content is less than about 70% of the visible height before the new message)
+**When** the user sends a message
+**Then** the chat behaves normally: the new message and the reply are appended and the view only follows the newest content as needed; the user's message is NOT pushed to the top
+
+**Given** a chat (discovery or plan thread) that is almost full (the new message plus room for its reply would no longer fit without scrolling)
+**When** the user sends a message
+**Then** the view scrolls so the user's new message sits at the top of the visible area and the assistant's reply appears below it, fully visible as it arrives, with spare room after it (a bottom spacer of about one viewport so the reply is never cut off by the input)
+
+**Given** the assistant's reply is longer than the visible area
+**When** it arrives
+**Then** the user's message stays at the top, the start of the reply is what the user sees first, and the user scrolls down to read the rest; the view never jumps to the end of the reply on its own
+
+**Given** the user has scrolled up manually to read earlier messages
+**When** a reply arrives
+**Then** the view is not moved against their will
+
+**Given** reduced-motion settings
+**When** the scroll happens
+**Then** it is instant instead of animated; the chat input is never covered and keeps working as before (Story 1.3/5.3)
+
 ### Story 2.6: Faster Idea Generation (optional)
 
 As a user,
@@ -1203,6 +1231,10 @@ So that I understand what I'm actually spending.
 **Given** the turn
 **When** it completes
 **Then** the token count, the model id actually used, and a snapshot of that model's price at the time are all persisted per message in Postgres as an integer minor-unit amount plus currency code - not a float, not just a final dollar figure
+
+**Given** a typical chat turn that costs a fraction of a cent
+**When** the cost is stored and displayed
+**Then** it is never rounded to a misleading "0.00": the amount is stored as an integer in micro-units (millionths of the currency unit, still an integer, never a float, AD-27) and the shared money helper formats it with enough decimals to be meaningful (for example "€0.0014 (est.)"; an amount of exactly zero tokens of cost shows nothing special); the registry price and conversion rate stay the single source
 
 **Given** a model with no price in the registry
 **When** cost would be computed

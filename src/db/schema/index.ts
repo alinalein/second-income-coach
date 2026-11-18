@@ -13,3 +13,5 @@ export * from './ideas.js';
 export * from './plans.js';
 export * from './usageLimits.js';
 export * from './checkIns.js';
+export * from './messageCosts.js';
+export * from './messageFeedback.js';

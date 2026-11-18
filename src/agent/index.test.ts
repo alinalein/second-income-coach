@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { tool } from 'langchain';
 import { fakeModel } from '@langchain/core/testing';
@@ -105,6 +105,83 @@ describe('buildSystemPrompt (AC: personality tone + reply-language in one prompt
   });
 });
 
+// AD-21 (wiring, not the summation algorithm itself — that's unit-tested
+// directly in `turn-cost.test.ts`): the outer graph's `turnUsage` state
+// field actually gets populated from this turn's own new AI message(s)
+// after `reactAgent.invoke`, with the resolved model id carried along.
+describe('createCoachAgent (turnUsage state field: Story 5.2)', () => {
+  it('populates turnUsage with this turn\'s token usage and resolved model id', async () => {
+    const model = fakeModel().respond(
+      new AIMessage({ content: 'Sure, happy to help!', usage_metadata: { input_tokens: 10, output_tokens: 20, total_tokens: 30 } }),
+    );
+    const agent = createCoachAgent({
+      env: { OPENROUTER_API_KEY: 'test-key', MISTRAL_API_KEY: 'test-key', IDEAS_PER_BATCH: 2, DAILY_SEARCH_BUDGET: 500 },
+      checkpointer: new MemorySaver(),
+      db: fakeDb(undefined),
+      webSearchTool: {} as never,
+      model,
+      classify: async () => ({}),
+    });
+
+    const result = await agent.invoke(
+      { messages: [new HumanMessage('Hello')] },
+      { configurable: { thread_id: 'discovery:test-turn-usage' } },
+    );
+
+    // Injecting `model` bypasses `createModelSelectionMiddleware` (see its
+    // own comment in `createCoachAgent`) — this is also `src/api/index.ts`'s
+    // *production* topology (it shares one pre-built `chatModel` across all
+    // three agents, AD-7), not just a test seam. This fake carries no
+    // `response_metadata` at all, so `modelId` is correctly absent here —
+    // the no-`model_name`-either case. The bug-fix regression test right
+    // below covers the actual production case: no `resolvedModelId`, but a
+    // real `model_name` the provider itself set.
+    expect((result as unknown as { turnUsage?: { inputTokens: number; outputTokens: number; modelId?: string } }).turnUsage).toMatchObject({
+      inputTokens: 10,
+      outputTokens: 20,
+    });
+    expect((result as unknown as { turnUsage?: { modelId?: string } }).turnUsage?.modelId).toBeUndefined();
+  });
+
+  // Bug fix (user-reported): a plan-chat reply showed thumbs but no cost
+  // line at all, not even a token count — root cause confirmed against the
+  // lane's own dev DB (zero `message_costs` rows despite real prior
+  // conversations) and by reading `src/api/index.ts`: it passes a shared
+  // `model` into every production `createCoachAgent(...)` call, which this
+  // file's own middleware wiring (above) treats as "skip
+  // `createModelSelectionMiddleware`" — so `resolvedModelId` is *never*
+  // tagged in production, for any turn. This reproduces that exact
+  // topology (a `model` injected, no `resolvedModelId`) with a response
+  // shaped like a real `ChatOpenAI` one — `response_metadata.model_name`
+  // set from the raw completion's own `model` field, same as
+  // `@langchain/openai`'s converter always sets it, regardless of which
+  // middleware ran — and asserts `turnUsage.modelId` still resolves.
+  it('falls back to the provider-native response_metadata.model_name when no resolvedModelId was tagged (production topology)', async () => {
+    const model = fakeModel().respond(
+      new AIMessage({
+        content: 'Sure, happy to help!',
+        usage_metadata: { input_tokens: 10, output_tokens: 20, total_tokens: 30 },
+        response_metadata: { model_provider: 'openai', model_name: 'openai/gpt-6-luna' },
+      }),
+    );
+    const agent = createCoachAgent({
+      env: { OPENROUTER_API_KEY: 'test-key', MISTRAL_API_KEY: 'test-key', IDEAS_PER_BATCH: 2, DAILY_SEARCH_BUDGET: 500 },
+      checkpointer: new MemorySaver(),
+      db: fakeDb(undefined),
+      webSearchTool: {} as never,
+      model,
+      classify: async () => ({}),
+    });
+
+    const result = await agent.invoke(
+      { messages: [new HumanMessage('Hello')] },
+      { configurable: { thread_id: 'discovery:test-turn-usage-prod' } },
+    );
+
+    expect((result as unknown as { turnUsage?: { modelId?: string } }).turnUsage?.modelId).toBe('openai/gpt-6-luna');
+  });
+});
+
 describe('createCoachAgent (hook integration: personality flows from user_settings into the system prompt)', () => {
   // AC: "the user picks a personality (formal/friendly/terse) -> ...
   // subsequent responses reflect that tone" — end to end, via the `db` the
@@ -160,6 +237,66 @@ describe('createCoachAgent (hook integration: personality flows from user_settin
     const lastMessage = result.messages[result.messages.length - 1];
     expect(lastMessage?.text).toBe(JAILBREAK_REJECTION_MESSAGE);
     expect(model.calls).toHaveLength(0);
+  });
+});
+
+/**
+ * Story 5.3b (AD-2) I/O matrix: "Later turn, same topic -> system prompt
+ * includes the stored memory" / "Later turn, different user -> no memory
+ * surfaced (no cross-user leak)". `search` is faked to return a result only
+ * for one exact namespace, so the second test's assertion only passes if
+ * `recallMemories` is actually scoped by `userId`, not a global lookup.
+ */
+describe('createCoachAgent (memory retrieval into the system prompt: Story 5.3b, AD-2 review fix)', () => {
+  const MEMORY_COMMENT = 'Loved the budgeting tip from before';
+
+  /** Fakes `PostgresStore.search` keyed by namespace userId — only
+   * `OWNER_USER_ID` has a stored comment; any other namespace (including
+   * `NO_MEMORY_USER_ID`) returns no results. */
+  const OWNER_USER_ID = 'user-with-memory';
+  const NO_MEMORY_USER_ID = 'user-without-memory';
+  function fakeMemoryStore(): CreateCoachAgentDeps['memoryStore'] {
+    return {
+      search: vi.fn(async (namespace: string[]) =>
+        namespace[1] === OWNER_USER_ID ? [{ namespace, key: 'msg-1', value: { comment: MEMORY_COMMENT } }] : [],
+      ),
+    } as unknown as CreateCoachAgentDeps['memoryStore'];
+  }
+
+  // Table-driven per CLAUDE.md: one case — does this turn's system prompt
+  // carry the owner's stored memory — with three variants, all on a
+  // *plan*-shaped thread id (`plan:${planId}`, no userId embedded in it at
+  // all) to prove the fix: `userId` now comes from the explicit
+  // `configurable.userId` both `chat.ts` and `plan-chat.ts` pass, not from
+  // parsing `thread_id` (which never worked for a plan thread).
+  it.each([
+    ['a plan-chat turn for the memory owner', 'plan:plan-1', OWNER_USER_ID, true],
+    ['a plan-chat turn for a user with no stored memory', 'plan:plan-2', NO_MEMORY_USER_ID, false],
+    ["a plan-chat turn for a different user (never the owner's memory)", 'plan:plan-3', 'a-different-user', false],
+  ] as const)('%s: memory surfaces = %s', async (_label, threadId, userId, shouldSurface) => {
+    const model = fakeModel().respond(new AIMessage('Sure, happy to help!'));
+    const agent = createCoachAgent({
+      env: { OPENROUTER_API_KEY: 'test-key', MISTRAL_API_KEY: 'test-key', IDEAS_PER_BATCH: 2, DAILY_SEARCH_BUDGET: 500 },
+      checkpointer: new MemorySaver(),
+      db: fakeDb(undefined),
+      webSearchTool: {} as never,
+      model,
+      classify: async () => ({}),
+      memoryStore: fakeMemoryStore(),
+    });
+
+    await agent.invoke(
+      { messages: [new HumanMessage('Tell me more about budgeting')] },
+      { configurable: { thread_id: threadId, userId } },
+    );
+
+    const [call] = model.calls;
+    const systemMessage = call?.messages.find((message) => message._getType() === 'system');
+    if (shouldSurface) {
+      expect(systemMessage?.text).toContain(MEMORY_COMMENT);
+    } else {
+      expect(systemMessage?.text).not.toContain(MEMORY_COMMENT);
+    }
   });
 });
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { convertMoney, formatMoney, moneySchema, EUR_USD_RATE } from './money.js';
+import { convertMoney, formatMoney, formatMicroMoney, moneySchema, EUR_USD_RATE } from './money.js';
 
 // AD-27: "Money is stored as integer minor units ... never a float." Story
 // 6.1 AC: "confirming integer-minor-units storage (never floats)" - the
@@ -46,6 +46,24 @@ describe('formatMoney (AD-27/Story 6.1: both currencies under both locales)', ()
   ] as const)('formats %s minor units under %s locale', (currencyCode, locale, expected) => {
     const formatted = formatMoney({ amountMinorUnits: 150_00, currencyCode }, locale);
 
+    expect(formatted).toBe(expected);
+  });
+});
+
+// Bug fix (epics.md amendment: "a typical chat turn that costs a fraction
+// of a cent ... never rounded to a misleading '0.00' ... formats it with
+// enough decimals to be meaningful"). Table-driven across the amendment's
+// own cases: a genuine sub-cent amount gets extra decimals; a whole-cent-
+// or-more amount stays at the usual 2 (never widened just because the type
+// supports more precision); exactly zero shows plainly, "nothing special".
+describe('formatMicroMoney (bug fix: sub-cent amounts get enough decimals, cent-or-more amounts stay at 2)', () => {
+  it.each([
+    ['a sub-cent amount (869/532 tokens at gpt-6-luna prices) shows extra decimals', 353, 'EUR' as const, '€0.000353'],
+    ['a round, sub-cent example amount trims to only the significant decimals', 1_400, 'EUR' as const, '€0.0014'],
+    ['a whole-cent-or-more amount stays at the usual 2 decimals', 1_500_000, 'USD' as const, '$1.50'],
+    ['exactly zero shows plainly, nothing special', 0, 'EUR' as const, '€0.00'],
+  ] as const)('%s', (_label, amountMicroUnits, currencyCode, expected) => {
+    const formatted = formatMicroMoney({ amountMicroUnits, currencyCode }, 'en-US');
     expect(formatted).toBe(expected);
   });
 });

@@ -14,5 +14,25 @@
     "checking_answer": "Prüfe die Antwort…",
     "creating_plan": "Arbeite an deinem Plan…",
     "tool_fallback": "Arbeite daran…"
+  },
+  "cost": {
+    "tokens": "{{input}}/{{output}} Tokens (ein/aus)",
+    "estimateBadge": "(ca.)",
+    "estimateBadgeFull": "Schätzung"
+  },
+  "feedback": {
+    "thumbsUpLabel": "Gute Antwort",
+    "thumbsDownLabel": "Schlechte Antwort",
+    "commentToggle": "Kommentar hinzufügen",
+    "editComment": "Kommentar bearbeiten",
+    "savedCommentLabel": "Dein Kommentar",
+    "commentPlaceholder": "Kommentar hinzufügen (optional)",
+    "modalTitlePositive": "Positives Feedback",
+    "modalTitleNegative": "Negatives Feedback",
+    "modalLabel": "Details hinzufügen (optional)",
+    "modalDisclosure": "Dein Kommentar wird zusammen mit dieser Antwort gespeichert. Er kann ohne identifizierende Angaben überprüft werden, um künftige Antworten zu verbessern — niemals, um ein Modell zu trainieren.",
+    "cancel": "Abbrechen",
+    "submit": "Speichern",
+    "error": "Deine Rückmeldung konnte nicht gespeichert werden. Bitte versuche es erneut."
   }
 }

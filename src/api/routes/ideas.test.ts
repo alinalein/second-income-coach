@@ -9,7 +9,6 @@ import { createIdeasRouter, type IdeasRouterDeps } from './ideas.js';
 import { createDb } from '../../db/client.js';
 import { users, ideas, userSettings, plans, intake, userGenerationCounts } from '../../db/schema/index.js';
 import { upsertIntake } from '../../tools/plain/submit_intake.js';
-import { SearchServiceUnavailableError, type GenerateDraftsResult } from '../../tools/llm/generate_ideas.js';
 import { incrementAndGetUserGenerationCount, getUserGenerationCount } from '../../tools/plain/usage_limits.js';
 
 // Story 2.7: `createIdeasRouter` now also builds a translation chat model
@@ -118,24 +117,34 @@ function fiveValidDrafts(intakeRow: IntakeResponse, label: string): IdeaDraft[] 
   return Array.from({ length: 5 }, (_, i) => buildValidDraft(intakeRow, { title: `${label} ${i + 1}` }));
 }
 
-// Story 2.6 (second speed round): `handleGenerateIdeas` now calls
-// `generateDrafts` once per idea (always `options.count === 1`), in
-// parallel across the batch — order-independent, so this hands out one
-// draft per call from a shared pool instead of returning the whole batch
-// in one call.
-function fakeGenerateDrafts(intakeRow: IntakeResponse, label = 'Idea') {
+// Story 2.6 (third speed round): `handleGenerateIdeas` now calls
+// `planQueries` once, then `writeIdea` once per idea (in parallel) — these
+// three fakes replace `defaultPlanQueries`/`defaultSearchWeb`/`defaultWriteIdea`.
+function fakePlanQueries(): NonNullable<IdeasRouterDeps['planQueries']> {
+  return vi.fn().mockImplementation(async (_intakeRow, _lang, count: number) => ({
+    discoveryQueries: ['demand query'],
+    ideaSeeds: Array.from({ length: count }, (_, i) => ({ angle: `angle ${i + 1}`, rateQuery: `rate query ${i + 1}` })),
+  }));
+}
+
+function fakeSearchWeb(): NonNullable<IdeasRouterDeps['searchWeb']> {
+  return vi.fn().mockResolvedValue(SEARCH_RESULT_TEXTS.join('\n\n'));
+}
+
+function fakeWriteIdea(intakeRow: IntakeResponse, label = 'Idea'): NonNullable<IdeasRouterDeps['writeIdea']> {
   const queue = fiveValidDrafts(intakeRow, label);
   return vi.fn().mockImplementation(async () => {
     const draft = queue.shift();
-    if (!draft) throw new Error('fakeGenerateDrafts: pool exhausted — test requested more drafts than provided');
-    return { drafts: { ideas: [draft] }, searchResultTexts: SEARCH_RESULT_TEXTS } satisfies GenerateDraftsResult;
+    if (!draft) throw new Error('fakeWriteIdea: pool exhausted — test requested more drafts than provided');
+    return draft;
   });
 }
 
 /** Story 2.10: `model`/`webSearchTool` default to never-called stubs —
  * `generate_ideas` is now called directly via `handleGenerateIdeas`, with
- * `generateDrafts` as the test-only seam replacing the real nested-agent
- * call (same DI precedent as `generate_ideas.test.ts`'s own `baseDeps`). */
+ * `planQueries`/`searchWeb`/`writeIdea` as the test-only seams replacing
+ * the real pipeline (same DI precedent as `generate_ideas.test.ts`'s own
+ * `baseDeps`). */
 function buildTestApp(agent: FakeAgent, userId: string, overrides: Partial<IdeasRouterDeps> = {}) {
   const app = express();
   app.use(express.json());
@@ -224,20 +233,23 @@ describe('createIdeasRouter GET /', () => {
 describe('createIdeasRouter POST /generate', () => {
   // I/O matrix: "Happy path" -> 5 ideas returned, 200. Story 2.10 (AC1): no
   // `agent.invoke` at all anymore — `handleGenerateIdeas` is called
-  // directly, with `generateDrafts` as the test-only seam replacing the real
-  // nested-agent call (same DI precedent as `generate_ideas.test.ts`).
+  // directly, with `planQueries`/`searchWeb`/`writeIdea` as the test-only
+  // seams replacing the real pipeline (same DI precedent as
+  // `generate_ideas.test.ts`).
   it('returns the 5 newly generated ideas, calling handleGenerateIdeas directly (no agent.invoke)', async () => {
     const userId = await createTestUser();
     try {
       const intakeRow = await upsertIntake(db, userId, intakeArgs());
-      const generateDrafts = fakeGenerateDrafts(intakeRow);
+      const writeIdea = fakeWriteIdea(intakeRow);
       const agent = fakeAgent();
 
-      const res = await request(buildTestApp(agent, userId, { generateDrafts })).post('/api/ideas/generate');
+      const res = await request(
+        buildTestApp(agent, userId, { planQueries: fakePlanQueries(), searchWeb: fakeSearchWeb(), writeIdea }),
+      ).post('/api/ideas/generate');
 
       expect(res.status).toBe(200);
       expect(res.body.ideas).toHaveLength(5);
-      expect(generateDrafts).toHaveBeenCalledTimes(5); // one call per idea, in parallel
+      expect(writeIdea).toHaveBeenCalledTimes(5); // one call per idea, in parallel
       // AC1: no `agent.invoke` anywhere in this route anymore.
       expect(agent.invoke).not.toHaveBeenCalled();
     } finally {
@@ -255,9 +267,11 @@ describe('createIdeasRouter POST /generate', () => {
     try {
       const intakeRow = await upsertIntake(db, userId, intakeArgs());
       const oldIds = await insertFiveIdeas(userId);
-      const generateDrafts = fakeGenerateDrafts(intakeRow, 'New');
+      const writeIdea = fakeWriteIdea(intakeRow, 'New');
 
-      const res = await request(buildTestApp(fakeAgent(), userId, { generateDrafts })).post('/api/ideas/generate');
+      const res = await request(
+        buildTestApp(fakeAgent(), userId, { planQueries: fakePlanQueries(), searchWeb: fakeSearchWeb(), writeIdea }),
+      ).post('/api/ideas/generate');
 
       expect(res.status).toBe(200);
       // Story 2.4: nothing is deleted — the response is the full visible
@@ -284,9 +298,11 @@ describe('createIdeasRouter POST /generate', () => {
       const ids = await insertFiveIdeas(userId);
       await db.update(ideas).set({ status: 'rejected' }).where(eq(ideas.id, ids[0]!));
       await db.update(ideas).set({ status: 'bookmarked' }).where(eq(ideas.id, ids[1]!));
-      const generateDrafts = fakeGenerateDrafts(intakeRow, 'New');
+      const writeIdea = fakeWriteIdea(intakeRow, 'New');
 
-      const res = await request(buildTestApp(fakeAgent(), userId, { generateDrafts })).post('/api/ideas/generate');
+      const res = await request(
+        buildTestApp(fakeAgent(), userId, { planQueries: fakePlanQueries(), searchWeb: fakeSearchWeb(), writeIdea }),
+      ).post('/api/ideas/generate');
 
       expect(res.status).toBe(200);
       const returnedIds = res.body.ideas.map((idea: { id: string }) => idea.id);
@@ -320,23 +336,30 @@ describe('createIdeasRouter POST /generate', () => {
 
   // Story 2.7 (AC4): the button's own explicit `language` wins outright,
   // never overridden by the (unmocked, thus always-fallback-'en')
-  // discovery-thread detection. Story 2.10: checked via the `generateDrafts`
+  // discovery-thread detection. Story 2.10: checked via the `writeIdea`
   // seam's own `replyLanguage` argument instead of an `agent.invoke` message.
   it('passes an explicit request-body language straight through as replyLanguage, skipping detection', async () => {
     const userId = await createTestUser();
     try {
       const intakeRow = await upsertIntake(db, userId, intakeArgs());
-      const generateDrafts = fakeGenerateDrafts(intakeRow);
+      const writeIdea = fakeWriteIdea(intakeRow);
 
-      await request(buildTestApp(fakeAgent(), userId, { generateDrafts })).post('/api/ideas/generate').send({ language: 'de' });
+      await request(
+        buildTestApp(fakeAgent(), userId, { planQueries: fakePlanQueries(), searchWeb: fakeSearchWeb(), writeIdea }),
+      )
+        .post('/api/ideas/generate')
+        .send({ language: 'de' });
 
-      // Story 2.4: a 4th `{ excludeTitles }` argument is now always passed
+      // Story 2.4: the 6th `excludeTitles` argument is now always passed
       // too (empty here — this user has no existing ideas yet).
-      expect(generateDrafts).toHaveBeenCalledWith(
+      expect(writeIdea).toHaveBeenCalledWith(
         expect.objectContaining({ id: intakeRow.id }),
         'de',
+        expect.anything(),
+        expect.anything(),
+        expect.anything(),
+        [],
         expect.any(AbortSignal),
-        expect.objectContaining({ excludeTitles: [] }),
       );
     } finally {
       await cleanUp(userId);
@@ -359,9 +382,15 @@ describe('createIdeasRouter POST /generate', () => {
       const existingIds = await insertFiveIdeas(userId);
       const existingRowsBefore = await db.select().from(ideas).where(eq(ideas.userId, userId));
       const countBefore = await getUserGenerationCount(db, userId);
-      const generateDrafts = vi.fn().mockRejectedValue(new SearchServiceUnavailableError('generate_ideas: every web_search call in this round failed'));
+      // Every search this round fails — `planQueries` still succeeds (the
+      // model-side planning is fine), but every code-direct `searchWeb`
+      // call rejects, so `handleGenerateIdeas` fails fast before any
+      // writing call or DB write.
+      const searchWeb: NonNullable<IdeasRouterDeps['searchWeb']> = vi.fn().mockRejectedValue(new Error('search service unreachable'));
 
-      const res = await request(buildTestApp(fakeAgent(), userId, { generateDrafts })).post('/api/ideas/generate');
+      const res = await request(
+        buildTestApp(fakeAgent(), userId, { planQueries: fakePlanQueries(), searchWeb }),
+      ).post('/api/ideas/generate');
 
       expect(res.status).toBe(503);
       expect(res.body).toEqual({ error: 'search_unavailable' });
