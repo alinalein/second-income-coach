@@ -2,7 +2,6 @@ import * as React from 'react';
 import { Loader2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { planResponseSchema, type PlanResponse } from '@app/shared';
-import { Button } from '../../components/ui/button';
 import { ChatThread } from '../../chat/ChatThread';
 import { StatusPanel } from './StatusPanel';
 import { PlanActivationPanel } from './PlanActivationPanel';
@@ -15,7 +14,6 @@ export interface PlanWorkspaceProps {
    * navigated here — never re-fetched, since the idea's own title doesn't
    * change. */
   ideaTitle: string;
-  onBack: () => void;
 }
 
 /**
@@ -27,12 +25,13 @@ export interface PlanWorkspaceProps {
  *
  * Lazily creates-or-fetches the plan via `POST /api/plans/select/:ideaId`
  * (AD-13: lazy, never eager) on mount, then renders the shell once it
- * resolves. Narrow-screen collapse (AC): `flex-col` by default (the
- * `StatusPanel` stacks above the chat column, reading as a compact header),
- * `sm:flex-row` restores the sidebar-beside-chat layout at the `sm`
- * breakpoint and up.
+ * resolves. 2.9 AC: on a desktop width this keeps layout-preview.html's own
+ * layout — the status column beside the chat, side by side (`sm:flex-row`);
+ * only a narrow screen stacks `StatusPanel` above the chat as a compact
+ * header. 2.9 AC (global nav): there is no "Back to ideas" control here —
+ * every navigation action lives in the app-wide sidebar now.
  */
-export function PlanWorkspace({ ideaId, ideaTitle, onBack }: PlanWorkspaceProps) {
+export function PlanWorkspace({ ideaId, ideaTitle }: PlanWorkspaceProps) {
   const { t } = useTranslation('plan');
   const [plan, setPlan] = React.useState<PlanResponse | null>(null);
   const [loadFailed, setLoadFailed] = React.useState(false);
@@ -89,13 +88,13 @@ export function PlanWorkspace({ ideaId, ideaTitle, onBack }: PlanWorkspaceProps)
   }, [ideaId]);
 
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-4">
-      <div>
-        <Button type="button" variant="ghost" size="sm" onClick={onBack}>
-          {t('backToIdeas')}
-        </Button>
-      </div>
-
+    // Bug fix (user-reported): "the chat should have the full height of the
+    // window" — `sm:h-full sm:min-h-0` give the desktop layout a definite
+    // height to pass down to the chat column (from `App.tsx`'s own
+    // already-viewport-height `<main>`); the narrow-screen stack keeps its
+    // natural, page-scrolling height (2.9's own compact-header behavior),
+    // unaffected since these are `sm:`-only.
+    <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 sm:h-full sm:min-h-0">
       {loadFailed ? (
         <p className="text-sm text-muted-foreground" role="alert">
           {t('loadFailed')}
@@ -112,20 +111,27 @@ export function PlanWorkspace({ ideaId, ideaTitle, onBack }: PlanWorkspaceProps)
           <p className="text-xs text-muted-foreground">{t('loadingHint')}</p>
         </div>
       ) : (
-        <div className="flex flex-col gap-4">
+        <div className="flex flex-col gap-4 sm:h-full sm:min-h-0">
           {/* Story 3.2 (AD-14): the draft review/confirm/modify/reject panel
            * — only a `draft` plan needs human confirmation before it can
            * become `active`; once confirmed/already active, it's gone. */}
           {plan.status === 'draft' ? (
             <PlanActivationPanel planId={plan.id} onActivated={(activatedPlan) => setPlan(activatedPlan)} />
           ) : null}
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
+          {/* 2.9 AC: layout-preview.html's own layout — status column beside
+           * the chat, side by side, on a desktop width; only a narrow
+           * screen stacks the status panel above the chat as a compact
+           * header (Story 3.1's own narrow-screen layout). `sm:items-stretch`
+           * (the default — no longer overridden to `items-start`) lets the
+           * chat column take this row's own full height; the status column
+           * keeps its natural, content-sized height either way. */}
+          <div className="flex min-h-0 flex-1 flex-col gap-4 sm:flex-row">
             <div className="flex flex-col gap-4 sm:w-64 sm:shrink-0">
               <StatusPanel planId={plan.id} ideaTitle={ideaTitle} />
               {/* Code Map: "projection card extension point (a slot in the
                * sidebar/header) ... renders nothing until 4.4". */}
             </div>
-            <div className="flex-1">
+            <div className="flex min-h-0 flex-1 flex-col">
               <ChatThread endpoint={`/api/plans/${plan.id}/messages`} />
             </div>
           </div>

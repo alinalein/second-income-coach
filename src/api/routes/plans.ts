@@ -1,19 +1,35 @@
 import { randomUUID } from 'node:crypto';
-import { and, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { Command } from '@langchain/langgraph';
 import { AIMessage } from '@langchain/core/messages';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
-import { planResponseSchema, currentStepResponseSchema, activatePlanDecisionSchema, type PlanResponse } from '@app/shared';
+import {
+  planResponseSchema,
+  planListResponseSchema,
+  currentStepResponseSchema,
+  activatePlanDecisionSchema,
+  recordCheckInRequestSchema,
+  checkInResponseSchema,
+  startStepResponseSchema,
+  completeStepResponseSchema,
+  type PlanResponse,
+} from '@app/shared';
 import type { Env } from '../../config/env.js';
 import type { createDb } from '../../db/client.js';
 import type { CoachAgent } from '../../agent/index.js';
 import { buildPlanThreadId, buildDiscoveryThreadId, buildPlanActivationThreadId } from '../../agent/index.js';
+import { evaluateUserMessage, defaultClassify, type ClassifyText } from '../../agent/moderation.js';
 import { handleCreatePlan, type CreatePlanDeps } from '../../tools/llm/create_plan.js';
 import { getCurrentStep } from '../../tools/plain/get_current_step.js';
+import { recordCheckIn } from '../../tools/plain/record_check_in.js';
+import { startStep } from '../../tools/plain/start_step.js';
+import { completeStep } from '../../tools/plain/complete_step.js';
+import { StepNotCurrentError } from '../../tools/plain/step-state.js';
 import {
   getPendingReview,
+  resumePausedPlan,
   PlanNotFoundError,
   PlanNotDraftError,
   type ActivatePlanGraph,
@@ -23,7 +39,7 @@ import { createStrictRateLimiter } from '../middleware/rateLimit.js';
 import { detectUserReplyLanguage } from './ideas.js';
 
 export interface PlansRouterDeps {
-  env: Pick<Env, 'RATE_LIMIT_WINDOW_MS'>;
+  env: Pick<Env, 'RATE_LIMIT_WINDOW_MS' | 'MISTRAL_API_KEY'>;
   db: ReturnType<typeof createDb>['db'];
   /** The plans-only compiled agent (`plansAgent`, `src/api/index.ts`) —
    * Story 2.10: `create_plan` itself is no longer invoked through it
@@ -42,6 +58,13 @@ export interface PlansRouterDeps {
   /** Story 3.2 (AD-14): the dedicated, checkpointed `activate_plan` graph —
    * backs the `/:planId/activate*` routes below. */
   activatePlanGraph: ActivatePlanGraph;
+  /** Test-only seam — same `ClassifyText` DI precedent as `intake.ts`'s own
+   * `createIntakeRouter`. AD-11: the reject-feedback free text (the one new
+   * user-authored free text this story introduces) is moderated the same
+   * direct way `intake.ts` moderates its free-text fields — jailbreak ->
+   * reject, PII -> redact-and-continue — before it ever reaches
+   * `create_plan`'s nested model prompt. */
+  classify?: ClassifyText;
 }
 
 type PlanRow = typeof plans.$inferSelect;
@@ -111,11 +134,14 @@ const PLAN_READY_MESSAGE_DE =
  * directly as a plain read here — same Boundary precedent as
  * `ideas.ts`/`get_current_step` never being a second write path).
  */
-export function createPlansRouter({ env, db, agent, model, createDraft, activatePlanGraph }: PlansRouterDeps) {
+export function createPlansRouter({ env, db, agent, model, createDraft, activatePlanGraph, classify: classifyOverride }: PlansRouterDeps) {
   const router = Router();
   // Intent/Code Map: "create_plan is LLM-backed and cost-bearing like
   // generate_ideas's POST; reuse the same strict tier."
   const strictLimiter = createStrictRateLimiter(env);
+  // AD-11: same `defaultClassify(env)` real-Mistral-call precedent as
+  // `intake.ts`'s own router.
+  const classify = classifyOverride ?? defaultClassify(env);
   // Live-bug fix (user-reported, measured live: two real model calls for one
   // plan selection): the `existingPlan` DB check below has a race window —
   // two concurrent requests for the same idea can both pass it before
@@ -160,9 +186,16 @@ export function createPlansRouter({ env, db, agent, model, createDraft, activate
 
       // I/O matrix: "Re-open, plan exists" -> existing row returned,
       // `create_plan` never re-invoked (Boundary: "exactly one plans row
-      // per idea").
+      // per idea"). Story 3.3/AD-13: a `paused` plan resumes (pausing
+      // whatever else is currently active) rather than being returned
+      // as-is — `draft`/`active`/`completed` are returned unchanged, same
+      // as before this story.
       const [existingPlan] = await db.select().from(plans).where(eq(plans.ideaId, ideaId)).limit(1);
       if (existingPlan) {
+        if (existingPlan.status === 'paused') {
+          res.json(await resumePausedPlan(db, existingPlan.id, userId));
+          return;
+        }
         res.json(toPlanResponse(existingPlan));
         return;
       }
@@ -230,6 +263,35 @@ export function createPlansRouter({ env, db, agent, model, createDraft, activate
     }
   });
 
+  /**
+   * Story 2.9 — the sidebar's "My plans" list: one row per idea that has a
+   * plan, scoped to this session's user, joined to that idea's own title
+   * (Boundary: never a second "fetch the idea too" round trip from the
+   * client). "Sorted by last activity" (AC) — `plans.updatedAt`, the same
+   * column `activate_plan.ts`'s transactions already bump.
+   */
+  router.get('/', async (req, res) => {
+    const userId = req.session.userId!;
+
+    try {
+      const rows = await db
+        .select({ id: plans.id, ideaId: plans.ideaId, status: plans.status, updatedAt: plans.updatedAt, ideaTitle: ideas.title })
+        .from(plans)
+        .innerJoin(ideas, eq(ideas.id, plans.ideaId))
+        .where(eq(plans.userId, userId))
+        .orderBy(desc(plans.updatedAt));
+
+      res.json(
+        planListResponseSchema.parse({
+          plans: rows.map((row) => ({ ...row, updatedAt: row.updatedAt.toISOString() })),
+        }),
+      );
+    } catch (error) {
+      console.error('[plans] list failed:', { userId, error: (error as Error)?.message });
+      res.status(503).json({ error: 'Service unavailable' });
+    }
+  });
+
   router.get('/:planId/current-step', async (req, res) => {
     const userId = req.session.userId!;
     const planIdParse = z.uuid().safeParse(req.params.planId);
@@ -250,6 +312,113 @@ export function createPlansRouter({ env, db, agent, model, createDraft, activate
     } catch (error) {
       console.error('[plans] current-step read failed:', { userId, planId: planIdParse.data, error: (error as Error)?.message });
       res.status(503).json({ error: 'Service unavailable' });
+    }
+  });
+
+  /**
+   * Story 4.1 (AD-4/AD-11): direct, UI-button check-in — a plain Postgres
+   * write via `recordCheckIn`, never through the agent loop. `note` is this
+   * route's one new user-authored free text, moderated here before it's
+   * stored (same `evaluateUserMessage` precedent as `/:planId/activate/reject`'s
+   * `feedback`); a chat-typed check-in instead goes through the agent's own
+   * `beforeModel` moderation of the triggering message, never this route.
+   */
+  router.post('/:planId/check-in', async (req, res) => {
+    const userId = req.session.userId!;
+    const planIdParse = z.uuid().safeParse(req.params.planId);
+    const bodyParse = recordCheckInRequestSchema.safeParse(req.body);
+    if (!planIdParse.success || !bodyParse.success) {
+      res.status(400).json({ error: 'Bad request' });
+      return;
+    }
+    const planId = planIdParse.data;
+
+    try {
+      if (!(await isPlanOwnedByUser(db, planId, userId))) {
+        res.status(404).json({ error: 'Plan not found' });
+        return;
+      }
+
+      let args = bodyParse.data;
+      if (args.note) {
+        const verdict = await evaluateUserMessage(args.note, classify, buildPlanThreadId(planId));
+        if (verdict.action === 'reject') {
+          res.status(502).json({ error: 'Note could not be processed' });
+          return;
+        }
+        if (verdict.action === 'redact') {
+          args = { ...args, note: verdict.content };
+        }
+      }
+
+      const result = await recordCheckIn(db, planId, args);
+      res.json(checkInResponseSchema.parse(result));
+    } catch (error) {
+      console.error('[plans] check-in failed:', { userId, planId, error: (error as Error)?.message });
+      res.status(502).json({ error: 'Check-in could not be recorded' });
+    }
+  });
+
+  /**
+   * Story 4.1 (AD-13 state-machine rule): direct, UI-button start/complete
+   * of the plan's current step — both reject with a 409 when `stepId` isn't
+   * the plan's own current step, the same tool-level rejection the agent's
+   * own `start_step`/`complete_step` tool calls enforce (AC: "the tool
+   * itself rejects the call, not just a UI-level guard").
+   */
+  router.post('/:planId/steps/:stepId/start', async (req, res) => {
+    const userId = req.session.userId!;
+    const planIdParse = z.uuid().safeParse(req.params.planId);
+    const stepIdParse = z.uuid().safeParse(req.params.stepId);
+    if (!planIdParse.success || !stepIdParse.success) {
+      res.status(400).json({ error: 'Bad request' });
+      return;
+    }
+    const planId = planIdParse.data;
+
+    try {
+      if (!(await isPlanOwnedByUser(db, planId, userId))) {
+        res.status(404).json({ error: 'Plan not found' });
+        return;
+      }
+
+      const result = await startStep(db, planId, stepIdParse.data);
+      res.json(startStepResponseSchema.parse(result));
+    } catch (error) {
+      if (error instanceof StepNotCurrentError) {
+        res.status(409).json({ error: 'Step is not this plan\'s current step' });
+        return;
+      }
+      console.error('[plans] start_step failed:', { userId, planId, error: (error as Error)?.message });
+      res.status(502).json({ error: 'Step could not be started' });
+    }
+  });
+
+  router.post('/:planId/steps/:stepId/complete', async (req, res) => {
+    const userId = req.session.userId!;
+    const planIdParse = z.uuid().safeParse(req.params.planId);
+    const stepIdParse = z.uuid().safeParse(req.params.stepId);
+    if (!planIdParse.success || !stepIdParse.success) {
+      res.status(400).json({ error: 'Bad request' });
+      return;
+    }
+    const planId = planIdParse.data;
+
+    try {
+      if (!(await isPlanOwnedByUser(db, planId, userId))) {
+        res.status(404).json({ error: 'Plan not found' });
+        return;
+      }
+
+      const result = await completeStep(db, planId, stepIdParse.data);
+      res.json(completeStepResponseSchema.parse(result));
+    } catch (error) {
+      if (error instanceof StepNotCurrentError) {
+        res.status(409).json({ error: 'Step is not this plan\'s current step' });
+        return;
+      }
+      console.error('[plans] complete_step failed:', { userId, planId, error: (error as Error)?.message });
+      res.status(502).json({ error: 'Step could not be completed' });
     }
   });
 
@@ -283,7 +452,26 @@ export function createPlansRouter({ env, db, agent, model, createDraft, activate
         return;
       }
 
-      const result = await activatePlanGraph.invoke(new Command({ resume: decisionParse.data }), {
+      // AD-11 (Part 2, user-requested): reject's `feedback` is this story's
+      // one new user-authored free text — it flows into `create_plan`'s
+      // nested model prompt (`handleRegeneratePlanDraft`), so it must pass
+      // through moderation first, same direct-call precedent as
+      // `intake.ts`'s own free-text fields (jailbreak -> reject the turn,
+      // PII -> redact and continue). Confirm/modify carry no free text, so
+      // this only ever runs for `action === 'reject'`.
+      let decision = decisionParse.data;
+      if (decision.action === 'reject') {
+        const verdict = await evaluateUserMessage(decision.feedback, classify, buildPlanActivationThreadId(planId));
+        if (verdict.action === 'reject') {
+          res.status(502).json({ error: 'Feedback could not be processed' });
+          return;
+        }
+        if (verdict.action === 'redact') {
+          decision = { ...decision, feedback: verdict.content };
+        }
+      }
+
+      const result = await activatePlanGraph.invoke(new Command({ resume: decision }), {
         configurable: { thread_id: buildPlanActivationThreadId(planId), planId, userId },
       });
       res.json(planResponseSchema.parse((result as { result?: PlanResponse }).result));

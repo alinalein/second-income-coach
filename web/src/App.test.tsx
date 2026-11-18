@@ -30,6 +30,38 @@ function renderApp() {
   );
 }
 
+function fakeIdeaFixture() {
+  const now = new Date().toISOString();
+  return {
+    id: 'idea-1',
+    status: 'suggested',
+    title: 'Freelance tutoring',
+    rationale: 'Fits the time you have free each week.\nStart by listing one lesson type online.',
+    citedIntakeFields: ['weeklyTimeAvailability', 'startingBudgetRange', 'riskTolerance'],
+    ideaType: 'service',
+    weeklyTimeCommitment: '5_to_10h',
+    startupCost: { amountMinorUnits: 2500, currencyCode: 'EUR' },
+    riskLevel: 'low',
+    baselineRateLow: { amountMinorUnits: 3000, currencyCode: 'USD' },
+    baselineRateHigh: { amountMinorUnits: 3000, currencyCode: 'USD' },
+    isVendorSource: false,
+    rateUnit: 'hour',
+    baselineRateCitation: 'https://example.com/rates',
+    baselineRateQuote: 'Workers in this field earn $30.00 an hour on average.',
+    sourceTrustTier: 'tier_3',
+    isRateUnverified: false,
+    demandEvidenceNote: null,
+    demandEvidenceCitation: null,
+    demandEvidenceQuote: null,
+    isDemandEvidenceUnverified: false,
+    growthPath: null,
+    language: 'en',
+    createdAt: now,
+    updatedAt: now,
+    hasPlan: false,
+  };
+}
+
 function existingIntakeRecord() {
   const now = new Date().toISOString();
   return {
@@ -112,6 +144,7 @@ describe('App (AC: authenticated view renders)', () => {
         ),
         '/api/intake': () => new Response(JSON.stringify({ intake: existingIntakeRecord() }), { status: 200 }),
         '/api/ideas': () => new Response(JSON.stringify({ ideas: [], currency: 'EUR' }), { status: 200 }),
+        '/api/plans': () => new Response(JSON.stringify({ plans: [] }), { status: 200 }),
         '/api/settings': new Response(
           JSON.stringify({ personality: 'friendly', model: 'openai/gpt-6-luna', selectableModels: [], uiLanguage: 'English' }),
           { status: 200 },
@@ -177,6 +210,9 @@ describe('App (Story 2.1: intake gates the ideas panel)', () => {
         if (url.includes('/api/ideas')) {
           return Promise.resolve(new Response(JSON.stringify({ ideas: [], currency: 'EUR' }), { status: 200 }));
         }
+        if (url.includes('/api/plans')) {
+          return Promise.resolve(new Response(JSON.stringify({ plans: [] }), { status: 200 }));
+        }
         if (url.includes('/api/settings')) {
           return Promise.resolve(
             new Response(
@@ -214,6 +250,7 @@ describe('App (Story 2.1: intake gates the ideas panel)', () => {
         '/api/auth/session': authSessionResponse(),
         '/api/intake': () => new Response(JSON.stringify({ intake: existingIntakeRecord() }), { status: 200 }),
         '/api/ideas': () => new Response(JSON.stringify({ ideas: [], currency: 'EUR' }), { status: 200 }),
+        '/api/plans': () => new Response(JSON.stringify({ plans: [] }), { status: 200 }),
         '/api/settings': new Response(
           JSON.stringify({ personality: 'friendly', model: 'openai/gpt-6-luna', selectableModels: [], uiLanguage: 'English' }),
           { status: 200 },
@@ -226,5 +263,138 @@ describe('App (Story 2.1: intake gates the ideas panel)', () => {
     fireEvent.click(await screen.findByRole('button', { name: intakeEn.revisitLink }));
 
     expect(await screen.findByDisplayValue('Woodworking')).toBeInTheDocument();
+  });
+});
+
+// Story 2.9 (AC: "the active view/plan survives a reload — use the URL").
+// A reload is simulated by setting the URL before the first render, same as
+// a fresh browser navigation to that path would.
+describe('App (Story 2.9: the active view/plan survives a reload)', () => {
+  it('a direct load of /settings shows the Settings view, not the ideas list', async () => {
+    window.history.replaceState({}, '', '/settings');
+    vi.stubGlobal(
+      'fetch',
+      mockFetch({
+        '/api/auth/session': authSessionResponse(),
+        '/api/intake': () => new Response(JSON.stringify({ intake: existingIntakeRecord() }), { status: 200 }),
+        '/api/ideas': () => new Response(JSON.stringify({ ideas: [], currency: 'EUR' }), { status: 200 }),
+        '/api/plans': () => new Response(JSON.stringify({ plans: [] }), { status: 200 }),
+        '/api/settings': () =>
+          new Response(
+            JSON.stringify({ personality: 'friendly', model: 'openai/gpt-6-luna', selectableModels: [], uiLanguage: 'English' }),
+            { status: 200 },
+          ),
+      }),
+    );
+
+    renderApp();
+
+    expect(await screen.findByRole('heading', { name: 'Settings' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /your tailored income ideas/i })).not.toBeInTheDocument();
+  });
+
+  it('a direct load of /plan/:ideaId shows that idea\'s plan workspace, resolving its title from the My-plans list', async () => {
+    window.history.replaceState({}, '', '/plan/idea-1');
+    const now = new Date().toISOString();
+    vi.stubGlobal(
+      'fetch',
+      mockFetch({
+        '/select/idea-1': () =>
+          new Response(JSON.stringify({ id: 'plan-1', ideaId: 'idea-1', status: 'active', threadId: 'plan:plan-1', createdAt: now, updatedAt: now }), {
+            status: 200,
+          }),
+        '/current-step': () => new Response(JSON.stringify({ current: null, next: null }), { status: 200 }),
+        '/messages': () => new Response(JSON.stringify({ messages: [] }), { status: 200 }),
+        '/api/plans': () =>
+          new Response(
+            JSON.stringify({ plans: [{ id: 'plan-1', ideaId: 'idea-1', ideaTitle: 'Resell thrifted items', status: 'active', updatedAt: now }] }),
+            { status: 200 },
+          ),
+        '/api/auth/session': authSessionResponse(),
+        '/api/intake': () => new Response(JSON.stringify({ intake: existingIntakeRecord() }), { status: 200 }),
+        '/api/ideas': () => new Response(JSON.stringify({ ideas: [], currency: 'EUR' }), { status: 200 }),
+        '/api/settings': () =>
+          new Response(
+            JSON.stringify({ personality: 'friendly', model: 'openai/gpt-6-luna', selectableModels: [], uiLanguage: 'English' }),
+            { status: 200 },
+          ),
+      }),
+    );
+
+    renderApp();
+
+    expect(await screen.findByRole('heading', { name: 'Your plan for Resell thrifted items' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /your tailored income ideas/i })).not.toBeInTheDocument();
+  });
+
+  // UX fix (user-reported, live): a Bookmarked sidebar entry's own
+  // single-idea view is a real route too, same reload guarantee.
+  it('a direct load of /bookmarked/:ideaId shows only that one idea\'s card', async () => {
+    window.history.replaceState({}, '', '/bookmarked/idea-2');
+    const bookmarked = { id: 'idea-2', title: 'Only this one' };
+    const other = { id: 'idea-1', title: 'A different idea' };
+    vi.stubGlobal(
+      'fetch',
+      mockFetch({
+        '/api/auth/session': authSessionResponse(),
+        '/api/intake': () => new Response(JSON.stringify({ intake: existingIntakeRecord() }), { status: 200 }),
+        '/api/plans': () => new Response(JSON.stringify({ plans: [] }), { status: 200 }),
+        '/api/settings': () =>
+          new Response(
+            JSON.stringify({ personality: 'friendly', model: 'openai/gpt-6-luna', selectableModels: [], uiLanguage: 'English' }),
+            { status: 200 },
+          ),
+        '/api/ideas': () =>
+          new Response(
+            JSON.stringify({
+              ideas: [
+                { ...fakeIdeaFixture(), ...other, status: 'suggested' },
+                { ...fakeIdeaFixture(), ...bookmarked, status: 'bookmarked' },
+              ],
+              currency: 'EUR',
+            }),
+            { status: 200 },
+          ),
+      }),
+    );
+
+    renderApp();
+
+    expect(await screen.findByText('Only this one')).toBeInTheDocument();
+    expect(screen.queryByText('A different idea')).not.toBeInTheDocument();
+  });
+});
+
+// Bug fix (user-reported, live): opening "Review your intake answers" from
+// the sidebar sets a flag that rendered *above* the routed view — nothing
+// reset it on a later sidebar click, so every other sidebar button looked
+// unresponsive (clicking one updated the route underneath, but the intake
+// form kept covering it) once that flag was set.
+describe('App (bug fix: a sidebar click always leaves intake-review mode)', () => {
+  it('clicking "New ideas" after opening "Review your intake answers" shows the ideas view, not the stuck intake form', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockFetch({
+        '/api/auth/session': authSessionResponse(),
+        '/api/intake': () => new Response(JSON.stringify({ intake: existingIntakeRecord() }), { status: 200 }),
+        '/api/ideas': () => new Response(JSON.stringify({ ideas: [], currency: 'EUR' }), { status: 200 }),
+        '/api/plans': () => new Response(JSON.stringify({ plans: [] }), { status: 200 }),
+        '/api/settings': () =>
+          new Response(
+            JSON.stringify({ personality: 'friendly', model: 'openai/gpt-6-luna', selectableModels: [], uiLanguage: 'English' }),
+            { status: 200 },
+          ),
+      }),
+    );
+
+    renderApp();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Review your intake answers' }));
+    expect(await screen.findByDisplayValue('Woodworking')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'New ideas' }));
+
+    expect(await screen.findByRole('heading', { name: /your tailored income ideas/i })).toBeInTheDocument();
+    expect(screen.queryByDisplayValue('Woodworking')).not.toBeInTheDocument();
   });
 });

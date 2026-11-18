@@ -29,8 +29,7 @@
     "select": "Select",
     "bookmark": "Bookmark",
     "reject": "Reject",
-    "retryTranslation": "Retry translation",
-    "viewPlan": "View plan"
+    "retryTranslation": "Retry translation"
   },
   "confirmSelect": {
     "title": "Make this your plan?",

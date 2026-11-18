@@ -1,0 +1,23 @@
+{
+  "navLabel": "Main navigation",
+  "newIdeasLabel": "New ideas",
+  "topNav": {
+    "heading": "Ideas"
+  },
+  "myPlans": {
+    "heading": "My plans",
+    "empty": "No plans yet — select an idea to start one.",
+    "activeStatus": "Active",
+    "pausedStatus": "Paused"
+  },
+  "bookmarked": {
+    "heading": "Bookmarked"
+  },
+  "profile": {
+    "settingsLabel": "Settings"
+  },
+  "openMenuLabel": "Open menu",
+  "closeMenuLabel": "Close menu",
+  "collapseLabel": "Collapse sidebar",
+  "expandLabel": "Expand sidebar"
+}

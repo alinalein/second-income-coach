@@ -186,11 +186,21 @@ export function PlanActivationPanel({ planId, onActivated }: PlanActivationPanel
           if (!isStale(requestId)) setPhase('failed');
           return;
         }
-        // Re-read the (now modified) review so the panel shows the saved draft.
-        const reviewRes = await fetch(`/api/plans/${planId}/activate`, { credentials: 'include' });
+        // Bug fix (user-reported): modify resolves the pending interrupt —
+        // the graph run completes, it does NOT pause again on its own. A
+        // GET here (the original code) reads back `{ review: null }` (no
+        // pending interrupt left), which failed Zod validation and always
+        // landed on "Something went wrong." A fresh `POST /activate` is
+        // what actually starts a new pause over the just-saved draft, the
+        // same way the initial "Review plan" click does.
+        const reviewRes = await fetch(`/api/plans/${planId}/activate`, { method: 'POST', credentials: 'include' });
+        if (!reviewRes.ok) {
+          if (!isStale(requestId)) setPhase('failed');
+          return;
+        }
         const body: unknown = await reviewRes.json();
         if (isStale(requestId)) return;
-        const parsedReview = planActivationReviewSchema.safeParse((body as { review?: unknown } | undefined)?.review);
+        const parsedReview = planActivationReviewSchema.safeParse(body);
         if (parsedReview.success) {
           setReview(parsedReview.data);
           setPhase('reviewing');
@@ -228,10 +238,18 @@ export function PlanActivationPanel({ planId, onActivated }: PlanActivationPanel
           if (!isStale(requestId)) setPhase('failed');
           return;
         }
-        const reviewRes = await fetch(`/api/plans/${planId}/activate`, { credentials: 'include' });
+        // Bug fix (user-reported): same as `saveEdits` — reject resolves the
+        // pending interrupt and the graph run completes; a fresh
+        // `POST /activate` (not a `GET`) is what starts a new pause over the
+        // just-regenerated draft.
+        const reviewRes = await fetch(`/api/plans/${planId}/activate`, { method: 'POST', credentials: 'include' });
+        if (!reviewRes.ok) {
+          if (!isStale(requestId)) setPhase('failed');
+          return;
+        }
         const body: unknown = await reviewRes.json();
         if (isStale(requestId)) return;
-        const parsedReview = planActivationReviewSchema.safeParse((body as { review?: unknown } | undefined)?.review);
+        const parsedReview = planActivationReviewSchema.safeParse(body);
         if (parsedReview.success) {
           setReview(parsedReview.data);
           setPhase('reviewing');

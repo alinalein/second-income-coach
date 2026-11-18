@@ -23,6 +23,7 @@ function fakeStep(overrides: Partial<PlanStep> = {}): PlanStep {
     description: ['Current description'],
     dayOffset: 0,
     status: 'current',
+    startedAt: null,
     ...overrides,
   };
 }
@@ -42,7 +43,18 @@ describe('StatusPanel (AC: only current+next step visible)', () => {
   it('renders the current step and the locked next step from the current-step response', async () => {
     const body: CurrentStepResponse = {
       current: fakeStep({ title: 'List your first item', description: ['Take one photo.', 'Write a caption.'] }),
-      next: { id: 'step-2', stepOrder: 1, title: 'List a second item', description: ['Repeat.'], dayOffset: 2, status: 'pending' },
+      next: {
+        id: 'step-2',
+        stepOrder: 1,
+        title: 'List a second item',
+        description: ['Repeat.'],
+        dayOffset: 2,
+        status: 'pending',
+        startedAt: null,
+      },
+      gapDetected: false,
+      missedDays: 0,
+      checkedInToday: false,
     };
     vi.stubGlobal(
       'fetch',
@@ -69,7 +81,13 @@ describe('StatusPanel (AC: only current+next step visible)', () => {
   });
 
   it('renders no next region when the current step is the plan\'s last one', async () => {
-    const body: CurrentStepResponse = { current: fakeStep({ title: 'Last step' }), next: null };
+    const body: CurrentStepResponse = {
+      current: fakeStep({ title: 'Last step' }),
+      next: null,
+      gapDetected: false,
+      missedDays: 0,
+      checkedInToday: false,
+    };
     vi.stubGlobal(
       'fetch',
       mockFetch({ '/api/plans/plan-1/current-step': () => new Response(JSON.stringify(body), { status: 200 }) }),

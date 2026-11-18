@@ -8,11 +8,31 @@ import { IDEAS_MODEL_NODE_TIMEOUT_MS, IDEAS_MODEL_NODE_RETRY_POLICY, PLAN_MODEL_
 import { getWebSearchTool } from '../tools/mcp/web_search.js';
 import { createCreatePlanTool } from '../tools/llm/create_plan.js';
 import { createGetCurrentStepTool } from '../tools/plain/get_current_step.js';
+import { createRecordCheckInTool } from '../tools/plain/record_check_in.js';
+import { createStartStepTool } from '../tools/plain/start_step.js';
+import { createCompleteStepTool } from '../tools/plain/complete_step.js';
 import { createActivatePlanGraph } from '../tools/plain/activate_plan.js';
 import { createApp } from './app.js';
 
 const CHECKPOINTER_SETUP_TIMEOUT_MS = 10_000;
 const WEB_SEARCH_TOOL_SETUP_TIMEOUT_MS = 10_000;
+
+/**
+ * Story 4.1/4.2 (CAP-4): `plansAgent`-only system-prompt addition —
+ * `record_check_in` before any step-related ask (AC), warm/specific
+ * start-vs-completion acknowledgments with no streak/point/level language
+ * (AC), and a neutral, non-punitive tone when `get_current_step` reports a
+ * detected gap, regardless of how many days it covers (AD-15/NFR1). The
+ * dedicated AD-12 guilt-language check (`includeGuiltLanguageCheck` below)
+ * is the mechanical backstop if this instruction alone isn't followed.
+ */
+const PLAN_THREAD_CHECK_IN_INSTRUCTION =
+  "When the user checks in, first ask a brief question about their energy or status today and call " +
+  'record_check_in with their answer before asking about or acting on any plan step. When acknowledging a ' +
+  'started or completed step, be warm and specific about the action itself — never mention streaks, points, ' +
+  "levels, or any kind of score. If get_current_step reports a detected gap, welcome the user back neutrally " +
+  "— never implying it was their fault, never streak-breaking language, no shame — the exact same tone no " +
+  'matter how many days were missed.';
 
 class StartupTimeoutError extends Error {}
 
@@ -112,7 +132,10 @@ try {
   // never `submit_intake`/`generate_ideas`) and its own (shorter, no-search)
   // resilience budget. `webSearchTool` is still passed through only because
   // `createCoachAgent`'s own dependency shape requires it — this agent's
-  // `tools: [...]` override never references it.
+  // `tools: [...]` override never references it. Story 4.1/4.2 (CAP-4) add
+  // the check-in tools, the check-in-ordering/neutral-gap-greeting system
+  // instruction, and the AD-12 guilt-language check — all scoped to this
+  // one agent, never the discovery/ideas agents above.
   const plansAgent = createCoachAgent({
     env,
     checkpointer,
@@ -121,7 +144,15 @@ try {
     model: chatModel,
     modelNodeTimeoutMs: PLAN_MODEL_NODE_TIMEOUT_MS,
     modelNodeRetryPolicy: PLAN_MODEL_NODE_RETRY_POLICY,
-    tools: [createCreatePlanTool(db, chatModel), createGetCurrentStepTool(db)],
+    tools: [
+      createCreatePlanTool(db, chatModel),
+      createGetCurrentStepTool(db),
+      createRecordCheckInTool(db),
+      createStartStepTool(db),
+      createCompleteStepTool(db),
+    ],
+    extraSystemInstruction: PLAN_THREAD_CHECK_IN_INSTRUCTION,
+    includeGuiltLanguageCheck: true,
   });
 
   // Story 3.2 (AD-14): the dedicated, checkpointed `activate_plan` graph —

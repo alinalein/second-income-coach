@@ -31,7 +31,7 @@ afterEach(() => {
 describe('PlanWorkspace (AC: lazy create-or-fetch wires ChatThread to the plan thread)', () => {
   it('fetches the plan via POST /api/plans/select/:ideaId and points ChatThread at /api/plans/:planId/messages', async () => {
     const plan = fakePlan();
-    const currentStep: CurrentStepResponse = { current: null, next: null };
+    const currentStep: CurrentStepResponse = { current: null, next: null, gapDetected: false, missedDays: 0, checkedInToday: false };
     const fetchMock = mockFetch({
       '/api/plans/select/idea-1': () => new Response(JSON.stringify(plan), { status: 200 }),
       '/api/plans/plan-1/current-step': () => new Response(JSON.stringify(currentStep), { status: 200 }),
@@ -40,7 +40,7 @@ describe('PlanWorkspace (AC: lazy create-or-fetch wires ChatThread to the plan t
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    render(<PlanWorkspace ideaId="idea-1" ideaTitle="Resell thrifted clothing" onBack={() => undefined} />);
+    render(<PlanWorkspace ideaId="idea-1" ideaTitle="Resell thrifted clothing" />);
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith('/api/plans/select/idea-1', expect.objectContaining({ method: 'POST' }));
@@ -59,7 +59,7 @@ describe('PlanWorkspace (AC: lazy create-or-fetch wires ChatThread to the plan t
   // cleanup+re-setup) let both invocations fire a real network request.
   it('calls POST /api/plans/select/:ideaId exactly once under StrictMode synthetic double-effect', async () => {
     const plan = fakePlan();
-    const currentStep: CurrentStepResponse = { current: null, next: null };
+    const currentStep: CurrentStepResponse = { current: null, next: null, gapDetected: false, missedDays: 0, checkedInToday: false };
     const fetchMock = mockFetch({
       '/api/plans/select/idea-1': () => new Response(JSON.stringify(plan), { status: 200 }),
       '/api/plans/plan-1/current-step': () => new Response(JSON.stringify(currentStep), { status: 200 }),
@@ -70,7 +70,7 @@ describe('PlanWorkspace (AC: lazy create-or-fetch wires ChatThread to the plan t
 
     render(
       <StrictMode>
-        <PlanWorkspace ideaId="idea-1" ideaTitle="Resell thrifted clothing" onBack={() => undefined} />
+        <PlanWorkspace ideaId="idea-1" ideaTitle="Resell thrifted clothing" />
       </StrictMode>,
     );
 
@@ -87,7 +87,7 @@ describe('PlanWorkspace (AC: lazy create-or-fetch wires ChatThread to the plan t
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    render(<PlanWorkspace ideaId="idea-1" ideaTitle="Resell thrifted clothing" onBack={() => undefined} />);
+    render(<PlanWorkspace ideaId="idea-1" ideaTitle="Resell thrifted clothing" />);
 
     expect(await screen.findByRole('alert')).toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalledWith(expect.stringContaining('/current-step'), expect.anything());

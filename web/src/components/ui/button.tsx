@@ -15,6 +15,16 @@ const buttonVariants = cva(
         // tint (not solid bg-muted) so the backdrop-blur stays visible.
         outline: 'glass-chrome border text-foreground hover:bg-muted/40',
         ghost: 'text-foreground hover:bg-muted',
+        // Bug fix (user-reported): "the active tab ... with just white it
+        // is hard to see" — `outline`'s translucent glass tint barely reads
+        // against the sidebar's own glass background. A clearly-tinted,
+        // theme-aware accent fill (the `--accent`/`--accent-foreground`
+        // pair, already reserved for exactly this) for "this nav entry is
+        // the current view" — distinct from `default`'s solid CTA look.
+        // Follow-up (user-reported): the full-strength fill read as "too
+        // aggressive" — toned down to a softer tint at reduced opacity,
+        // same font weight as every other button (no extra `font-semibold`).
+        accent: 'bg-accent/50 text-accent-foreground hover:bg-accent/65',
       },
       size: {
         default: 'h-10 px-4 py-2',

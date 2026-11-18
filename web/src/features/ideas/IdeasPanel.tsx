@@ -420,7 +420,6 @@ function IdeaCard({
   viewerCountry,
   onSetStatus,
   onRequestSelect,
-  onViewPlan,
   pending,
 }: {
   idea: IdeaWithPlanResponse;
@@ -439,15 +438,6 @@ function IdeaCard({
    * writing the status directly — the dialog's own confirm handler is what
    * actually calls `onSetStatus`-equivalent logic (`postIdeaStatus`). */
   onRequestSelect: (idea: IdeaWithPlanResponse) => void;
-  /** Story 3.1/2.8 AC5: present only for the `selected` idea's card once it
-   * actually has a plan (`idea.hasPlan`) — navigates to that idea's
-   * `PlanWorkspace` (lazily creating its draft plan via `POST
-   * /api/plans/select/:ideaId` if none exists yet, though by this gate one
-   * always does). `undefined`/hidden otherwise. The idea's own title is
-   * passed through (UI fix, user-reported) so the workspace can label
-   * itself "Your plan for <idea>" instead of a bare "Your plan" that gives
-   * no hint which idea it's for. */
-  onViewPlan?: (ideaId: string, ideaTitle: string) => void;
   pending: boolean;
 }) {
   const { t } = useTranslation('ideas');
@@ -744,14 +734,6 @@ function IdeaCard({
             {t('actions.reject')}
           </Button>
         </div>
-        {/* Story 2.8 AC5: only the `selected` idea's card, and only once it
-         * actually has a plan — never for `bookmarked`/`suggested`/
-         * `rejected`, and never for a `selected` idea with no plan yet. */}
-        {onViewPlan && idea.status === 'selected' && idea.hasPlan ? (
-          <Button type="button" size="sm" variant="ghost" className="w-full" disabled={pending} onClick={() => onViewPlan(idea.id, idea.title)}>
-            {t('actions.viewPlan')}
-          </Button>
-        ) : null}
       </div>
     </Card>
   );
@@ -772,12 +754,25 @@ export interface IdeasPanelProps {
   /** Story 2.8 AC1: true only right after this session's first-ever intake
    * submit (set by `App`) — fires `handleGenerate()` once, automatically,
    * before the user has clicked anything. Omitted/false everywhere else
-   * (a returning user with or without existing ideas), leaving the
-   * existing manual "Generate" button as the only trigger. */
+   * (a returning user with or without existing ideas). */
   autoGenerate?: boolean;
+  /** UX fix (user-reported, live): present only when opened from a
+   * sidebar "Bookmarked" entry — shows *only* that one idea's card and
+   * nothing else, instead of the "New ideas" grid (which itself now shows
+   * only still-undecided `suggested` ideas, never a bookmarked one). */
+  onlyIdeaId?: string;
+  /** UX fix (user-reported): the sidebar's "Bookmarked" entry is now one
+   * button (like "New ideas"), not a per-idea list — this shows every
+   * `bookmarked` idea's card together, the same grid "New ideas" uses. */
+  onlyBookmarked?: boolean;
 }
 
-export function IdeasPanel({ onViewPlan, autoGenerate = false }: IdeasPanelProps = {}) {
+export function IdeasPanel({
+  onViewPlan,
+  autoGenerate = false,
+  onlyIdeaId,
+  onlyBookmarked = false,
+}: IdeasPanelProps = {}) {
   const { t, i18n } = useTranslation('ideas');
   const [ideas, setIdeas] = React.useState<IdeaWithPlanResponse[]>([]);
   const [currency, setCurrency] = React.useState<CurrencyCode>('EUR');
@@ -1178,14 +1173,31 @@ export function IdeasPanel({ onViewPlan, autoGenerate = false }: IdeasPanelProps
   }, [phase, ideas.length, autoGenerate, handleGenerate, generateLimit]);
 
   const locale = LOCALE_BY_LANGUAGE[i18n.language] ?? 'en-US';
-  const generating = phase === 'generating';
-  // Story 2.11 (AC5/AC6/AC7): the counters reset at a fixed UTC time, but
-  // the client shows that moment in the viewer's own local time — still
-  // the exact same instant, just legible without the viewer doing math.
+  // UX fix (user-reported): the "Generate new ideas" button moved out of
+  // the sidebar and back onto this page (bottom of the card) — these are
+  // the same disabled/label/reset-time values the sidebar's own button
+  // used to compute for itself.
+  const generateBlocked = generateLimit?.blocked ?? false;
   const generateLimitResetTime =
     generateLimit?.resetsAt != null
       ? new Intl.DateTimeFormat(locale, { hour: '2-digit', minute: '2-digit' }).format(new Date(generateLimit.resetsAt))
       : '';
+  const generating = phase === 'generating';
+  // UX fix (user-reported, live): three views share this one grid.
+  // `onlyIdeaId` (a stale/hand-typed single-idea URL) shows *only* that one
+  // idea's card. `onlyBookmarked` (the sidebar's "Bookmarked" button) shows
+  // every `bookmarked` idea's card together. Otherwise ("New ideas") shows
+  // only still-undecided `suggested` ideas — a `selected` idea already has
+  // its own plan/chat in "My plans", and a `rejected` one is never returned
+  // by the server at all (AD-13). `ideas` itself (unfiltered) stays the
+  // source of truth for the auto-generate effect above and the status
+  // actions below, which care about "does the user have any ideas at all",
+  // not what this grid happens to be showing right now.
+  const visibleIdeas = React.useMemo(() => {
+    if (onlyIdeaId) return ideas.filter((idea) => idea.id === onlyIdeaId);
+    if (onlyBookmarked) return ideas.filter((idea) => idea.status === 'bookmarked');
+    return ideas.filter((idea) => idea.status === 'suggested');
+  }, [ideas, onlyIdeaId, onlyBookmarked]);
 
   return (
     <>
@@ -1195,7 +1207,7 @@ export function IdeasPanel({ onViewPlan, autoGenerate = false }: IdeasPanelProps
           {/* Story 2.8 AC2/AC6: only rendered once there's something to act
            * on — an empty/loading panel never reserves this line, so no
            * blank band is left under the heading (AC6). */}
-          {ideas.length > 0 ? <p className="text-sm text-muted-foreground">{t('explanation')}</p> : null}
+          {visibleIdeas.length > 0 ? <p className="text-sm text-muted-foreground">{t('explanation')}</p> : null}
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           {/* Fix1: a fixed-height neutral skeleton, never the "no ideas yet"
@@ -1216,17 +1228,6 @@ export function IdeasPanel({ onViewPlan, autoGenerate = false }: IdeasPanelProps
           {phase === 'generate-error' ? (
             <Badge variant="muted" role="alert">
               {generateErrorKind === 'searchUnavailable' ? t('error.searchUnavailable') : t('error.generateFailed')}
-            </Badge>
-          ) : null}
-          {/* Story 2.11 (AC5/AC6): a plain limit notice, never worded like
-           * an error — `role="status"`, not `role="alert"`, same treatment
-           * as the `translating` badge below. Independent of `phase`:
-           * existing ideas stay visible and usable either way. */}
-          {generateLimit?.blocked ? (
-            <Badge variant="muted" role="status">
-              {generateLimit.reason === 'shared_budget'
-                ? t('limit.sharedBudgetExhausted')
-                : t('limit.userLimitReached', { limit: generateLimit.limit, resetTime: generateLimitResetTime })}
             </Badge>
           ) : null}
           {/* Story 2.3: independent of `phase` — a failed status change never
@@ -1256,12 +1257,12 @@ export function IdeasPanel({ onViewPlan, autoGenerate = false }: IdeasPanelProps
           ) : null}
           {/* Round 13: only when genuinely idle and empty — not alongside an
            * error message, which already explains the state. */}
-          {phase === 'idle' && ideas.length === 0 ? (
+          {phase === 'idle' && visibleIdeas.length === 0 ? (
             <p className="text-sm text-muted-foreground">{t('empty')}</p>
           ) : null}
-          {ideas.length > 0 ? (
+          {visibleIdeas.length > 0 ? (
             <div className="grid grid-cols-1 items-stretch gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {ideas.map((idea) => (
+              {visibleIdeas.map((idea) => (
                 <IdeaCard
                   key={idea.id}
                   idea={idea}
@@ -1271,7 +1272,6 @@ export function IdeasPanel({ onViewPlan, autoGenerate = false }: IdeasPanelProps
                   viewerCountry={viewerCountry}
                   onSetStatus={handleSetIdeaStatus}
                   onRequestSelect={handleRequestSelect}
-                  onViewPlan={onViewPlan}
                   // Only the card(s) this specific action touches disable —
                   // the target, plus any siblings a `selected` sweep demotes
                   // (those are genuinely changing too). An unrelated card's
@@ -1287,45 +1287,38 @@ export function IdeasPanel({ onViewPlan, autoGenerate = false }: IdeasPanelProps
          * handles both the first-ever generate (epics.md AC1) and "Generate
          * new ideas" (epics.md AC: regenerate, replacing the `suggested`
          * batch — `generate_ideas.ts`'s own DB-write transaction, round 10,
-         * actually does the replace; this button only triggers the same
-         * request again) — both buttons already shared this exact code path
-         * (only `variant`/label differed by `ideas.length`), so round 22's
-         * row layout already applied to both equally.
+         * actually does the replace.
          *
-         * Round 22 (user-requested, annotated screenshot): the progress
-         * block moves from *under* the button to *beside* it, in the same
-         * row — button on the left, progress bar/status/hint stacked in the
-         * remaining width to its right.
-         *
-         * Round 23 (user-requested): both buttons now use the same solid
-         * `default` style (the `outline` variant for "Generate new ideas"
-         * is gone — same color as "Generate my ideas"). The progress
-         * block's wrapper is now always rendered (never unmounted) and
-         * fades via `transition-opacity` instead of popping in/out — since
-         * it's always present, it also always reserves its own real height,
-         * so the footer doesn't jump when generation starts or ends; no
-         * height was guessed/hardcoded for this.
+         * UX fix (user-reported): Story 2.9 moved this button to the
+         * sidebar; now moved back here (bottom of this page, below the
+         * cards) — the sidebar's own copy of this button/badge/disabled
+         * state is removed entirely, this is the one place it lives again.
+         * The progress bar/status text always stays mounted and fades via
+         * `transition-opacity` instead of popping in/out, so it reserves
+         * its own real height and the layout never jumps when a generation
+         * starts or ends.
          */}
         {phase !== 'loading' ? (
-          <CardFooter className="flex flex-row items-start gap-4">
-            <Button type="button" onClick={handleGenerate} disabled={generating || (generateLimit?.blocked ?? false)} className="shrink-0">
-              {generating ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-                  {t('generatingButton')}
-                </>
-              ) : ideas.length > 0 ? (
-                t('generateNewButton')
-              ) : (
-                t('generateButton')
-              )}
+          <CardFooter className="flex flex-col items-start gap-3">
+            <Button type="button" size="sm" className="gap-2" disabled={generating || generateBlocked} onClick={handleGenerate}>
+              {generating ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : null}
+              {generating ? t('generatingButton') : ideas.length > 0 ? t('generateNewButton') : t('generateButton')}
             </Button>
+            {/* Story 2.11 (AC5/AC6): a plain limit notice, never worded
+             * like an error. */}
+            {generateBlocked ? (
+              <Badge variant="muted" role="status" className="whitespace-normal text-left">
+                {generateLimit?.reason === 'shared_budget'
+                  ? t('limit.sharedBudgetExhausted')
+                  : t('limit.userLimitReached', { limit: generateLimit?.limit, resetTime: generateLimitResetTime })}
+              </Badge>
+            ) : null}
             {/* Story 2.2 follow-up fix 2: an indeterminate (no percentage) progress
              * indicator while POST /api/ideas/generate is pending — a live region
              * so assistive tech announces the status/hint text as it appears,
              * not just on first render. */}
             <div
-              className={`flex flex-1 flex-col gap-2 transition-opacity duration-200 ${generating ? 'opacity-100' : 'opacity-0'}`}
+              className={`flex w-full flex-1 flex-col gap-2 transition-opacity duration-200 ${generating ? 'opacity-100' : 'opacity-0'}`}
               aria-live="polite"
               role={generating ? 'status' : undefined}
               aria-hidden={!generating}

@@ -202,11 +202,19 @@ export function ChatThread({ endpoint = DEFAULT_CHAT_ENDPOINT, footerItems = [],
   );
 
   return (
-    <Card>
+    // Bug fix (user-reported): "the chat should have the full height of the
+    // window" — `h-full` only does anything because `PlanWorkspace`'s own
+    // column now gives this a definite height to fill (a flex item stretched
+    // by its row, itself stretched by `App.tsx`'s already-viewport-height
+    // main content column); elsewhere, with no such ancestor, `h-full`
+    // resolves to `auto` per the CSS spec and this renders exactly as
+    // before. `min-h-0` lets `CardContent` below shrink and scroll instead
+    // of forcing the card taller than its container.
+    <Card className="flex h-full min-h-0 flex-col">
       <CardHeader>
         <CardTitle>{t('title')}</CardTitle>
       </CardHeader>
-      <CardContent className="flex flex-col gap-3">
+      <CardContent className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
         {!historyLoaded ? (
           <p className="text-sm text-muted-foreground">{t('loading')}</p>
         ) : messages.length === 0 ? (

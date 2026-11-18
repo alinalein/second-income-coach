@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, cleanup, fireEvent } from '@testing-library/react';
 import { SettingsPage } from './SettingsPage';
+import { ThemeProvider } from '../../theme/theme-provider';
 import i18n from '../../i18n';
 
 function mockFetch(responses: Record<string, Response | (() => Response)>, onPost?: (url: string, body: unknown) => void) {
@@ -12,6 +13,17 @@ function mockFetch(responses: Record<string, Response | (() => Response)>, onPos
     const entry = responses[match]!;
     return Promise.resolve(typeof entry === 'function' ? entry() : entry);
   });
+}
+
+// `SettingsPage` now renders `ThemeToggle` (UX fix: moved here from the
+// sidebar), which requires a `ThemeProvider` ancestor — same wrapper
+// `Sidebar.test.tsx` already uses for the same reason.
+function renderSettingsPage(props: { onCurrencyChange?: () => void } = {}) {
+  return render(
+    <ThemeProvider>
+      <SettingsPage {...props} />
+    </ThemeProvider>,
+  );
 }
 
 afterEach(() => {
@@ -44,7 +56,7 @@ describe('SettingsPage (AC: real settings screen)', () => {
       }),
     );
 
-    render(<SettingsPage />);
+    renderSettingsPage();
 
     const personalitySelect = (await screen.findByLabelText(/personality/i)) as HTMLSelectElement;
     await waitFor(() => expect(personalitySelect.value).toBe('terse'));
@@ -70,7 +82,7 @@ describe('SettingsPage (AC: real settings screen)', () => {
       ),
     );
 
-    render(<SettingsPage />);
+    renderSettingsPage();
 
     const personalitySelect = (await screen.findByLabelText(/personality/i)) as HTMLSelectElement;
     await waitFor(() => expect(personalitySelect.value).toBe('friendly'));
@@ -103,7 +115,7 @@ describe('SettingsPage (AC: real settings screen)', () => {
       ),
     );
 
-    render(<SettingsPage />);
+    renderSettingsPage();
 
     const uiLanguageSelect = (await screen.findByLabelText(/language/i)) as HTMLSelectElement;
     await waitFor(() => expect(uiLanguageSelect.value).toBe('English'));
@@ -142,7 +154,7 @@ describe('SettingsPage (AC: real settings screen)', () => {
       ),
     );
 
-    render(<SettingsPage onCurrencyChange={onCurrencyChange} />);
+    renderSettingsPage({ onCurrencyChange });
 
     const currencySelect = (await screen.findByLabelText(/currency/i)) as HTMLSelectElement;
     await waitFor(() => expect(currencySelect.value).toBe('EUR'));
@@ -171,7 +183,7 @@ describe('SettingsPage (AC: real settings screen)', () => {
       }),
     );
 
-    render(<SettingsPage onCurrencyChange={onCurrencyChange} />);
+    renderSettingsPage({ onCurrencyChange });
 
     const currencySelect = (await screen.findByLabelText(/currency/i)) as HTMLSelectElement;
     await waitFor(() => expect(currencySelect.value).toBe('EUR'));

@@ -98,6 +98,9 @@ export const planStepResponseSchema = z.object({
   description: z.array(stepActionSchema).min(1),
   dayOffset: z.number().int().nonnegative(),
   status: planStepStatusSchema,
+  /** Story 4.1 (AD-4): set by `start_step` — lets the UI/model tell "not
+   * started yet" from "already started" for the plan's current step. */
+  startedAt: z.iso.datetime().nullable(),
 });
 
 export type PlanStepResponse = z.infer<typeof planStepResponseSchema>;
@@ -111,6 +114,24 @@ export type PlanStepResponse = z.infer<typeof planStepResponseSchema>;
 export const currentStepResponseSchema = z.object({
   current: planStepResponseSchema.nullable(),
   next: planStepResponseSchema.nullable(),
+  /**
+   * Story 4.2 (AD-15): set when this call just detected a missed-check-in
+   * gap and auto-recalculated the timeline — `true` only on the one call
+   * that newly detects it, `false` on every later call until the next real
+   * gap. `missedDays` is informational only; the neutral re-entry banner it
+   * drives (`StatusPanel.tsx`) reads the exact same fixed, translated text
+   * regardless of its value (NFR1: "identical for any number of missed
+   * check-ins").
+   */
+  gapDetected: z.boolean(),
+  missedDays: z.number().int().nonnegative(),
+  /**
+   * Bug fix (user-reported): the energy/status check-in ask must appear at
+   * most once per calendar day — including after a week away, where it
+   * should only ask about *today*, never prompt once per missed day.
+   * `true` once a `record_check_in` row already exists for today (UTC).
+   */
+  checkedInToday: z.boolean(),
 });
 
 export type CurrentStepResponse = z.infer<typeof currentStepResponseSchema>;
@@ -143,3 +164,27 @@ export const activatePlanDecisionSchema = z.discriminatedUnion('action', [
 ]);
 
 export type ActivatePlanDecision = z.infer<typeof activatePlanDecisionSchema>;
+
+/**
+ * Story 2.9 — `GET /api/plans`'s own response shape: the sidebar's
+ * "My plans" list, one entry per idea that has a plan, joined with that
+ * idea's title (never re-fetched separately — AD-13/AD-16: the server
+ * already has it in the same query). Ordered by `updatedAt` desc
+ * ("sorted by last activity" — the plan row's own `updatedAt`, which
+ * `activate_plan.ts`'s transactions already bump on every status change).
+ */
+export const planListEntrySchema = z.object({
+  id: z.string().min(1),
+  ideaId: z.string().min(1),
+  ideaTitle: z.string().min(1),
+  status: planStatusSchema,
+  updatedAt: z.iso.datetime(),
+});
+
+export type PlanListEntry = z.infer<typeof planListEntrySchema>;
+
+export const planListResponseSchema = z.object({
+  plans: z.array(planListEntrySchema),
+});
+
+export type PlanListResponse = z.infer<typeof planListResponseSchema>;

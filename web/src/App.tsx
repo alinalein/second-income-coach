@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { useTranslation } from 'react-i18next';
-import { authSessionSchema, getIntakeResponseSchema, type AuthUser } from '@app/shared';
+import { authSessionSchema, getIntakeResponseSchema, ideasWithPlanResponseSchema, planListResponseSchema, type AuthUser } from '@app/shared';
 import { Button } from './components/ui/button';
 import { Badge } from './components/ui/badge';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from './components/ui/card';
@@ -9,6 +9,7 @@ import { IntakeForm } from './features/intake/IntakeForm';
 import { IdeasPanel } from './features/ideas/IdeasPanel';
 import { PlanWorkspace } from './features/plan-workspace/PlanWorkspace';
 import { SettingsPage } from './features/settings/SettingsPage';
+import { Sidebar, SidebarMobileMenuButton, useIsDesktop } from './features/sidebar/Sidebar';
 import { useAppliedUiLanguage } from './features/settings/useAppliedUiLanguage';
 
 type AuthStatus =
@@ -166,35 +167,118 @@ function FadeIn({ children }: { children: React.ReactNode }) {
   return <div className={`transition-opacity duration-300 ${visible ? 'opacity-100' : 'opacity-0'}`}>{children}</div>;
 }
 
-/** Code Map: "small revisit link once one [an intake row] does [exist]". */
-function RevisitIntakeLink({ onClick }: { onClick: () => void }) {
-  const { t } = useTranslation('intake');
-  return (
-    <Button type="button" variant="ghost" size="sm" onClick={onClick}>
-      {t('revisitLink')}
-    </Button>
-  );
+function signOut(onSignedOut: () => void) {
+  fetch('/api/auth/logout', { method: 'POST', credentials: 'include' })
+    .catch(() => undefined)
+    .finally(onSignedOut);
 }
 
-function SignOutButton({ onSignedOut }: { onSignedOut: () => void }) {
-  const { t } = useTranslation('common');
-  const [pending, setPending] = React.useState(false);
+/** Story 2.9 (AC: "the active view/plan survives a reload — use the URL").
+ * A tiny path-based router — no new dependency, the same `window.history`
+ * primitive `useAuthError` above already uses. `ideaTitle` starts `null` on
+ * a direct load/reload of `/plan/:ideaId` (the URL carries no title);
+ * `useResolvedPlanTitle` below fills it in once. Every in-app navigation
+ * (a card, a sidebar entry) already has the title in hand and passes it
+ * straight through. */
+type Route =
+  | { kind: 'ideas' }
+  | { kind: 'settings' }
+  | { kind: 'plan'; ideaId: string; ideaTitle: string | null }
+  | { kind: 'bookmarked'; ideaId: string }
+  // UX fix (user-reported): the sidebar's "Bookmarked" entry is now one
+  // button (like "New ideas"), showing every bookmarked idea's card
+  // together — `{ kind: 'bookmarked'; ideaId }` (a single idea) stays only
+  // for an existing stale/hand-typed `/bookmarked/:ideaId` URL.
+  | { kind: 'bookmarkedAll' };
 
-  const handleClick = React.useCallback(() => {
-    setPending(true);
-    fetch('/api/auth/logout', { method: 'POST', credentials: 'include' })
-      .catch(() => undefined)
-      .finally(() => {
-        setPending(false);
-        onSignedOut();
-      });
-  }, [onSignedOut]);
+function parsePath(pathname: string): Route {
+  if (pathname === '/settings') return { kind: 'settings' };
+  if (pathname === '/bookmarked') return { kind: 'bookmarkedAll' };
+  const planMatch = /^\/plan\/([^/]+)$/.exec(pathname);
+  if (planMatch) return { kind: 'plan', ideaId: planMatch[1]!, ideaTitle: null };
+  const bookmarkedMatch = /^\/bookmarked\/([^/]+)$/.exec(pathname);
+  if (bookmarkedMatch) return { kind: 'bookmarked', ideaId: bookmarkedMatch[1]! };
+  return { kind: 'ideas' };
+}
 
-  return (
-    <Button type="button" variant="outline" size="sm" onClick={handleClick} disabled={pending}>
-      {t('auth.signOutButton')}
-    </Button>
-  );
+function pathForRoute(route: Route): string {
+  if (route.kind === 'settings') return '/settings';
+  if (route.kind === 'plan') return `/plan/${route.ideaId}`;
+  if (route.kind === 'bookmarked') return `/bookmarked/${route.ideaId}`;
+  if (route.kind === 'bookmarkedAll') return '/bookmarked';
+  return '/';
+}
+
+/**
+ * The returned setter is a plain state setter — it never touches
+ * `window.history` on its own. User-initiated navigation (a sidebar click,
+ * a card's "Select") must go through `App`'s own `navigate` wrapper below,
+ * which pushes a new history entry; a corrective/informational update (like
+ * `useResolvedPlanTitle` filling in a title the URL never carried) uses this
+ * setter directly so it never pushes a second, redundant entry for the
+ * page the user is already on.
+ */
+function useRoute(): [Route, (route: Route) => void] {
+  const [route, setRoute] = React.useState<Route>(() => parsePath(window.location.pathname));
+
+  React.useEffect(() => {
+    const onPopState = () => setRoute(parsePath(window.location.pathname));
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
+  return [route, setRoute];
+}
+
+/**
+ * Resolves `route.ideaTitle` for a `'plan'` route loaded directly from the
+ * URL with no title yet — looks it up in the sidebar's own "My plans" data
+ * first (the common case: the plan already exists by definition of being
+ * on this route), falling back to `GET /api/ideas` for the one edge case of
+ * a bookmarked idea with no plan yet reached by a stale/hand-typed URL.
+ * Replaces the URL with `/` (never a loud error) if the idea genuinely
+ * isn't found for this user.
+ */
+function useResolvedPlanTitle(route: Route, setRoute: (route: Route) => void): void {
+  React.useEffect(() => {
+    if (route.kind !== 'plan' || route.ideaTitle !== null) return;
+    let cancelled = false;
+
+    fetch('/api/plans', { credentials: 'include' })
+      .then(async (res) => {
+        if (cancelled) return undefined;
+        const body: unknown = res.ok ? await res.json() : undefined;
+        const result = res.ok ? planListResponseSchema.safeParse(body) : undefined;
+        return result?.success ? result.data.plans.find((entry) => entry.ideaId === route.ideaId)?.ideaTitle : undefined;
+      })
+      .then(async (titleFromPlans) => {
+        if (cancelled) return;
+        if (titleFromPlans) {
+          setRoute({ ...route, ideaTitle: titleFromPlans });
+          return;
+        }
+        const res = await fetch('/api/ideas', { credentials: 'include' });
+        if (cancelled || !res.ok) return;
+        const body: unknown = await res.json();
+        const result = ideasWithPlanResponseSchema.safeParse(body);
+        const idea = result.success ? result.data.ideas.find((candidate) => candidate.id === route.ideaId) : undefined;
+        if (cancelled) return;
+        if (idea) {
+          setRoute({ ...route, ideaTitle: idea.title });
+        } else {
+          // Invalid/stale URL for this user — replace (never push) so the
+          // broken `/plan/:ideaId` entry doesn't linger in history either.
+          window.history.replaceState({}, '', '/');
+          setRoute({ kind: 'ideas' });
+        }
+      })
+      .catch(() => undefined);
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [route.kind, route.kind === 'plan' ? route.ideaId : undefined, route.kind === 'plan' ? route.ideaTitle : undefined]);
 }
 
 export function App() {
@@ -222,20 +306,46 @@ export function App() {
   // now-updated currency from `GET /api/ideas` — no change needed inside
   // `IdeasPanel.tsx` itself.
   const [ideasCurrencyKey, setIdeasCurrencyKey] = React.useState(0);
-  // Story 3.1: which idea's `PlanWorkspace` (if any) replaces the ideas/chat
-  // view below — a local-only toggle, never persisted; "Back to ideas"
-  // clears it. The idea's own title rides along (UI fix, user-reported) so
-  // the workspace can label itself "Your plan for <idea>".
-  const [viewPlanIdea, setViewPlanIdea] = React.useState<{ id: string; title: string } | null>(null);
   // Story 2.8 AC1: set only on a true first-ever intake submit (`hasIntake`
   // was `false` right before this session's save) — never on a returning
   // user whose intake already existed before this session, and never again
   // once set (there is no later path back to `false`).
   const [autoGenerateIdeas, setAutoGenerateIdeas] = React.useState(false);
+  // Story 2.9: the active view/plan, driven by the URL (survives a reload).
+  const [route, setRoute] = useRoute();
+  useResolvedPlanTitle(route, setRoute);
+  // Story 3.3: bumped on every navigation into a plan — switching plans can
+  // resume/pause rows server-side, so the sidebar's "My plans" list
+  // (`GET /api/plans`) needs a fresh read right after.
+  const [plansRefreshKey, setPlansRefreshKey] = React.useState(0);
+  const navigate = React.useCallback(
+    (next: Route) => {
+      const nextPath = pathForRoute(next);
+      // Never push a duplicate entry for the page the user is already on
+      // (e.g. clicking a sidebar entry for the view already open).
+      if (nextPath !== window.location.pathname) window.history.pushState({}, '', nextPath);
+      if (next.kind === 'plan') setPlansRefreshKey((k) => k + 1);
+      // Bug fix (user-reported, live): "Review your intake answers" set
+      // `showIntakeForm`, which renders *above* the `route` switch below —
+      // nothing reset it on a later sidebar click, so every other sidebar
+      // button looked unresponsive once the intake form was open. Every
+      // call here is itself a sidebar/card navigation choosing somewhere
+      // else to go, so it always leaves intake-review mode too.
+      setShowIntakeForm(false);
+      setRoute(next);
+    },
+    [setRoute],
+  );
+  const [mobileSidebarOpen, setMobileSidebarOpen] = React.useState(false);
+  // Bug fix (user-reported, live, confirmed at a genuine desktop width in
+  // two different browsers): deciding the mobile-header-vs-docked-sidebar
+  // split via `useIsDesktop` (JS `matchMedia`), not a `sm:hidden` CSS
+  // toggle — see that hook's own doc comment for why.
+  const isDesktop = useIsDesktop();
   // UX fix: which of the 4 mutually-exclusive branches below is active —
   // used only as `FadeIn`'s `key` so a real transition (not a same-branch
   // re-render, e.g. a card's status changing) is what restarts the fade.
-  const viewKey = hasIntake === null ? 'loading' : showIntakeForm ? 'intake' : viewPlanIdea ? 'plan' : 'ideas';
+  const viewKey = hasIntake === null ? 'loading' : showIntakeForm ? 'intake' : route.kind;
 
   if (authStatus.state !== 'authenticated') {
     return (
@@ -254,57 +364,64 @@ export function App() {
   }
 
   return (
-    <div className="min-h-screen text-foreground">
-      <header className="border-b border-border">
-        <div className="mx-auto flex max-w-3xl items-center justify-between px-6 py-4">
-          <span className="text-sm font-semibold tracking-tight">{t('app.title')}</span>
-          <div className="flex items-center gap-3">
-            <ThemeToggle />
-            <SignOutButton onSignedOut={refreshAuthStatus} />
-          </div>
-        </div>
-      </header>
+    <div className="flex h-screen overflow-hidden text-foreground">
+      {/* 2.9 AC: the sidebar shows once this signed-in user has an intake —
+       * not before (the no-intake-yet screen has nothing to navigate to). */}
+      {hasIntake ? (
+        <Sidebar
+          // Bug fix (user-reported): "Review your intake answers" never
+          // showed as the active entry — `showIntakeForm` renders above the
+          // `route` switch below and isn't itself part of `route`, so it's
+          // its own `activeRoute` kind here, checked first.
+          activeRoute={showIntakeForm ? { kind: 'intake' } : route}
+          onNavigate={navigate}
+          onSignedOut={() => signOut(refreshAuthStatus)}
+          onReviewIntake={() => setShowIntakeForm(true)}
+          mobileOpen={mobileSidebarOpen}
+          onMobileOpenChange={setMobileSidebarOpen}
+          plansRefreshKey={plansRefreshKey}
+        />
+      ) : null}
 
-      {/* Story 2.2 follow-up fix 4: `<main>` itself is wide enough for
-       * `IdeasPanel`'s 3-column card grid; the intake form (which should
-       * stay the original narrow reading width) gets its own `max-w-3xl`
-       * wrapper instead of inheriting one from `<main>`. */}
-      <main className="mx-auto flex max-w-6xl flex-col gap-6 px-6 py-10">
-        <FadeIn key={viewKey}>
-        {hasIntake === null || !uiLanguageReady ? (
-          <p className="mx-auto w-full max-w-3xl text-sm text-muted-foreground">{tIntake('loading')}</p>
-        ) : showIntakeForm ? (
-          <div className="mx-auto w-full max-w-3xl">
-            <IntakeForm
-              onSaved={() => {
-                // Story 2.8 AC1: `hasIntake` here is the closure's pre-update
-                // value — `false` means this save is the first-ever intake
-                // submit, so ideas should auto-generate with no extra click.
-                if (hasIntake === false) setAutoGenerateIdeas(true);
-                setHasIntake(true);
-                setShowIntakeForm(false);
-              }}
-            />
-          </div>
-        ) : viewPlanIdea ? (
-          <PlanWorkspace ideaId={viewPlanIdea.id} ideaTitle={viewPlanIdea.title} onBack={() => setViewPlanIdea(null)} />
-        ) : (
-          <>
-            <IdeasPanel
-              key={ideasCurrencyKey}
-              autoGenerate={autoGenerateIdeas}
-              onViewPlan={(id, title) => setViewPlanIdea({ id, title })}
-            />
-            {/* Guided-flow fix (user-reported): the discovery chat belongs
-             * once the user starts working on a chosen idea (`PlanWorkspace`
-             * already has its own plan-thread `ChatThread`) — not while
-             * ideas are still generating or being picked from, which is the
-             * one thing this screen should show (Story 2.8's own "never see
-             * actions that don't apply yet"). */}
-            <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
-              <div>
-                <RevisitIntakeLink onClick={() => setShowIntakeForm(true)} />
-              </div>
+      {/* Bug fix (user-reported, live): the page itself used to grow to fit
+       * however tall the generated ideas grid or an open plan's chat got —
+       * `min-h-screen` only ever set a *floor*, nothing capped the content
+       * column to the viewport, so long content pushed the whole page (and
+       * the sidebar with it) into one giant scroll. `h-screen overflow-
+       * hidden` on this row + `min-h-0` down the flex chain (the classic
+       * fix for "a flex child won't shrink below its content") makes
+       * `<main>` below the one thing that scrolls; the sidebar stays put. */}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        {hasIntake && !isDesktop ? (
+          <header className="flex items-center gap-2 border-b border-border px-4 py-3">
+            <SidebarMobileMenuButton onClick={() => setMobileSidebarOpen(true)} />
+            <span className="text-sm font-semibold tracking-tight">{t('app.title')}</span>
+          </header>
+        ) : null}
+
+        {/* Story 2.2 follow-up fix 4: `<main>` itself is wide enough for
+         * `IdeasPanel`'s 3-column card grid; the intake form (which should
+         * stay the original narrow reading width) gets its own `max-w-3xl`
+         * wrapper instead of inheriting one from `<main>`. */}
+        <main className="mx-auto flex w-full max-w-6xl flex-1 min-h-0 flex-col gap-6 overflow-y-auto px-6 py-10">
+          <FadeIn key={viewKey}>
+          {hasIntake === null || !uiLanguageReady ? (
+            <p className="mx-auto w-full max-w-3xl text-sm text-muted-foreground">{tIntake('loading')}</p>
+          ) : showIntakeForm ? (
+            <div className="mx-auto w-full max-w-3xl">
+              <IntakeForm
+                onSaved={() => {
+                  // Story 2.8 AC1: `hasIntake` here is the closure's pre-update
+                  // value — `false` means this save is the first-ever intake
+                  // submit, so ideas should auto-generate with no extra click.
+                  if (hasIntake === false) setAutoGenerateIdeas(true);
+                  setHasIntake(true);
+                  setShowIntakeForm(false);
+                }}
+              />
+            </div>
+          ) : route.kind === 'settings' ? (
+            <div className="mx-auto w-full max-w-3xl">
               <SettingsPage
                 onCurrencyChange={() => {
                   setIdeasCurrencyKey((k) => k + 1);
@@ -312,10 +429,20 @@ export function App() {
                 }}
               />
             </div>
-          </>
-        )}
-        </FadeIn>
-      </main>
+          ) : route.kind === 'plan' ? (
+            <PlanWorkspace ideaId={route.ideaId} ideaTitle={route.ideaTitle ?? ''} />
+          ) : (
+            <IdeasPanel
+              key={ideasCurrencyKey}
+              autoGenerate={autoGenerateIdeas}
+              onViewPlan={(id, title) => navigate({ kind: 'plan', ideaId: id, ideaTitle: title })}
+              onlyIdeaId={route.kind === 'bookmarked' ? route.ideaId : undefined}
+              onlyBookmarked={route.kind === 'bookmarkedAll'}
+            />
+          )}
+          </FadeIn>
+        </main>
+      </div>
     </div>
   );
 }

@@ -31,6 +31,15 @@ export const plans = pgTable(
     threadId: text('thread_id').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    /**
+     * Story 4.2 (AD-15): the single anchor `get_current_step`'s gap
+     * detection measures elapsed time from — reset to "now" by
+     * `record_check_in` (a real check-in) and by `get_current_step` itself
+     * once it applies a gap's timeline shift (so the same gap is never
+     * shifted twice). `null` for a plan that was never checked into yet —
+     * code falls back to `createdAt` in that case.
+     */
+    timelineAnchorAt: timestamp('timeline_anchor_at', { withTimezone: true }),
   },
   // Story 3.2 (AD-14): "exactly one plan is active per user" enforced at the
   // DB layer via a partial unique index, never only in application code —
@@ -67,4 +76,7 @@ export const planSteps = pgTable('plan_steps', {
   description: text('description').array().notNull(),
   dayOffset: integer('day_offset').notNull(),
   status: text('status').notNull().default('pending'),
+  /** Story 4.1 (AD-4): set by `start_step` when the user starts acting on
+   * this step while it's `current` — `null` until then. */
+  startedAt: timestamp('started_at', { withTimezone: true }),
 });

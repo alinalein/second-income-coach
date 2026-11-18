@@ -12,6 +12,7 @@ import { createChatModel, createModelSelectionMiddleware } from './model.js';
 import { DEFAULT_MODEL_ID } from './registry.js';
 import { DEFAULT_PERSONALITY, PERSONALITY_PROMPTS, resolvePersonality, type Personality } from './personality.js';
 import { createModerationMiddleware, type ClassifyText } from './moderation.js';
+import { createGuiltLanguageMiddleware } from './guilt-language.js';
 import { createProgressMiddleware } from './progress.js';
 import { createForceToolChoiceMiddleware } from './toolChoice.js';
 import { applyModelNodeResilience, MODEL_NODE_TIMEOUT_MS } from './resilience.js';
@@ -49,8 +50,10 @@ const REPLY_LANGUAGE_INSTRUCTION =
  * output can be asserted directly in a unit test without constructing a
  * LangGraph runtime.
  */
-export function buildSystemPrompt(personality: Personality = DEFAULT_PERSONALITY): string {
-  return `${PERSONALITY_PROMPTS[personality]} ${REPLY_LANGUAGE_INSTRUCTION}`;
+export function buildSystemPrompt(personality: Personality = DEFAULT_PERSONALITY, extra?: string): string {
+  return extra
+    ? `${PERSONALITY_PROMPTS[personality]} ${REPLY_LANGUAGE_INSTRUCTION} ${extra}`
+    : `${PERSONALITY_PROMPTS[personality]} ${REPLY_LANGUAGE_INSTRUCTION}`;
 }
 
 /**
@@ -170,6 +173,16 @@ export interface CreateCoachAgentDeps {
    * real `submit_intake` tool unmodified. Omitted in production — defaults
    * to today's exact two-tool wiring, so this is purely additive. */
   tools?: DynamicStructuredTool[];
+  /** Story 4.1/4.2 (CAP-4): an extra, agent-specific system-prompt
+   * instruction appended after the reply-language instruction — used only
+   * by `src/api/index.ts`'s `plansAgent` instance for its check-in-ordering
+   * and neutral-gap-greeting guidance. Omitted everywhere else, so every
+   * other agent's prompt is unchanged. */
+  extraSystemInstruction?: string;
+  /** Story 4.2 (AD-12): wires the dedicated guilt-language `afterModel`
+   * check (`src/agent/guilt-language.ts`) into this agent's middleware —
+   * scoped to CAP-4, so only `plansAgent` passes `true`. */
+  includeGuiltLanguageCheck?: boolean;
 }
 
 /**
@@ -197,22 +210,27 @@ export function createCoachAgent({
   modelNodeTimeoutMs = MODEL_NODE_TIMEOUT_MS,
   modelNodeRetryPolicy,
   tools,
+  extraSystemInstruction,
+  includeGuiltLanguageCheck,
 }: CreateCoachAgentDeps) {
   const chatModel = model ?? createChatModel(env, DEFAULT_MODEL_ID);
   const progress = createProgressMiddleware();
   const moderation = createModerationMiddleware(env, { classify });
   const systemPrompt = dynamicSystemPromptMiddleware<{ personality?: string }>((_state, runtime) =>
-    buildSystemPrompt(resolvePersonality(runtime.context?.personality)),
+    buildSystemPrompt(resolvePersonality(runtime.context?.personality), extraSystemInstruction),
   );
   const forceToolChoice = createForceToolChoiceMiddleware();
+  // Story 4.2 (AD-12): CAP-4-scoped only — `includeGuiltLanguageCheck` is
+  // `true` only for `plansAgent` (`src/api/index.ts`).
+  const guiltLanguage = includeGuiltLanguageCheck ? [createGuiltLanguageMiddleware({ model: chatModel })] : [];
 
   // Story 5.1 (AD-20): per-turn model swapping only applies to the real,
   // registry-backed model. A test that injects its own fake `model` (the
   // seam above) wants that exact instance invoked on every turn, never
   // swapped out underneath it by the registry-driven middleware below.
   const middleware = model
-    ? [progress, moderation, systemPrompt, forceToolChoice]
-    : [progress, moderation, systemPrompt, forceToolChoice, createModelSelectionMiddleware({ env })];
+    ? [progress, moderation, ...guiltLanguage, systemPrompt, forceToolChoice]
+    : [progress, moderation, ...guiltLanguage, systemPrompt, forceToolChoice, createModelSelectionMiddleware({ env })];
 
   // Story 1.5 Design Notes: `progress` goes first so its `beforeModel` always
   // fires, even when `moderation`'s own `beforeModel` jumps straight to

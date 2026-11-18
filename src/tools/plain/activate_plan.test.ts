@@ -6,7 +6,7 @@ import { createDb } from '../../db/client.js';
 import { createCheckpointer } from '../../agent/checkpointer.js';
 import { users, intake, ideas, plans, planSteps } from '../../db/schema/index.js';
 import { upsertIntake } from './submit_intake.js';
-import { confirmActivation, saveModifiedDraft, createActivatePlanGraph } from './activate_plan.js';
+import { confirmActivation, saveModifiedDraft, resumePausedPlan, createActivatePlanGraph } from './activate_plan.js';
 
 function intakeArgs(overrides: Partial<SubmitIntakeToolArgs> = {}): SubmitIntakeToolArgs {
   return {
@@ -211,6 +211,84 @@ describe('confirmActivation (integration, real Postgres — AD-14)', () => {
     try {
       await db.update(plans).set({ status: 'active' }).where(eq(plans.id, planAId));
       await expect(db.update(plans).set({ status: 'active' }).where(eq(plans.id, planBId))).rejects.toThrow();
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+});
+
+describe('resumePausedPlan (integration, real Postgres — Story 3.3 AD-13)', () => {
+  // AC1/AC2: "the current plan becomes `paused` ... as part of activating
+  // the new one" / "that same plan resumes with its existing steps/progress
+  // intact — `create_plan` does not run again." No LLM/`create_plan` call
+  // happens here at all (unlike `confirmActivation`'s reject branch) — the
+  // steps assertion below is what proves the existing row/steps were never
+  // touched, only the status flip.
+  it('resumes a paused plan to active, pauses the previously active plan, and leaves its steps untouched', async () => {
+    const { userId, ideaId } = await createTestUserAndIdea();
+    const planAId = await createDraftPlan(userId, ideaId);
+    await confirmActivation(db, planAId, userId);
+
+    const [idea2] = await db
+      .insert(ideas)
+      .values({
+        userId,
+        status: 'bookmarked',
+        title: 'Freelance writing',
+        rationale: 'Fits your schedule.',
+        citedIntakeFields: ['weeklyTimeAvailability'],
+        ideaType: 'service_gig',
+        weeklyTimeCommitment: '5_to_10h',
+        startupCostAmountMinorUnits: 0,
+        startupCostCurrency: 'EUR',
+        riskLevel: 'low',
+        baselineRateQuote: 'Workers in this field earn $25.00 an hour on average.',
+        baselineRateLowAmountMinorUnits: 2500,
+        baselineRateHighAmountMinorUnits: 2500,
+        isVendorSource: false,
+        rateUnit: 'hour',
+        baselineRateCurrency: 'EUR',
+        baselineRateCitation: 'https://a.example.com/rates',
+        sourceTrustTier: 'tier_1',
+        isRateUnverified: false,
+      })
+      .returning();
+    const planBId = await createDraftPlan(userId, idea2!.id);
+    await confirmActivation(db, planBId, userId);
+    // planB is active, planA is now paused (confirmActivation's own pause
+    // step) — pausing planB directly to set up "a bookmarked idea with an
+    // existing paused plan" (planB).
+    await db.update(plans).set({ status: 'paused' }).where(eq(plans.id, planBId));
+
+    try {
+      const result = await resumePausedPlan(db, planBId, userId);
+      expect(result.status).toBe('active');
+
+      const [planA] = await db.select().from(plans).where(eq(plans.id, planAId));
+      expect(planA!.status).toBe('paused');
+
+      const activePlans = await db.select().from(plans).where(and(eq(plans.userId, userId), eq(plans.status, 'active')));
+      expect(activePlans).toHaveLength(1);
+      expect(activePlans[0]!.id).toBe(planBId);
+
+      const stepsB = await db.select().from(planSteps).where(eq(planSteps.planId, planBId)).orderBy(planSteps.stepOrder);
+      expect(stepsB.map((step) => step.title)).toEqual(VALID_DRAFT.steps.map((step) => step.title));
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+
+  // AC: resuming a plan that is not (or no longer) `paused` is a tolerant
+  // no-op — same idempotency spirit as `/select/:ideaId`'s own "re-open,
+  // plan exists" path, never an error for a plan that's already active.
+  it('is a no-op, returning the plan unchanged, when the plan is not paused', async () => {
+    const { userId, ideaId } = await createTestUserAndIdea();
+    const planId = await createDraftPlan(userId, ideaId);
+    await confirmActivation(db, planId, userId);
+
+    try {
+      const result = await resumePausedPlan(db, planId, userId);
+      expect(result.status).toBe('active');
     } finally {
       await cleanUp(userId);
     }

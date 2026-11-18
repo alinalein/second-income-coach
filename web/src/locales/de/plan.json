@@ -1,5 +1,4 @@
 {
-  "backToIdeas": "Zurück zu den Ideen",
   "loading": "Dein Plan wird vorbereitet…",
   "loadingHint": "Das kann einige Sekunden dauern.",
   "loadFailed": "Dein Plan konnte nicht geladen werden. Bitte versuche es erneut.",
@@ -9,7 +8,27 @@
     "loadFailed": "Dein aktueller Schritt konnte nicht geladen werden.",
     "noCurrentStep": "Noch kein aktueller Schritt.",
     "nextLabel": "Als Nächstes (gesperrt)",
-    "dayLabel": "Tag {{day}}"
+    "dayLabel": "Tag {{day}}",
+    "gapBanner": "Schön, dass du wieder da bist — du musst keine Pause erklären. Wir haben deinen Zeitplan angepasst, leg einfach los, sobald du bereit bist."
+  },
+  "checkIn": {
+    "title": "Check-in",
+    "prompt": "Wie ist deine Energie heute?",
+    "energyLow": "Niedrig",
+    "energyMedium": "Mittel",
+    "energyHigh": "Hoch",
+    "sent": "Danke für deinen Check-in!",
+    "failed": "Dein Check-in konnte nicht gespeichert werden. Bitte versuche es erneut."
+  },
+  "stepActions": {
+    "startButton": "Diesen Schritt starten",
+    "starting": "Wird gestartet…",
+    "startedHint": "Du hast diesen Schritt gestartet.",
+    "completeButton": "Als erledigt markieren",
+    "completing": "Wird abgeschlossen…",
+    "completedHint": "Gut gemacht — weiter geht's mit dem nächsten Schritt.",
+    "planCompletedHint": "Du hast deinen ganzen Plan abgeschlossen — sehr gut gemacht!",
+    "failed": "Etwas ist schiefgelaufen. Bitte versuche es erneut."
   },
   "activation": {
     "title": "Plan prüfen & aktivieren",

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { buildPlanThreadId } from '../../agent/index.js';
-import { derivePlanIdFromThreadId, pickCurrentAndNext } from './get_current_step.js';
+import { derivePlanIdFromThreadId, pickCurrentAndNext, computeMissedDays, startOfUtcDay } from './get_current_step.js';
 
 type PlanStepRow = {
   id: string;
@@ -11,6 +11,7 @@ type PlanStepRow = {
   description: string[];
   dayOffset: number;
   status: string;
+  startedAt: Date | null;
 };
 
 function step(overrides: Partial<PlanStepRow> = {}): PlanStepRow {
@@ -22,6 +23,7 @@ function step(overrides: Partial<PlanStepRow> = {}): PlanStepRow {
     description: ['Do the thing.'],
     dayOffset: 0,
     status: 'pending',
+    startedAt: null,
     ...overrides,
   };
 }
@@ -84,5 +86,49 @@ describe('pickCurrentAndNext (AC/AD-4: capped to current+next)', () => {
 
     expect(result.current).toBeNull();
     expect(result.next).toBeNull();
+  });
+
+  // Story 4.2 AC: "the same non-punitive behavior applies regardless of
+  // count" — `gapDetected`/`missedDays` just pass through unchanged
+  // regardless of the step shape; defaults to no gap when omitted.
+  it('passes the gap flags through unchanged', () => {
+    const rows = [step({ stepOrder: 0, status: 'current' })];
+    const gap = { gapDetected: true, missedDays: 4, checkedInToday: true };
+
+    expect(pickCurrentAndNext(rows).gapDetected).toBe(false);
+    expect(pickCurrentAndNext(rows).checkedInToday).toBe(false);
+    expect(pickCurrentAndNext(rows, gap).gapDetected).toBe(true);
+    expect(pickCurrentAndNext(rows, gap).missedDays).toBe(4);
+    expect(pickCurrentAndNext(rows, gap).checkedInToday).toBe(true);
+  });
+});
+
+// Bug fix (user-reported): "how's your energy today" must ask at most once
+// per calendar day, regardless of how long the user was away.
+describe('startOfUtcDay (bug fix: once-per-day check-in ask)', () => {
+  it.each([
+    ['2026-11-18T00:00:00.000Z', '2026-11-18T23:59:59.000Z'],
+    ['2026-11-18T00:00:00.000Z', '2026-11-18T00:00:00.001Z'],
+    ['2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'],
+  ] as const)('same UTC day as %s -> %s', (expected, input) => {
+    expect(startOfUtcDay(new Date(input)).toISOString()).toBe(expected);
+  });
+});
+
+// Story 4.2 (AD-15): "compares the expected vs. actual last check-in date."
+// Table-driven over the pure day-math — one day of silence is the expected
+// cadence (never a "miss"), every day beyond that counts, with no special
+// case for a larger gap (NFR1: identical handling regardless of count).
+describe('computeMissedDays (AD-15: gap-day math)', () => {
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const now = new Date('2026-11-18T12:00:00Z');
+
+  it.each([
+    ['checked in a few hours ago', new Date(now.getTime() - DAY_MS * 0.2), 0],
+    ['checked in exactly one day ago (expected cadence)', new Date(now.getTime() - DAY_MS * 1), 0],
+    ['missed one day', new Date(now.getTime() - DAY_MS * 2), 1],
+    ['missed five days', new Date(now.getTime() - DAY_MS * 6), 5],
+  ] as const)('%s -> missedDays %i', (_name, anchor, expected) => {
+    expect(computeMissedDays(anchor, now)).toBe(expected);
   });
 });

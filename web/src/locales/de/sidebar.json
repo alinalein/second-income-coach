@@ -1,0 +1,23 @@
+{
+  "navLabel": "Hauptnavigation",
+  "newIdeasLabel": "Neue Ideen",
+  "topNav": {
+    "heading": "Ideen"
+  },
+  "myPlans": {
+    "heading": "Meine Pläne",
+    "empty": "Noch keine Pläne — wähle eine Idee aus, um loszulegen.",
+    "activeStatus": "Aktiv",
+    "pausedStatus": "Pausiert"
+  },
+  "bookmarked": {
+    "heading": "Gemerkt"
+  },
+  "profile": {
+    "settingsLabel": "Einstellungen"
+  },
+  "openMenuLabel": "Menü öffnen",
+  "closeMenuLabel": "Menü schließen",
+  "collapseLabel": "Seitenleiste einklappen",
+  "expandLabel": "Seitenleiste ausklappen"
+}

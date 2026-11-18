@@ -29,8 +29,7 @@
     "select": "Auswählen",
     "bookmark": "Merken",
     "reject": "Ablehnen",
-    "retryTranslation": "Übersetzung erneut versuchen",
-    "viewPlan": "Plan ansehen"
+    "retryTranslation": "Übersetzung erneut versuchen"
   },
   "confirmSelect": {
     "title": "Diese Idee auswählen?",

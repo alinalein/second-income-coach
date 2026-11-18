@@ -108,6 +108,7 @@ export * from './plans.js';
 export * from '../money.js';
 export * from '../region.js';
 export * from './settings.js';
+export * from './check-ins.js';
 
 /**
  * Story 1.5: the turn-scoped SSE progress/result wire contract. Re-exported

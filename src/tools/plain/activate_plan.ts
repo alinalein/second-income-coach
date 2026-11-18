@@ -50,6 +50,7 @@ function toStepResponse(row: PlanStepRow): PlanStepResponse {
     description: row.description,
     dayOffset: row.dayOffset,
     status: row.status,
+    startedAt: row.startedAt ? row.startedAt.toISOString() : null,
   });
 }
 
@@ -81,15 +82,38 @@ export async function loadPlanForReview(db: Db, planId: string, userId: string):
 }
 
 /**
+ * AD-14/AD-13: the one transactional core both `confirmActivation` (below)
+ * and 3.3's `resumePausedPlan` share — "any previously active plan becomes
+ * `paused`" is the same atomic pause-then-activate step whether the plan
+ * being activated is coming from `draft` (3.2's confirm) or from `paused`
+ * (3.3's switch). Pausing first, then activating, means the partial unique
+ * index (`plans_one_active_per_user_idx`, `src/db/schema/plans.ts`) is never
+ * hit mid-transaction: by the time this plan flips to `active`, no other row
+ * for this user still is. "Zero active plans" (AC) is simply the pause
+ * UPDATE matching zero rows — not an error. Caller must already hold the
+ * row lock (`for('update')`) and have checked the precondition it cares
+ * about (`draft` vs `paused`) before calling this.
+ */
+async function activateAndPauseOthers(tx: Parameters<Parameters<Db['transaction']>[0]>[0], planId: string, userId: string): Promise<PlanRow> {
+  await tx
+    .update(plans)
+    .set({ status: 'paused', updatedAt: new Date() })
+    .where(and(eq(plans.userId, userId), eq(plans.status, 'active'), ne(plans.id, planId)));
+
+  const [planRow] = await tx
+    .update(plans)
+    .set({ status: 'active', updatedAt: new Date() })
+    .where(eq(plans.id, planId))
+    .returning();
+  return planRow!;
+}
+
+/**
  * AD-14: "Confirm → plan becomes `active` (and any previously active plan
  * becomes `paused`) ... enforced via a database-level partial unique
  * constraint ... applied inside a single transaction that atomically
  * deactivates the previous plan and activates the new one — never two
- * separate non-transactional UPDATE statements." Pausing first, then
- * activating, means the partial unique index (`plans_one_active_per_user_idx`,
- * `src/db/schema/plans.ts`) is never hit mid-transaction: by the time this
- * plan flips to `active`, no other row for this user still is. "Zero active
- * plans" (AC) is simply the pause UPDATE matching zero rows — not an error.
+ * separate non-transactional UPDATE statements."
  */
 export async function confirmActivation(db: Db, planId: string, userId: string): Promise<PlanResponse> {
   const updatedPlan = await db.transaction(async (tx) => {
@@ -109,17 +133,34 @@ export async function confirmActivation(db: Db, planId: string, userId: string):
       throw new PlanNotDraftError(`activate_plan: plan "${planId}" is no longer a draft (resolved by a concurrent request)`);
     }
 
-    await tx
-      .update(plans)
-      .set({ status: 'paused', updatedAt: new Date() })
-      .where(and(eq(plans.userId, userId), eq(plans.status, 'active'), ne(plans.id, planId)));
+    return activateAndPauseOthers(tx, planId, userId);
+  });
 
-    const [planRow] = await tx
-      .update(plans)
-      .set({ status: 'active', updatedAt: new Date() })
-      .where(eq(plans.id, planId))
-      .returning();
-    return planRow!;
+  return toPlanResponse(updatedPlan);
+}
+
+/**
+ * Story 3.3 (AD-13: "switching to a paused plan resumes it rather than
+ * regenerating it"). Unlike `confirmActivation`, resuming a `paused` plan
+ * never goes through the 3.2 HITL gate again — it was already confirmed
+ * once before being paused. Idempotent/tolerant by design (same spirit as
+ * `/select/:ideaId`'s own re-open idempotency): if a concurrent request
+ * already resolved this plan to something other than `paused` by the time
+ * the lock is acquired, this just returns the current row rather than
+ * erroring — there is no user decision being lost here, only a race on who
+ * flips the (already-settled) switch.
+ */
+export async function resumePausedPlan(db: Db, planId: string, userId: string): Promise<PlanResponse> {
+  const updatedPlan = await db.transaction(async (tx) => {
+    const [locked] = await tx.select().from(plans).where(eq(plans.id, planId)).for('update');
+    if (!locked) {
+      throw new PlanNotFoundError(`activate_plan: plan "${planId}" was not found`);
+    }
+    if (locked.status !== 'paused') {
+      return locked;
+    }
+
+    return activateAndPauseOthers(tx, planId, userId);
   });
 
   return toPlanResponse(updatedPlan);

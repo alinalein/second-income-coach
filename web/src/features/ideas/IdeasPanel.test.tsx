@@ -251,6 +251,9 @@ describe('IdeasPanel (vendor-sourced range + non-hourly rate)', () => {
 // whenever a *regenerate* failed with ideas already on screen — it showed
 // "couldn't load your ideas" instead of a generation-failure message. Load
 // succeeds (ideas already present), then the regenerate call itself fails.
+// UX fix (user-reported): the "Generate new ideas" button moved back onto
+// this page (bottom of the card, below the cards) — these tests trigger a
+// generation by clicking it directly again.
 describe('IdeasPanel (round 13: a failed regenerate shows the generate-failure message, not the load one)', () => {
   it('shows "generating failed" (not "couldn\'t load") when POST /api/ideas/generate fails with ideas already loaded', async () => {
     const idea = fakeIdea();
@@ -263,20 +266,13 @@ describe('IdeasPanel (round 13: a failed regenerate shows the generate-failure m
     );
 
     render(<IdeasPanel />);
+    await screen.findByText(idea.title);
+    fireEvent.click(screen.getByRole('button', { name: 'Generate new ideas' }));
 
-    const regenerateButton = await screen.findByRole('button', { name: 'Generate new ideas' });
-    fireEvent.click(regenerateButton);
-
-    // Round 14 (user-requested): the progress bar/status/hint render in
-    // the same footer as the button that started them, for both the
-    // first-generate and regenerate flows — previously this block only
-    // rendered above the ideas grid, far from a "Generate new ideas"
-    // click. Round 22: within that same footer, the progress block now
-    // sits beside the button (same row) instead of underneath it. Round
-    // 23: the block is now always mounted (fades via opacity instead of
-    // mounting/unmounting) — `role="status"` is still only actually set
-    // while `generating`, so `getByRole('status')` still only matches
-    // here, not before the click.
+    // Round 14/22/23: the progress bar/status/hint block is always mounted
+    // and fades via opacity — `role="status"` is still only actually set
+    // while `generating`, so `getByRole('status')` still only matches here,
+    // not before the click.
     const statusRegion = screen.getByRole('status');
     expect(statusRegion).toHaveTextContent('Generating your ideas…');
     expect(statusRegion).toHaveTextContent('This can take up to a minute.');
@@ -284,76 +280,38 @@ describe('IdeasPanel (round 13: a failed regenerate shows the generate-failure m
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Generating your ideas failed or timed out. Please try again.');
     expect(screen.queryByText("We couldn't load your ideas. Please reload the page.")).not.toBeInTheDocument();
-    // The failed regenerate never replaced state — the original idea (and
-    // the retry button) are still on screen, no reload needed to see them.
+    // The failed regenerate never replaced state — the original idea is
+    // still on screen, no reload needed to see it.
     expect(screen.getByText(idea.title)).toBeInTheDocument();
   });
 });
 
-// Story 2.11 AC5/AC6: a 429 from POST /generate is a plain limit notice —
-// never worded like an error, button disabled afterwards, existing ideas
-// stay fully usable.
+// Story 2.11 AC5/AC6: existing ideas stay fully usable after a 429 — never
+// replaced/cleared. UX fix (user-reported): the limit notice text and the
+// button's disabled state moved back here with the button itself.
 describe('IdeasPanel (Story 2.11: generate limit reached)', () => {
-  it.each([
-    {
-      reason: 'user_limit' as const,
-      body: { error: 'limit_reached', reason: 'user_limit', limit: 5, resetsAt: '2099-01-02T00:00:00.000Z' },
-      expectedText: /reached today's limit of 5 idea generations/i,
-    },
-    {
-      reason: 'shared_budget' as const,
-      body: { error: 'limit_reached', reason: 'shared_budget', limit: null, resetsAt: '2099-01-02T00:00:00.000Z' },
-      expectedText: "Today's shared search budget of the app is used up. New ideas are available again tomorrow.",
-    },
-  ])('shows the $reason message (never role="alert") and disables the button after a 429', async ({ body, expectedText }) => {
+  it('leaves existing ideas on screen, shows the limit notice, and disables the button, after a 429 from POST /api/ideas/generate', async () => {
     const idea = fakeIdea();
     vi.stubGlobal(
       'fetch',
       mockFetch({
         ...INTAKE_NULL_RESPONSE,
-        '/api/ideas/generate': () => new Response(JSON.stringify(body), { status: 429 }),
+        '/api/ideas/generate': () =>
+          new Response(JSON.stringify({ error: 'limit_reached', reason: 'shared_budget', limit: null, resetsAt: '2099-01-02T00:00:00.000Z' }), {
+            status: 429,
+          }),
         '/api/ideas': () => new Response(JSON.stringify({ ideas: [idea], currency: 'EUR' }), { status: 200 }),
       }),
     );
 
     render(<IdeasPanel />);
+    await screen.findByText(idea.title);
+    fireEvent.click(screen.getByRole('button', { name: 'Generate new ideas' }));
 
-    const regenerateButton = await screen.findByRole('button', { name: 'Generate new ideas' });
-    fireEvent.click(regenerateButton);
-
-    // Wait for the request to settle (past the "generating" progress state,
-    // which also briefly renders its own `role="status"`) before asserting
-    // on the limit notice itself.
-    await waitFor(() => expect(regenerateButton).toBeDisabled());
-
-    const notice = await screen.findByText(expectedText);
-    expect(notice.getAttribute('role')).toBe('status');
+    expect(await screen.findByText(/shared search budget/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Generate new ideas' })).toBeDisabled());
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-    // Existing ideas stay fully usable — never replaced by the 429.
     expect(screen.getByText(idea.title)).toBeInTheDocument();
-  });
-
-  // AC5: disabled *before* the user ever clicks, straight from GET /'s own
-  // `generateLimit` — the server enforces this, the UI is only a
-  // convenience that reflects it.
-  it('disables the generate button on initial load when GET / already reports generateLimit.blocked', async () => {
-    vi.stubGlobal(
-      'fetch',
-      mockFetch({
-        ...INTAKE_NULL_RESPONSE,
-        '/api/ideas': () =>
-          new Response(
-            JSON.stringify({ ideas: [], currency: 'EUR', generateLimit: { blocked: true, reason: 'shared_budget', limit: null, resetsAt: '2099-01-02T00:00:00.000Z' } }),
-            { status: 200 },
-          ),
-      }),
-    );
-
-    render(<IdeasPanel />);
-
-    const generateButton = await screen.findByRole('button', { name: 'Generate my ideas' });
-    expect(generateButton).toBeDisabled();
-    expect(screen.getByText("Today's shared search budget of the app is used up. New ideas are available again tomorrow.")).toBeInTheDocument();
   });
 });
 
@@ -361,12 +319,14 @@ describe('IdeasPanel (Story 2.11: generate limit reached)', () => {
 // behind a menu), with a status badge once the idea has left `suggested`,
 // and the action matching the card's current status renders as primary.
 describe('IdeasPanel (AC2: status badge + action buttons on the card)', () => {
-  it.each([
-    { status: 'suggested' as const, primaryName: null as string | null },
-    { status: 'selected' as const, primaryName: 'Select' },
-    { status: 'bookmarked' as const, primaryName: 'Bookmark' },
-  ])('status "$status": all 3 actions render, with $primaryName as the primary one', async ({ status, primaryName }) => {
-    const idea: IdeaResponse = { ...fakeIdea(), status };
+  // UX fix (user-reported, live) supersedes this test's own `selected`/
+  // `bookmarked` cases: a `selected` idea has its own plan/chat in the
+  // sidebar now, and a `bookmarked` one has its own "Bookmarked" entry —
+  // neither's card renders in this "New ideas" grid at all anymore, so
+  // `suggested` (no status badge, no primary action yet) is the only case
+  // this grid can still show.
+  it('a suggested idea renders all 3 actions, none primary, with no status badge', async () => {
+    const idea: IdeaResponse = { ...fakeIdea(), status: 'suggested' };
     vi.stubGlobal(
       'fetch',
       mockFetch({ ...INTAKE_NULL_RESPONSE, '/api/ideas': () => new Response(JSON.stringify({ ideas: [idea], currency: 'EUR' }), { status: 200 }) }),
@@ -374,54 +334,86 @@ describe('IdeasPanel (AC2: status badge + action buttons on the card)', () => {
 
     render(<IdeasPanel />);
 
-    const buttons: Record<string, HTMLElement> = {
+    const buttons = {
       Select: await screen.findByRole('button', { name: 'Select' }),
       Bookmark: screen.getByRole('button', { name: 'Bookmark' }),
       Reject: screen.getByRole('button', { name: 'Reject' }),
     };
-    for (const [name, button] of Object.entries(buttons)) {
-      expect(button.className.includes('bg-primary')).toBe(name === primaryName);
+    for (const button of Object.values(buttons)) {
+      expect(button.className.includes('bg-primary')).toBe(false);
     }
-
-    if (status === 'suggested') {
-      expect(screen.queryByText('selected')).not.toBeInTheDocument();
-      expect(screen.queryByText('bookmarked')).not.toBeInTheDocument();
-    } else {
-      expect(await screen.findByText(status)).toBeInTheDocument();
-    }
+    expect(screen.queryByText('selected')).not.toBeInTheDocument();
+    expect(screen.queryByText('bookmarked')).not.toBeInTheDocument();
   });
 });
 
-// Story 2.8 AC5 (supersedes Story 3.1's `selected`/`bookmarked` rule): "View
-// plan" shows only for the `selected` idea's card, and only once it
-// actually has a plan (`hasPlan`) — never for `bookmarked`/`suggested`/
-// `rejected`, and never for a `selected` idea with no plan yet (I/O matrix:
-// "Card hasPlan rendering").
-describe('IdeasPanel (Story 2.8 AC5: hasPlan-gated View plan action)', () => {
-  it.each<{ label: string; status: IdeaResponse['status']; hasPlan: boolean; shows: boolean }>([
-    { label: 'selected with a plan', status: 'selected', hasPlan: true, shows: true },
-    { label: 'selected with no plan yet', status: 'selected', hasPlan: false, shows: false },
-    { label: 'bookmarked', status: 'bookmarked', hasPlan: true, shows: false },
-    { label: 'still suggested', status: 'suggested', hasPlan: false, shows: false },
-  ])('$label: View plan shows=$shows', async ({ status, hasPlan, shows }) => {
-    const idea: IdeaWithPlanResponse = { ...fakeIdea(), status, hasPlan };
+// Story 2.8 AC5 is superseded (UX fix, user-reported, live): a `selected`
+// idea's card — the only one this "View plan" action ever applied to — no
+// longer renders in this grid at all; its plan has its own entry in the
+// sidebar's "My plans" list and its own chat instead. The feature (and
+// `IdeaCard`'s own now-unreachable `onViewPlan` button) was removed rather
+// than left as dead code nothing can trigger.
+
+// UX fix (user-reported, live): "New ideas" (no `onlyIdeaId`) shows only
+// still-undecided `suggested` ideas — never one already bookmarked or
+// selected (a rejected one is never even returned by the server, AD-13).
+describe('IdeasPanel (UX fix: "New ideas" grid excludes bookmarked ideas)', () => {
+  it('shows a suggested idea but not a bookmarked one in the default ("New ideas") view', async () => {
+    const suggested: IdeaResponse = { ...fakeIdea(), id: 'idea-1', title: 'Suggested idea', status: 'suggested' };
+    const bookmarked: IdeaResponse = { ...fakeIdea(), id: 'idea-2', title: 'Bookmarked idea', status: 'bookmarked' };
     vi.stubGlobal(
       'fetch',
-      mockFetch({ ...INTAKE_NULL_RESPONSE, '/api/ideas': () => new Response(JSON.stringify({ ideas: [idea], currency: 'EUR' }), { status: 200 }) }),
+      mockFetch({ ...INTAKE_NULL_RESPONSE, '/api/ideas': () => new Response(JSON.stringify({ ideas: [suggested, bookmarked], currency: 'EUR' }), { status: 200 }) }),
     );
-    const onViewPlan = vi.fn();
 
-    render(<IdeasPanel onViewPlan={onViewPlan} />);
-    await screen.findByText(idea.title);
+    render(<IdeasPanel />);
 
-    const viewPlanButton = screen.queryByRole('button', { name: 'View plan' });
-    if (shows) {
-      expect(viewPlanButton).toBeInTheDocument();
-      fireEvent.click(viewPlanButton!);
-      expect(onViewPlan).toHaveBeenCalledExactlyOnceWith(idea.id, idea.title);
-    } else {
-      expect(viewPlanButton).not.toBeInTheDocument();
-    }
+    expect(await screen.findByText('Suggested idea')).toBeInTheDocument();
+    expect(screen.queryByText('Bookmarked idea')).not.toBeInTheDocument();
+  });
+});
+
+// UX fix (user-reported, live): a sidebar "Bookmarked" entry opens this
+// same grid with `onlyIdeaId` set — showing *only* that one idea's card,
+// regardless of how many other ideas (any status) exist.
+describe('IdeasPanel (UX fix: onlyIdeaId shows just that one idea)', () => {
+  it('shows only the idea matching onlyIdeaId, not the others', async () => {
+    const target: IdeaResponse = { ...fakeIdea(), id: 'idea-1', title: 'The bookmarked idea', status: 'bookmarked' };
+    const other: IdeaResponse = { ...fakeIdea(), id: 'idea-2', title: 'A different suggested idea', status: 'suggested' };
+    vi.stubGlobal(
+      'fetch',
+      mockFetch({ ...INTAKE_NULL_RESPONSE, '/api/ideas': () => new Response(JSON.stringify({ ideas: [target, other], currency: 'EUR' }), { status: 200 }) }),
+    );
+
+    render(<IdeasPanel onlyIdeaId="idea-1" />);
+
+    expect(await screen.findByText('The bookmarked idea')).toBeInTheDocument();
+    expect(screen.queryByText('A different suggested idea')).not.toBeInTheDocument();
+  });
+});
+
+// UX fix (user-reported): the sidebar's "Bookmarked" entry is now one
+// button (like "New ideas") that opens this same grid with `onlyBookmarked`
+// set — showing every `bookmarked` idea's card together, never a suggested
+// or selected one.
+describe('IdeasPanel (UX fix: onlyBookmarked shows every bookmarked idea)', () => {
+  it('shows all bookmarked ideas, not a suggested or selected one', async () => {
+    const bookmarkedOne: IdeaResponse = { ...fakeIdea(), id: 'idea-1', title: 'First bookmarked idea', status: 'bookmarked' };
+    const bookmarkedTwo: IdeaResponse = { ...fakeIdea(), id: 'idea-2', title: 'Second bookmarked idea', status: 'bookmarked' };
+    const suggested: IdeaResponse = { ...fakeIdea(), id: 'idea-3', title: 'A suggested idea', status: 'suggested' };
+    vi.stubGlobal(
+      'fetch',
+      mockFetch({
+        ...INTAKE_NULL_RESPONSE,
+        '/api/ideas': () => new Response(JSON.stringify({ ideas: [bookmarkedOne, bookmarkedTwo, suggested], currency: 'EUR' }), { status: 200 }),
+      }),
+    );
+
+    render(<IdeasPanel onlyBookmarked />);
+
+    expect(await screen.findByText('First bookmarked idea')).toBeInTheDocument();
+    expect(screen.getByText('Second bookmarked idea')).toBeInTheDocument();
+    expect(screen.queryByText('A suggested idea')).not.toBeInTheDocument();
   });
 });
 
@@ -477,7 +469,10 @@ describe('IdeasPanel (Story 2.8 AC3/AC4: select confirm dialog)', () => {
     expect(await screen.findByText('Make this your plan?')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Yes, select this idea' }));
 
-    expect(await screen.findByText('selected')).toBeInTheDocument();
+    // UX fix (user-reported, live): a `selected` idea now has its own plan
+    // and chat (the sidebar's "My plans" list) — its card leaves this grid
+    // entirely rather than staying with a "selected" badge.
+    await waitFor(() => expect(screen.queryByText(idea.title)).not.toBeInTheDocument());
     await waitFor(() => expect(onViewPlan).toHaveBeenCalledExactlyOnceWith(idea.id, idea.title));
   });
 
@@ -547,7 +542,10 @@ describe('IdeasPanel (AC1/AC2: optimistic status update)', () => {
     fireEvent.click(selectButton);
     fireEvent.click(await screen.findByRole('button', { name: 'Yes, select this idea' }));
 
-    expect(await screen.findByText('selected')).toBeInTheDocument();
+    // UX fix (user-reported, live): optimistic removal, same as a rejected
+    // idea — a `selected` idea belongs in the sidebar's "My plans" list
+    // now, not this grid.
+    await waitFor(() => expect(screen.queryByText(idea.title)).not.toBeInTheDocument());
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/ideas/idea-1/status',
       expect.objectContaining({ method: 'POST', body: JSON.stringify({ status: 'selected' }) }),
@@ -574,8 +572,10 @@ describe('IdeasPanel (AC2: direct Bookmark on a suggested idea)', () => {
     const bookmarkButton = await screen.findByRole('button', { name: 'Bookmark' });
     fireEvent.click(bookmarkButton);
 
-    expect(await screen.findByText('bookmarked')).toBeInTheDocument();
-    expect(bookmarkButton.className).toContain('bg-primary');
+    // UX fix (user-reported, live): "New ideas" now shows only still-
+    // undecided `suggested` ideas — a newly-bookmarked one leaves this grid
+    // immediately (it has its own entry under "Bookmarked" instead).
+    await waitFor(() => expect(screen.queryByText(idea.title)).not.toBeInTheDocument());
   });
 });
 
@@ -600,7 +600,7 @@ describe('IdeasPanel (revert-on-failure)', () => {
       statusCall: () => Promise.reject(new Error('network error')),
     },
   ])('reverts a rejected idea back into view and shows the status-update error for $label', async ({ statusCall }) => {
-    const idea: IdeaResponse = { ...fakeIdea(), status: 'bookmarked' };
+    const idea: IdeaResponse = { ...fakeIdea(), status: 'suggested' };
     vi.stubGlobal(
       'fetch',
       vi.fn((input: RequestInfo | URL) => {
@@ -630,12 +630,21 @@ describe('IdeasPanel (revert-on-failure)', () => {
 });
 
 // Reviewer fix: every card's 3 actions must disable while *any* status
-// request is in flight, not just the clicked card's own — otherwise a
-// second concurrent request could race the first's transaction (lock-order-
-// inversion deadlock risk) and its failure-revert could stomp a change the
-// first request already applied.
+// request affecting it is in flight, not just via its own click — this
+// matters for `select`, the one action whose own optimistic update also
+// touches *other* ideas (every other `suggested` sibling is swept to
+// `bookmarked`). The multi-card version of this test was removed (UX fix,
+// user-reported, live): a swept sibling now also leaves this "New ideas"
+// grid the instant it's demoted, the same as the clicked idea itself — so
+// there is no longer a visible, still-rendered "disabled but not gone" state
+// to assert on for either card. `reject`/`bookmark` only ever affect their
+// own single target id (`affectedIdeaIds`), which the remaining test below
+// still covers.
 describe('IdeasPanel (status actions disable panel-wide while a request is in flight)', () => {
-  it("disables a different card's own buttons while the first card's request is pending", async () => {
+  // User-reported bug fix: selecting an idea must not disable (and so must
+  // not visibly flicker) a sibling that isn't genuinely part of this
+  // request — it has nothing to change here.
+  it('never disables an unrelated sibling while rejecting a different idea', async () => {
     const ideaA: IdeaResponse = { ...fakeIdea(), id: 'idea-1', status: 'suggested' };
     const ideaB: IdeaResponse = { ...fakeIdea(), id: 'idea-2', status: 'suggested' };
 
@@ -658,61 +667,21 @@ describe('IdeasPanel (status actions disable panel-wide while a request is in fl
     );
 
     render(<IdeasPanel />);
-    const selectButtons = await screen.findAllByRole('button', { name: 'Select' });
-    expect(selectButtons).toHaveLength(2);
-
-    fireEvent.click(selectButtons[0]!);
-    fireEvent.click(await screen.findByRole('button', { name: 'Yes, select this idea' }));
-
-    // Both cards' buttons are disabled, not just the clicked (ideaA) card's
-    // own — ideaB's are a different card entirely.
-    expect(selectButtons[0]).toBeDisabled();
-    expect(selectButtons[1]).toBeDisabled();
-
-    resolveStatusFetch(new Response(null, { status: 204 }));
-    await waitFor(() => expect(selectButtons[1]).not.toBeDisabled());
-  });
-
-  // User-reported bug fix: selecting an idea must not disable (and so must
-  // not visibly flicker) a sibling that's already `bookmarked` — it has
-  // nothing to change, so it was never genuinely part of this request.
-  it('never disables an already-bookmarked sibling while selecting a different idea', async () => {
-    const ideaA: IdeaResponse = { ...fakeIdea(), id: 'idea-1', status: 'suggested' };
-    const ideaB: IdeaResponse = { ...fakeIdea(), id: 'idea-2', status: 'bookmarked' };
-
-    let resolveStatusFetch!: (value: Response) => void;
-    const pendingStatusResponse = new Promise<Response>((resolve) => {
-      resolveStatusFetch = resolve;
-    });
-
-    vi.stubGlobal(
-      'fetch',
-      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-        const url = typeof input === 'string' ? input : input.toString();
-        if (init?.method === 'POST' && url.includes('/status')) return pendingStatusResponse;
-        if (url.includes('/api/intake')) return Promise.resolve(new Response(JSON.stringify({ intake: null }), { status: 200 }));
-        if (url.includes('/api/ideas')) {
-          return Promise.resolve(new Response(JSON.stringify({ ideas: [ideaA, ideaB], currency: 'EUR' }), { status: 200 }));
-        }
-        throw new Error(`Unmocked fetch: ${url}`);
-      }),
-    );
-
-    render(<IdeasPanel />);
     // Every card renders all 3 actions, so both cards have their own
-    // "Select"/"Bookmark" button — index by render order (ideaA, then
+    // "Reject"/"Bookmark" button — index by render order (ideaA, then
     // ideaB) to target each card's own.
-    const selectButtonA = (await screen.findAllByRole('button', { name: 'Select' }))[0]!;
+    const rejectButtonA = (await screen.findAllByRole('button', { name: 'Reject' }))[0]!;
     const bookmarkButtonB = (await screen.findAllByRole('button', { name: 'Bookmark' }))[1]!;
 
-    fireEvent.click(selectButtonA);
-    fireEvent.click(await screen.findByRole('button', { name: 'Yes, select this idea' }));
+    fireEvent.click(rejectButtonA);
 
-    expect(selectButtonA).toBeDisabled(); // the target of this action
-    expect(bookmarkButtonB).not.toBeDisabled(); // already bookmarked — nothing to change, never pending
+    // ideaA's own card leaves the grid the instant Reject is clicked
+    // (optimistic removal) — nothing left to assert "disabled" on. ideaB,
+    // unrelated to this request, is never disabled by it.
+    expect(screen.queryAllByRole('button', { name: 'Reject' })).toHaveLength(1);
+    expect(bookmarkButtonB).not.toBeDisabled();
 
     resolveStatusFetch(new Response(null, { status: 204 }));
-    await waitFor(() => expect(selectButtonA).not.toBeDisabled());
   });
 });
 

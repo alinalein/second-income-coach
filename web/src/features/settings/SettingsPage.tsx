@@ -12,6 +12,7 @@ import {
   type CurrencyCode,
 } from '@app/shared';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
+import { ThemeToggle } from '../../theme/theme-toggle';
 
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 
@@ -233,6 +234,18 @@ export function SettingsPage({ onCurrencyChange }: { onCurrencyChange?: () => vo
               </option>
             ))}
           </select>
+        </div>
+
+        {/* UX fix (user-reported): the dark/light decision moved here, out
+         * of the sidebar's profile row — it's a per-browser preference
+         * (`ThemeProvider`'s own `localStorage` persistence, never a
+         * `user_settings` write), so this renders the exact same toggle,
+         * just relocated next to the other display preferences. */}
+        <div className="flex flex-col gap-1.5">
+          <span className="text-sm font-medium">{t('appearance.label')}</span>
+          <div>
+            <ThemeToggle />
+          </div>
         </div>
 
         {status === 'error' ? (

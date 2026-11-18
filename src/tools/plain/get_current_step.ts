@@ -1,9 +1,9 @@
-import { eq } from 'drizzle-orm';
+import { and, eq, gte, ne, sql } from 'drizzle-orm';
 import { tool } from 'langchain';
 import { z } from 'zod';
 import { currentStepResponseSchema, type CurrentStepResponse, type PlanStepResponse } from '@app/shared';
 import type { createDb } from '../../db/client.js';
-import { planSteps } from '../../db/schema/index.js';
+import { plans, planSteps, checkIns } from '../../db/schema/index.js';
 
 type Db = ReturnType<typeof createDb>['db'];
 type PlanStepRow = typeof planSteps.$inferSelect;
@@ -16,7 +16,35 @@ function toStepResponse(row: PlanStepRow): PlanStepResponse {
     description: row.description,
     dayOffset: row.dayOffset,
     status: row.status as PlanStepResponse['status'],
+    startedAt: row.startedAt ? row.startedAt.toISOString() : null,
   };
+}
+
+const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * AD-15: "compares the expected vs. actual last check-in date." `anchor` is
+ * `plans.timelineAnchorAt` (reset to now by a real `record_check_in`, or by
+ * this function itself once a gap is shifted) — falling back to the plan's
+ * `createdAt` when never checked into yet. One full day between visits is
+ * the expected cadence, not a miss, so `missedDays` only counts whatever is
+ * beyond that — identical formula regardless of how large the gap is
+ * (NFR1: "same non-punitive behavior ... regardless of count"). Pure and
+ * unit-testable without Postgres (same precedent as `pickCurrentAndNext`).
+ */
+export function computeMissedDays(anchor: Date, now: Date): number {
+  const elapsedDays = Math.floor((now.getTime() - anchor.getTime()) / ONE_DAY_MS);
+  return Math.max(0, elapsedDays - 1);
+}
+
+/**
+ * Bug fix (user-reported): "how's your energy today" must ask at most once
+ * per calendar day — a week away should only ever ask about *today*, never
+ * once per missed day. UTC calendar day (same no-timezone-handling
+ * precedent as `dayOffset`/the rest of this file) — pure and unit-testable.
+ */
+export function startOfUtcDay(date: Date): Date {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
 }
 
 /**
@@ -30,17 +58,25 @@ function toStepResponse(row: PlanStepRow): PlanStepResponse {
  * last step (or when there is no `current` step at all, a defensive-only
  * case `create_plan`'s own write never produces).
  */
-export function pickCurrentAndNext(rows: readonly PlanStepRow[]): CurrentStepResponse {
+export interface GapFlags {
+  gapDetected: boolean;
+  missedDays: number;
+  checkedInToday: boolean;
+}
+
+const NO_GAP: GapFlags = { gapDetected: false, missedDays: 0, checkedInToday: false };
+
+export function pickCurrentAndNext(rows: readonly PlanStepRow[], gap: GapFlags = NO_GAP): CurrentStepResponse {
   const ordered = [...rows].sort((a, b) => a.stepOrder - b.stepOrder);
   const currentIndex = ordered.findIndex((row) => row.status === 'current');
 
   if (currentIndex === -1) {
-    return currentStepResponseSchema.parse({ current: null, next: null });
+    return currentStepResponseSchema.parse({ current: null, next: null, ...gap });
   }
 
   const current = toStepResponse(ordered[currentIndex]!);
   const nextRow = ordered[currentIndex + 1];
-  return currentStepResponseSchema.parse({ current, next: nextRow ? toStepResponse(nextRow) : null });
+  return currentStepResponseSchema.parse({ current, next: nextRow ? toStepResponse(nextRow) : null, ...gap });
 }
 
 /**
@@ -49,10 +85,40 @@ export function pickCurrentAndNext(rows: readonly PlanStepRow[]): CurrentStepRes
  * Used directly by `GET /api/plans/:planId/current-step` (plain read) and
  * wrapped below as an agent tool for free-form plan-thread Q&A — never a
  * second read path that could expose more than this.
+ *
+ * Story 4.2 (AD-15): "lazy, performed inside `get_current_step` the next
+ * time the app is opened." `missedDays > 0` shifts every not-yet-completed
+ * step's `dayOffset` forward by that many days (the DB write — a plain
+ * deterministic Postgres update, AD-4) and resets `timelineAnchorAt` so the
+ * same gap is never shifted twice; `gapDetected` is then `true` for this one
+ * call only (the next call's anchor is already "now", so its own
+ * `missedDays` comes back 0 until a real new gap opens).
  */
 export async function getCurrentStep(db: Db, planId: string): Promise<CurrentStepResponse> {
-  const rows = await db.select().from(planSteps).where(eq(planSteps.planId, planId));
-  return pickCurrentAndNext(rows);
+  const [plan] = await db.select({ createdAt: plans.createdAt, timelineAnchorAt: plans.timelineAnchorAt }).from(plans).where(eq(plans.id, planId)).limit(1);
+  const anchor = plan ? (plan.timelineAnchorAt ?? plan.createdAt) : undefined;
+  const missedDays = anchor ? computeMissedDays(anchor, new Date()) : 0;
+
+  if (missedDays > 0) {
+    await db.transaction(async (tx) => {
+      await tx
+        .update(planSteps)
+        .set({ dayOffset: sql`${planSteps.dayOffset} + ${missedDays}` })
+        .where(and(eq(planSteps.planId, planId), ne(planSteps.status, 'completed')));
+      await tx.update(plans).set({ timelineAnchorAt: new Date() }).where(eq(plans.id, planId));
+    });
+  }
+
+  const [rows, [todaysCheckIn]] = await Promise.all([
+    db.select().from(planSteps).where(eq(planSteps.planId, planId)),
+    db
+      .select({ id: checkIns.id })
+      .from(checkIns)
+      .where(and(eq(checkIns.planId, planId), gte(checkIns.createdAt, startOfUtcDay(new Date()))))
+      .limit(1),
+  ]);
+
+  return pickCurrentAndNext(rows, { gapDetected: missedDays > 0, missedDays, checkedInToday: Boolean(todaysCheckIn) });
 }
 
 const PLAN_THREAD_PREFIX = 'plan:';

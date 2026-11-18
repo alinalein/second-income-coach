@@ -32,6 +32,9 @@
       "USD": "US Dollar (USD)"
     }
   },
+  "appearance": {
+    "label": "Appearance"
+  },
   "saved": "Saved.",
   "error": "Something went wrong saving your settings. Please try again."
 }
