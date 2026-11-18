@@ -1,0 +1,111 @@
+---
+title: 'Voice Check-In with Editable Transcript'
+type: 'feature'
+created: '2026-11-18'
+status: 'done'
+route: 'dispatch'
+review_loop_iteration: 0
+context: []
+baseline_commit: '939642b1b1d6fea2ea1859e9f160e67bb9ecbdbe'
+---
+
+<frozen-after-approval reason="human-owned intent — do not modify unless human renegotiates">
+
+## Intent
+
+**Problem:** Story 4.3. Text check-in (4.1/4.2) works; voice is still missing, and NFR2 requires it as a first-class channel, not a bolt-on.
+
+**Approach:** One backend route (`POST /api/voice/transcribe`) wraps `gpt-transcribe` per AD-9/AD-10/AD-26. One `VoiceInput` component fills Story 3.1's chat-input extension point; click to start, click again to stop — the finished transcript then fills the same draft `ChatThread`'s own text input edits (human-requested revision: no separate review dialog — the user reviews/edits in the one input they already know), carrying `detectedLanguage` through to whenever they hit the existing Send button, so AD-25's reply-language match holds for voice too.
+
+## Boundaries & Constraints
+
+**Always:** NFR3 — raw audio buffer lives only for the duration of one request, never written to DB/disk/logs. NFR2 — typed text stays usable on any voice failure (permission denied, unsupported, transcription error). `gpt-transcribe` is called through OpenRouter's OpenAI-compatible proxy, reusing the existing `OPENROUTER_API_KEY` — same precedent as spec-1-3's own renegotiation ("the human uses OpenRouter, one key for every provider, not direct per-provider keys"). No new credential for this story.
+
+**Never:** Edit `ChatThread`'s layout, the text `<input>`, or `PlanWorkspace`'s layout file structurally. Never touch sidebar/IdeasPanel/plan-review/StatusPanel/check-in components.
+
+## I/O & Edge-Case Matrix
+
+| Scenario | Input / State | Expected Output / Behavior | Error Handling |
+|----------|--------------|---------------------------|----------------|
+| Happy path | Record → stop → `gpt-transcribe` returns transcript+language | Transcript fills the same draft the text input edits; user reviews/edits there and hits the existing Send button, which carries `detectedLanguage` | N/A |
+| Mic permission denied | `getUserMedia` rejects | Neutral note shown, mic button returns to idle | Typing stays available |
+| No `MediaRecorder` | Feature-detect fails on mount | Neutral note instead of mic button | Typing stays available |
+| Transcription call fails/503 | `transcribeAudio` throws or OpenRouter errors | Neutral note, back to idle, draft untouched | Typing stays available |
+
+</frozen-after-approval>
+
+## Code Map
+
+- `web/src/chat/ChatThread.tsx` — `inputExtra` prop changes `React.ReactNode` → `(fillDraft, disabled) => ReactNode` render-prop (currently unused by any caller, confirmed via grep — non-breaking). `fillDraft(content, detectedLanguage?)` sets the same `draft` state the text input edits, plus a `pendingVoiceLanguage` held until `handleSubmit` actually sends it (then cleared). `sendMessage(content, detectedLanguage?)` (extracted from `handleSubmit`'s old inline body) stays the one POST path both the form and `handleSubmit` use.
+- `web/src/features/plan-workspace/PlanWorkspace.tsx` — pass `inputExtra={(fillDraft, disabled) => <VoiceInput fillDraft={fillDraft} disabled={disabled} />}` to `<ChatThread>` (line ~299). No other layout change.
+- `web/src/chat/VoiceInput.tsx` (new) — one round mic button (lucide-react `Mic`/`Square`, swapping icon on recording state — no raw emoji, matching this app's existing icon convention elsewhere), no dialog: transcription result calls `fillDraft` directly. Status/notice text floats in an absolutely-positioned bubble above the button so it never affects `ChatThread`'s fixed-height footer layout.
+- `web/src/locales/{en,de}/chat.json` — new `voice.*` keys (AD-24).
+- `src/api/routes/voice.ts` (new) — `createVoiceRouter({ env, transcribeAudio? })`; `POST /transcribe` behind `requireAuth` (global gate) + `createStrictRateLimiter`; `express.raw({ type: '*/*', limit: MAX_VOICE_AUDIO_BYTES })`; exports `MAX_VOICE_AUDIO_BYTES` (10MB).
+- `src/api/app.ts` — mount `app.use('/api/voice', createVoiceRouter({ env }))` after `requireAuth`; the existing blanket content-length gate (lines ~95-103) exempts `req.path.startsWith('/api/voice/')` up to `MAX_VOICE_AUDIO_BYTES` instead of `env.BODY_LIMIT`.
+- `src/agent/voice.ts` (new) — `createTranscribeAudio(env)`: real `fetch` to `https://openrouter.ai/api/v1/audio/transcriptions` (reuses `OPENROUTER_API_KEY` — human-requested renegotiation precedent in spec-1-3's own Spec Change Log: "the human uses OpenRouter, one `OPENROUTER_API_KEY` for every provider, not direct per-provider keys"), model `gpt-transcribe`, `languages: ["de","en"]` hint (AD-26, mirrors `detectReplyLanguage`'s "no new dependency" precedent — plain `fetch`/`FormData`/`Blob`, all global in Node 20+). Returns `{ transcript, detectedLanguage }`, never logs the buffer.
+- `src/agent/index.ts` — add `appendVoiceLanguageHint(extra, voiceDetectedLanguage)` pure helper + two fixed DE/EN hint strings; `systemPrompt` callback reads `runtime.configurable?.voiceDetectedLanguage` and folds the hint into the `extra` argument already passed to `buildSystemPrompt` (same mechanism `extraSystemInstruction` uses today).
+- `src/api/routes/plan-chat.ts` — POST handler forwards `parseResult.data.detectedLanguage` into `agent.stream`'s `configurable` as `voiceDetectedLanguage` (present only when set — existing test's exact-object `configurable` assertion for the no-hint case stays unchanged).
+- `shared/schemas/voice.ts` (new) — `detectedLanguageSchema` (`'de'|'en'`), `voiceTranscribeResponseSchema`. Re-exported from `shared/schemas/index.ts`.
+- `shared/schemas/index.ts` — `sendMessageRequestSchema` gains optional `detectedLanguage: detectedLanguageSchema.optional()`.
+- No new credential: `src/agent/voice.ts`/`src/api/routes/voice.ts` both take `OPENROUTER_API_KEY` (already required), not a new `OPENAI_API_KEY`.
+
+## Tasks & Acceptance
+
+**Execution:**
+- [x] `shared/schemas/voice.ts`, `shared/schemas/index.ts` — add schemas, rebuild (`npm run build --workspace=shared`)
+- [x] `src/agent/voice.ts` — transcription client
+- [x] `src/agent/index.ts` — voice-language hint plumbing
+- [x] `src/api/routes/voice.ts`, `src/api/app.ts` — route + mount + body-size exemption
+- [x] `src/api/routes/plan-chat.ts` — forward `detectedLanguage`
+- [x] `web/src/chat/ChatThread.tsx` — render-prop extension point (`fillDraft`) + `sendMessage`/`pendingVoiceLanguage` plumbing
+- [x] `web/src/chat/VoiceInput.tsx`, locale files — UI (no review dialog, per human-requested revision below)
+- [x] `web/src/features/plan-workspace/PlanWorkspace.tsx` — wire `VoiceInput` in
+
+**Acceptance Criteria:** story 4.3's ACs verbatim in epics.md (AD-9, AD-25, AD-26, NFR2, NFR3, chat-input-extension-point ownership).
+
+## Implementation Notes
+
+- `createTranscribeAudio`'s response's `detectedLanguage` is derived from the returned transcript text via the existing `detectReplyLanguage` heuristic (`src/agent/language.ts`), not parsed off the provider's own response field — that field's shape/vocabulary isn't part of this app's contract, while `detectReplyLanguage` already resolves to exactly the closed `'de' | 'en'` set AD-25's downstream hint needs.
+- AD-26's `languages: ["de", "en"]` hint is sent as a single `languages` form field, JSON-stringified, alongside `model`/`file` in the multipart body — no SDK client exists for this fictional `gpt-transcribe` endpoint, so the exact wire shape is this story's own call.
+- `appendVoiceLanguageHint`'s hint text is folded into `extraSystemInstruction`'s `extra` slot (same mechanism `extraSystemInstruction` itself already uses) rather than a new prompt section — on top of (never instead of) `REPLY_LANGUAGE_INSTRUCTION`'s existing "match the user's most recent message" rule, since a short/ambiguous edited transcript may not carry enough signal on its own.
+- `app.ts`'s blanket content-length gate exempts `/api/voice/*` up to `MAX_VOICE_AUDIO_BYTES` (10MB) instead of `env.BODY_LIMIT`; `createVoiceRouter`'s own `express.raw({ limit: MAX_VOICE_AUDIO_BYTES })` enforces the same cap a second time at the parser level.
+- `VoiceInput`'s mic icon is a plain emoji glyph (no new icon dependency) — `Button`'s existing `sm` size/`outline`/`default` variants are reused as-is (no new "icon" size variant added to `button.tsx`, which isn't a file this story's Code Map names).
+- **Supersedes note above (self-review, pre-dispatch to the review pass):** `createTranscribeAudio` now parses `gpt-transcribe`'s own `language` response field first (normalized to `'de'|'en'`) and falls back to `detectReplyLanguage` only when that field is missing/unrecognized — the original "derive it from the transcript text" approach made AD-26's whole detected-language hint redundant with AD-25's own text-matching rule, losing exactly the audio-based-detection advantage AD-26 exists for (a short/ambiguous transcript like "Ok").
+- Review pass (1 reviewer, blind-hunter layer, per CLAUDE.md token-budget rule) applied four patches: (1) the file sent to `gpt-transcribe` now carries a real extension (`extensionFor(contentType)`) instead of a bare `'audio'` name; (2) `app.ts`'s body-size exemption is now scoped to the exact `/api/voice/transcribe` path, not the whole `/api/voice/*` prefix; (3) `VoiceInput` now guards every post-async state update with a `mountedRef` and detaches/stops the recorder on unmount, so a stop/transcribe callback resolving after unmount never touches state; (4) added the two tests this review surfaced as missing (the voice-path body-size branch in `app.test.ts`, an unmount-mid-transcription regression test in `VoiceInput.test.tsx`), plus one assertion on the new filename extension. Three findings (no per-user daily transcription quota beyond the shared rate limiter; the generic failure note on zero-captured-audio; no consent/disclosure copy for third-party audio processing) were real but out of this story's AC — logged to `deferred-work.md` instead of silently fixed or dropped.
+- **Live-test fix round 1:** the mic button used a raw `🎤` emoji inside a text-padded `Button` (not this app's actual icon convention — every other icon in the UI is `lucide-react`), and the recording/notice status text sat in normal flow below the button, inside `ChatThread`'s fixed-height `CardFooter` — silently clipped there rather than growing the footer. Fixed: `Mic`/`Square` (lucide-react) in a round `h-9 w-9 rounded-full` button, icon swapping on recording state; status/notice text now an absolutely-positioned bubble above the button, never affecting footer layout.
+- **Live-test fix round 2 (root cause, found via temporary console-log instrumentation + the user checking Chrome's own mic-active indicator and the DevTools console):** `mountedRef` (`useRef(true)`, flipped to `false` only in the unmount cleanup) never got reset back to `true`. React 18 StrictMode (dev only) mounts, unmounts, and re-mounts every component once on initial mount to surface exactly this class of bug — the first (StrictMode-only) unmount flipped it to `false` and nothing ever flipped it back, so it stayed `false` for the rest of the component's real lifetime. Every real click's `startRecording` then saw `!mountedRef.current` immediately after `getUserMedia` resolved, stopped the just-granted stream, and returned silently — before ever reaching `setStatus('recording')`. Matches every symptom reported: Chrome's mic indicator appearing then disappearing on its own, the button never changing color, no note ever shown. Fixed by moving `mountedRef.current = true` into the effect's own mount body (`React.useEffect(() => { mountedRef.current = true; return () => {...} }, [])`), not just the initial `useRef` value — the correct, standard fix for this exact StrictMode pattern. This was a dev-mode-only manifestation (StrictMode double-invoke doesn't happen in production), but the bug was real: production's very first mount would never hit it, but any component instance that legitimately unmounts and a later same-slot remount reuses stale ref state would have hit the identical bug outside dev too.
+
+- **Live-test fix round 3 (backend, confirmed via the user's own server log — `[voice] transcription failed: { error: 'transcription request returned 404' }` — and verified against OpenRouter's own published docs, `openrouter.ai/docs/guides/overview/multimodal/stt`):** `gpt-transcribe` (AD-9's placeholder model name, this app's own near-future fictional id — same convention as `gpt-6-luna`) is not a real OpenRouter catalog model for the `/api/v1/audio/transcriptions` endpoint; a live call 404s. The endpoint itself, multipart `file`/`model` fields, and the `https://openrouter.ai/api/v1/audio/transcriptions` URL were already correct. **AD-26 deviation (documented, not silently dropped):** the real endpoint has no `languages: [...]`-style multi-language hint field — only a single forced `language` parameter, or omitting it for full unconstrained auto-detect. Removed the fictional `languages: ["de","en"]` form field entirely; omitting `language` (closer to AD-26's "without forcing either" intent than forcing one of the two) is what's actually sent now. Added `response_format: "verbose_json"`, since the endpoint's default `json` format returns only `text` — `verbose_json` is what makes it return a `language` field at all for `normalizeDetectedLanguage` to read.
+- **Live-test fix round 4 (model id, live-verified by the user via direct `curl` against OpenRouter, bypassing this app):** `openai/whisper-1` (round 3's fix) also 404'd — not missing from OpenRouter's catalog this time, but blocked by this account's own OpenRouter *workspace guardrail policy* (`{"error":{"message":"...Model blocked by guardrail...","code":404}}`, configurable at `openrouter.ai/workspaces/default/guardrails` — account-level, outside this code's control). The user's own "Models available to you" list named `whisper-large-v3-turbo` as available; live-`curl`-verified with a garbage-audio payload — got back a 400 "Invalid or unsupported audio file" (the model itself accepted and reachable; only the fake audio bytes were rejected, as expected). `TRANSCRIBE_MODEL` is now `openai/whisper-large-v3-turbo`.
+
+## Spec Change Log
+
+- **2026-11-18 — human-requested renegotiation, post-`done`:** the human corrected the reported key name — same precedent as spec-1-3's own Spec Change Log ("the human uses OpenRouter, one `OPENROUTER_API_KEY` for every provider, not direct per-provider keys"), which this story's own investigation missed (not among the named files to read). Reverted the new `OPENAI_API_KEY` entirely: `src/config/env.ts`, `.env.example`, `env.test.ts`, `app.test.ts`'s `testEnv` all back to zero new credential. `src/agent/voice.ts`'s `createTranscribeAudio` now posts to `https://openrouter.ai/api/v1/audio/transcriptions` using `env.OPENROUTER_API_KEY`, mirroring `src/agent/model.ts`'s `OPENROUTER_BASE_URL` pattern. `VoiceRouterDeps.env` Pick updated to `OPENROUTER_API_KEY`. KEEP: everything else (the transcription client's request/response shape, the detected-language capture-with-fallback logic, the route/UI/ChatThread wiring) — this was a credential-routing swap only, same shape as spec-1-3's own prior swap.
+- **2026-11-18 — human-requested renegotiation, post-`done` (live-test round 2):** live-tested the record→stop→review-dialog flow (AD-9's own design) and found it confusing — the human's mental model was closer to live dictation (click once, talk, see text appear), not record/stop/confirm. Presented three options (keep as-is, drop the dialog and fill the existing draft instead, or switch to true live streaming via the Web Speech API instead of `gpt-transcribe`); human chose the middle option. Amended: `VoiceInput` no longer shows a review dialog or has its own confirm/cancel — the finished transcript (with its detected language) now fills the same `draft` `ChatThread`'s text input already edits, via a new `fillDraft` render-prop (replacing the old `send` one); the user reviews/edits it in that one familiar input and sends it with the existing Send button, same as any typed message. `detectedLanguage` still rides along (`ChatThread`'s new `pendingVoiceLanguage` state), attached at the moment of actual send. AD-9/AD-10/AD-26 (gpt-transcribe, server-side only, de/en hint) and the "text input is not edited structurally" boundary (the input's *value* is filled via the same mechanism typing already uses, not a new input/layout) are unaffected. Removed: the review dialog, its `Textarea`, `confirm`/`cancel` i18n keys, the "Cancel in review" I/O-matrix row (no longer a distinct scenario — discarding a voice-filled draft is now the same as discarding any typed one). KEEP: the backend (route/transcription client/language-hint plumbing) is completely unchanged — this was a frontend-only UX amendment.
+
+## Review Triage Log
+
+One reviewer (blind-hunter layer, CLAUDE.md "at most 1 reviewer" for this story) ran against the full diff (post self-review fix). 11 findings, triaged:
+
+- **`detectedLanguage` derived from transcript text, not the provider's own field** (self-review, before the reviewer ran) — `high`: AD-26 explicitly requires capturing the provider's own reported language; deriving it from the transcript text instead makes the whole mechanism redundant with AD-25's own text-matching and loses the audio-based-detection case AD-26 exists for. Routed `patch` — fixed (parse `language` field first, text heuristic as fallback only).
+- **Filename sent to `gpt-transcribe` has no extension** — `medium`: real multipart transcription APIs commonly infer format from the filename extension; a bare `'audio'` risks misinterpretation. Routed `patch` — fixed (`extensionFor(contentType)`).
+- **Body-size exemption in `app.ts` scoped to `/api/voice/*` prefix, not the exact route** — `low` (no second route exists yet, so no concrete harm today) but the fix is a trivial, direct correction. Routed `patch` — fixed (exact-path match).
+- **`VoiceInput` has no unmount guard; a stop/transcribe callback resolving after unmount can call `setState`** — `medium`: real React anti-pattern (console warning/potential leak) on a plausible mid-recording navigation-away. Routed `patch` — fixed (`mountedRef` guard + detach-and-stop on unmount).
+- **No test for the voice-path body-size branch (413 above `MAX_VOICE_AUDIO_BYTES`, exempted below it)** — `medium`: new security-relevant branch this story introduced, unverified. Routed `patch` — fixed (new `app.test.ts` table-driven test).
+- **No regression test for unmount-mid-transcription** — `medium`, same reasoning as the `VoiceInput` finding above. Routed `patch` — fixed (new `VoiceInput.test.tsx` test).
+- **No test exercises the auth gate for `/api/voice/transcribe` specifically** — `false`: verified against `app.ts`'s middleware order (`requireAuth` mounted before every router, `/api/voice` included) and `app.test.ts`'s existing precedent (no other router — chat/plan-chat/ideas/plans/settings — has its own per-router auth test either; the blanket "undefined route" + CORS/rate-limit tests already prove the gate generically). Consistent with CLAUDE.md's "do not test framework or library behaviour."
+- **No test asserts the new rate limiter actually throttles** — `false`: same reasoning — `createStrictRateLimiter` wraps `express-rate-limit`, a library; no other cost-bearing route (`create_plan`, `generate_ideas`) in this codebase has a dedicated throttle test either.
+- **No per-user daily quota on transcription calls beyond the shared rate limiter** — `maybe-false` as a defect (not named in this story's AC; the strict rate limiter matches the existing mitigation level for cost-bearing routes without an AD naming a stricter one). Routed `defer` — logged to `deferred-work.md`.
+- **`sendMessageRequestSchema.detectedLanguage` accepted on any typed message, not only a real voice transcript** — `false`: no cross-user or data-exposure risk: at most a user steers their own conversation's reply language, which they could already achieve by asking in plain text.
+- **Zero-captured-audio shows the same generic `transcriptionFailed` note as a real failure** — `low`, cosmetic; NFR2 still holds (typing stays available either way) and a distinct message needs a new locale string. Routed `defer` — logged to `deferred-work.md`.
+- **No consent/disclosure for sending voice audio to a third-party processor (OpenAI)** — real product/legal gap (plausible GDPR relevance given the German locale), but not something to invent copy for unilaterally. Routed `defer` — logged to `deferred-work.md` and flagged directly to the user.
+- **Error catch-all in `voice.ts` route collapses upstream failure and internal schema-parse bugs into the same 503/log label** — `low`: unlikely to matter in practice, and distinguishing them needs a new error branch. Rejected (low + fix adds complexity, per triage rule).
+
+No `intent_gap`/`bad_spec` entries — no loopback triggered.
+
+## Verification
+
+**Commands:**
+- `npm run build --workspace=shared` -- typecheck passes
+- Targeted vitest runs per changed file while implementing
+- Full suite once at the end (`npm test` at repo root) -- expected: pass

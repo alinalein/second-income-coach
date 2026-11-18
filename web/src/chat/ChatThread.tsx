@@ -6,6 +6,7 @@ import {
   resultEventSchema,
   CHAT_MESSAGE_MAX_LENGTH,
   type ChatMessage as ChatMessageType,
+  type DetectedLanguage,
 } from '@app/shared';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '../components/ui/card';
@@ -87,9 +88,15 @@ export interface ChatThreadProps {
   footerItems?: readonly ChatMessageFooterItem[];
   /** Story 3.1 extension point: an extra chat-input mode rendered beside
    * the text field (Code Map: "chat input extension point (extra input
-   * modes beside the text field)") — empty by default; Story 4.3 fills it
-   * with a voice-record control. */
-  inputExtra?: React.ReactNode;
+   * modes beside the text field)") — empty by default. Story 4.3 (render-
+   * prop, Code Map, user-requested revision): a function that fills the
+   * same draft the text input edits, rather than sending on its own — the
+   * extension's result lands in the one input the user already knows, and
+   * they hit this component's own existing Send button when ready, same as
+   * a typed message. `detectedLanguage` (from a voice transcript) rides
+   * along with whatever is eventually sent, attached at submit time;
+   * `disabled` mirrors the text input's own `sending`-gated state. */
+  inputExtra?: (fillDraft: (content: string, detectedLanguage?: DetectedLanguage) => void, disabled: boolean) => React.ReactNode;
   /** Spec 2.12 AC8: a message the caller wants shown live the moment it
    * arrives (here: `start_step`'s own direct-model-call acknowledgment),
    * without waiting for a reload/re-fetch of this thread's history. Id-
@@ -105,6 +112,13 @@ export function ChatThread({ endpoint = DEFAULT_CHAT_ENDPOINT, footerItems = [],
   const [historyLoaded, setHistoryLoaded] = React.useState(false);
   const [draft, setDraft] = React.useState('');
   const [sending, setSending] = React.useState(false);
+  // Story 4.3 (user-requested revision): a voice transcript's own detected
+  // language, held until the message it rode in on is actually sent — set
+  // by `inputExtra`'s `fillDraft`, read (and cleared) by `handleSubmit`.
+  // Not cleared on further edits to `draft`: the AC expects the user to
+  // review/correct the transcript in this same input before sending, and
+  // an edit is still the same (voice-originated) message.
+  const [pendingVoiceLanguage, setPendingVoiceLanguage] = React.useState<DetectedLanguage | undefined>(undefined);
   // AC1/AC3: the current turn's localized progress label, sourced from the
   // SSE `progress` frames (Code Map).
   const [currentStep, setCurrentStep] = React.useState<string | null>(null);
@@ -293,10 +307,16 @@ export function ChatThread({ endpoint = DEFAULT_CHAT_ENDPOINT, footerItems = [],
     setAnimatedIds((prev) => (prev.has(incomingMessage.id) ? prev : new Set(prev).add(incomingMessage.id)));
   }, [incomingMessage]);
 
-  const handleSubmit = React.useCallback(
-    (event: React.FormEvent) => {
-      event.preventDefault();
-      const content = draft.trim();
+  // Story 4.3 (Code Map): `handleSubmit`'s inner fetch/SSE logic, extracted
+  // into this reusable function — the typed-text form below and the
+  // `inputExtra` render-prop (e.g. `VoiceInput`) both call it, so a
+  // confirmed voice transcript is "processed identically to a typed
+  // check-in" (AC) all the way down to this one send path. `detectedLanguage`
+  // is `undefined` for a typed message (unchanged request body/behavior);
+  // set only by a voice send, carrying `gpt-transcribe`'s own detected
+  // language downstream (AD-25).
+  const sendMessage = React.useCallback(
+    (content: string, detectedLanguage?: DetectedLanguage) => {
       if (!content || sending) return;
 
       // Story 2.13 refinement: measured against the content height *before*
@@ -323,7 +343,6 @@ export function ChatThread({ endpoint = DEFAULT_CHAT_ENDPOINT, footerItems = [],
       // away the user did during a previous turn never carries over.
       userScrolledAwayRef.current = false;
       setMessages((prev) => [...prev, userMessage]);
-      setDraft('');
       setSending(true);
       setCurrentStep(null);
 
@@ -340,7 +359,7 @@ export function ChatThread({ endpoint = DEFAULT_CHAT_ENDPOINT, footerItems = [],
             method: 'POST',
             credentials: 'include',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ content }),
+            body: JSON.stringify({ content, detectedLanguage }),
           });
 
           // Code Map: "submit flow switches from `res.json()` to
@@ -379,8 +398,29 @@ export function ChatThread({ endpoint = DEFAULT_CHAT_ENDPOINT, footerItems = [],
         setSending(false);
       })();
     },
-    [draft, sending, t, endpoint],
+    [sending, t, endpoint],
   );
+
+  const handleSubmit = React.useCallback(
+    (event: React.FormEvent) => {
+      event.preventDefault();
+      const content = draft.trim();
+      if (!content || sending) return;
+      setDraft('');
+      sendMessage(content, pendingVoiceLanguage);
+      setPendingVoiceLanguage(undefined);
+    },
+    [draft, sending, sendMessage, pendingVoiceLanguage],
+  );
+
+  // Story 4.3 (user-requested revision, Code Map): what `inputExtra` (e.g.
+  // `VoiceInput`) calls once a transcript is ready — fills this same `draft`
+  // the text input edits (no separate review UI) and remembers its detected
+  // language for `handleSubmit` to attach when the user actually sends it.
+  const fillDraft = React.useCallback((content: string, detectedLanguage?: DetectedLanguage) => {
+    setDraft(content);
+    setPendingVoiceLanguage(detectedLanguage);
+  }, []);
 
   return (
     // User-reported: the chat fills the full height of its column (PlanWorkspace gives
@@ -444,7 +484,7 @@ export function ChatThread({ endpoint = DEFAULT_CHAT_ENDPOINT, footerItems = [],
           {/* Story 3.1 extension point: empty by default — Story 4.3 fills
            * this with a voice-record control; typed text stays available
            * either way. */}
-          {inputExtra}
+          {inputExtra?.(fillDraft, sending)}
           <Button type="submit" disabled={sending || !draft.trim()}>
             {t('sendButton')}
           </Button>

@@ -22,6 +22,7 @@ import { createIdeasRouter } from './routes/ideas.js';
 import { createPlansRouter } from './routes/plans.js';
 import { createPlanChatRouter } from './routes/plan-chat.js';
 import { createSettingsRouter } from './routes/settings.js';
+import { createVoiceRouter, MAX_VOICE_AUDIO_BYTES } from './routes/voice.js';
 
 export interface AppDeps {
   env: Env;
@@ -95,7 +96,15 @@ export function createApp({
   const maxBodyBytes = bytes.parse(env.BODY_LIMIT) ?? Number.POSITIVE_INFINITY;
   app.use((req, res, next) => {
     const contentLength = Number(req.headers['content-length']);
-    if (Number.isFinite(contentLength) && contentLength > maxBodyBytes) {
+    // Story 4.3: a raw audio upload is legitimately far larger than
+    // env.BODY_LIMIT's JSON-request budget — exempted up to its own, much
+    // larger `MAX_VOICE_AUDIO_BYTES` cap instead (still enforced, both here
+    // and again by `createVoiceRouter`'s own `express.raw({ limit: ... })`).
+    // Review fix: scoped to this one exact route, not every `/api/voice/*`
+    // path, so a future route added under that prefix doesn't silently
+    // inherit a 10MB allowance it never asked for.
+    const limit = req.path === '/api/voice/transcribe' ? MAX_VOICE_AUDIO_BYTES : maxBodyBytes;
+    if (Number.isFinite(contentLength) && contentLength > limit) {
       res.status(413).json({ error: 'Bad request' });
       return;
     }
@@ -152,6 +161,14 @@ export function createApp({
 
   // Story 5.1: personality + model settings, same auth gate as /api/chat.
   app.use('/api/settings', createSettingsRouter({ env, db }));
+
+  // Story 4.3 (AD-9/AD-10): the one voice-transcription route, same auth
+  // gate as every other route below it — `createVoiceRouter`'s own
+  // `express.raw` body parser only runs for this one path, after the
+  // blanket content-length gate above (exempted for `/api/voice/*`) and the
+  // global `express.json()` parser above (which no-ops for a non-JSON
+  // content type, leaving the body stream for `express.raw` to consume).
+  app.use('/api/voice', createVoiceRouter({ env }));
 
   // Centralized error handler. Oversized bodies and malformed JSON surface
   // here as errors from the body parser — this is what keeps the process

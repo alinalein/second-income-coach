@@ -5,6 +5,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from 'shadcn-glass-u
 import { ChatThread } from '../../chat/ChatThread';
 import { MessageCost } from '../../chat/MessageCost';
 import { createMessageFeedbackItem } from '../../chat/MessageFeedback';
+import { VoiceInput } from '../../chat/VoiceInput';
 import { StatusPanel } from './StatusPanel';
 import { PlanActivationPanel } from './PlanActivationPanel';
 import { ProjectionCard } from './ProjectionCard';
@@ -296,7 +297,16 @@ export function PlanWorkspace({ ideaId, ideaTitle, onPlanLoaded }: PlanWorkspace
                * Memoized on `plan.id` so each `MessageFeedback` instance keeps
                * its own component identity (and its in-session rating state)
                * across unrelated `PlanWorkspace` re-renders. */}
-              <ChatThread endpoint={`/api/plans/${plan.id}/messages`} footerItems={footerItems} incomingMessage={incomingMessage} />
+              {/* Story 4.3: `ChatThread`'s render-prop input-extension point,
+               * filled with the voice-record control — fills the same draft
+               * the text input edits (user-requested revision), no layout
+               * change here. */}
+              <ChatThread
+                endpoint={`/api/plans/${plan.id}/messages`}
+                footerItems={footerItems}
+                incomingMessage={incomingMessage}
+                inputExtra={(fillDraft, disabled) => <VoiceInput fillDraft={fillDraft} disabled={disabled} />}
+              />
             </div>
           </div>
         </div>

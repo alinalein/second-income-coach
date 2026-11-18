@@ -121,6 +121,50 @@ describe('ChatThread (AC: chat UI)', () => {
     expect(postedBody).toEqual({ content: 'How do I get started?' });
   });
 
+  // Story 4.3 (Code Map/AD-25, user-requested revision): `inputExtra` is a
+  // render-prop handed `fillDraft` — proving an extension (e.g.
+  // `VoiceInput`) fills the same draft the text input edits, with its
+  // detected language carried through to the existing Send button's own
+  // POST, once the user actually sends it.
+  it('fills the draft via a render-prop inputExtra, carrying detectedLanguage through the existing Send button', async () => {
+    let postedBody: unknown;
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (!url.includes('/api/chat/messages')) throw new Error(`Unmocked fetch: ${url}`);
+        if (init?.method === 'POST') {
+          postedBody = JSON.parse(String(init.body));
+          return Promise.resolve(
+            sseResponse([resultFrame({ id: 'reply-voice', role: 'assistant', kind: 'message', content: 'Klar!', createdAt: new Date().toISOString() })]),
+          );
+        }
+        return Promise.resolve(new Response(JSON.stringify({ messages: [] }), { status: 200 }));
+      }),
+    );
+
+    render(
+      <ChatThread
+        inputExtra={(fillDraft, disabled) => (
+          <button disabled={disabled} onClick={() => fillDraft('Hallo', 'de')}>
+            voice-fill
+          </button>
+        )}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'voice-fill' }));
+
+    const input = (await screen.findByRole('textbox', { name: /message/i })) as HTMLInputElement;
+    expect(input.value).toBe('Hallo');
+
+    fireEvent.click(screen.getByRole('button', { name: /send/i }));
+
+    expect(await screen.findByText('Klar!')).toBeInTheDocument();
+    expect(postedBody).toEqual({ content: 'Hallo', detectedLanguage: 'de' });
+  });
+
   // AC1/AC3: the localized progress label for the turn's current step is
   // shown while a message is in flight, sourced from the `progress` SSE
   // frames (not model text, not a raw step key).

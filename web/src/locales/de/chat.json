@@ -34,5 +34,14 @@
     "cancel": "Abbrechen",
     "submit": "Speichern",
     "error": "Deine Rückmeldung konnte nicht gespeichert werden. Bitte versuche es erneut."
+  },
+  "voice": {
+    "micLabel": "Sprachnachricht aufnehmen",
+    "stopLabel": "Aufnahme stoppen",
+    "recording": "Aufnahme läuft…",
+    "transcribing": "Transkribiere…",
+    "permissionDenied": "Mikrofonzugriff wurde verweigert. Du kannst deine Nachricht weiterhin eingeben.",
+    "unsupported": "Spracheingabe ist in diesem Browser nicht verfügbar. Du kannst deine Nachricht weiterhin eingeben.",
+    "transcriptionFailed": "Die Sprachtranskription hat nicht funktioniert. Du kannst deine Nachricht weiterhin eingeben."
   }
 }

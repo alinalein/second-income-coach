@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { chatMessageSchema } from './chat.js';
+import { detectedLanguageSchema } from './voice.js';
 
 /**
  * Story 1.1 placeholder schema.
@@ -97,6 +98,11 @@ export const sendMessageRequestSchema = z.object({
     .string()
     .min(1, 'Message cannot be empty')
     .max(CHAT_MESSAGE_MAX_LENGTH, `Message cannot exceed ${CHAT_MESSAGE_MAX_LENGTH} characters`),
+  /** Story 4.3 (AD-25): set only when this message came from a confirmed
+   * voice transcript — carries `POST /api/voice/transcribe`'s own detected
+   * language downstream so the agent's reply matches it. Absent for every
+   * typed message, same as today. */
+  detectedLanguage: detectedLanguageSchema.optional(),
 });
 
 export type SendMessageRequest = z.infer<typeof sendMessageRequestSchema>;
@@ -134,6 +140,7 @@ export * from '../region.js';
 export * from './settings.js';
 export * from './check-ins.js';
 export * from './projection.js';
+export * from './voice.js';
 
 /**
  * Story 1.5: the turn-scoped SSE progress/result wire contract.

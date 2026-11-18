@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import type { Pool } from 'pg';
 import { createApp } from '../app.js';
+import { MAX_VOICE_AUDIO_BYTES } from '../routes/voice.js';
 import type { Env } from '../../config/env.js';
 
 function testEnv(overrides: Partial<Env> = {}): Env {
@@ -124,6 +125,39 @@ describe('createApp', () => {
 
     expect(res.status).toBe(413);
     expect(res.body).toEqual({ error: 'Bad request' });
+  });
+
+  // Story 4.3 (review fix): the blanket content-length gate's voice-path
+  // branch — exempted up to MAX_VOICE_AUDIO_BYTES instead of BODY_LIMIT, but
+  // still capped there, and scoped to this exact route only. The declared
+  // `Content-Length` header (not the actual bytes sent) is what this gate
+  // reads, so a huge real payload is never needed to exercise either branch.
+  describe('voice body-size exemption (Story 4.3)', () => {
+    it.each([
+      ['a declared size between BODY_LIMIT and MAX_VOICE_AUDIO_BYTES passes this gate', 5000, false],
+      ['a declared size over MAX_VOICE_AUDIO_BYTES is still rejected', MAX_VOICE_AUDIO_BYTES + 1, true],
+    ])('%s', async (_label, declaredContentLength, expectRejected) => {
+      const app = createApp({
+        env: testEnv({ BODY_LIMIT: '1kb' }),
+        db: fakeDb(),
+        pool: fakePool(),
+        agent: fakeAgent(),
+        ideasAgent: fakeAgent(),
+        plansAgent: fakeAgent(),
+        chatModel: fakeChatModel(),
+        webSearchTool: fakeWebSearchTool(),
+        activatePlanGraph: fakeActivatePlanGraph(),
+        memoryStore: fakeMemoryStore(),
+      });
+
+      const res = await request(app)
+        .post('/api/voice/transcribe')
+        .set('Content-Type', 'audio/webm')
+        .set('Content-Length', String(declaredContentLength))
+        .send(Buffer.from([1, 2, 3]));
+
+      expect(res.status === 413).toBe(expectRejected);
+    });
   });
 
   // AC: same-origin CORS — a disallowed browser origin is rejected as a 403

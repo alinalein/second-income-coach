@@ -79,6 +79,30 @@ export function buildSystemPrompt(
   return `${base}\n\nThe user gave this feedback on earlier replies. Treat each as a standing instruction:\n${memorySection}`;
 }
 
+/** Story 4.3 (AD-25): folded into the system prompt's `extra` section only
+ * when a turn's `configurable.voiceDetectedLanguage` is set (Code Map) —
+ * the transcript text itself usually already signals its language, but a
+ * short/ambiguous edited transcript may not; this gives the model the
+ * stronger signal `gpt-transcribe`'s own language hint (AD-26) already
+ * resolved, on top of (never instead of) `REPLY_LANGUAGE_INSTRUCTION`'s
+ * general "match the user's most recent message" rule. */
+const VOICE_LANGUAGE_HINT_DE = 'The user just sent this message by voice; gpt-transcribe detected it as German.';
+const VOICE_LANGUAGE_HINT_EN = 'The user just sent this message by voice; gpt-transcribe detected it as English.';
+
+/**
+ * Pure helper (Code Map) — `extra` is whatever this agent instance's own
+ * `extraSystemInstruction` already resolved to (or `undefined`);
+ * `voiceDetectedLanguage` is `runtime.configurable?.voiceDetectedLanguage`,
+ * read by the `systemPrompt` callback below. Any value other than the two
+ * recognized language codes (including `undefined`, the no-voice case) is a
+ * no-op — `extra` passes through unchanged.
+ */
+export function appendVoiceLanguageHint(extra: string | undefined, voiceDetectedLanguage: unknown): string | undefined {
+  const hint = voiceDetectedLanguage === 'de' ? VOICE_LANGUAGE_HINT_DE : voiceDetectedLanguage === 'en' ? VOICE_LANGUAGE_HINT_EN : undefined;
+  if (!hint) return extra;
+  return extra ? `${extra} ${hint}` : hint;
+}
+
 /**
  * Design Notes: "Thread id shape: `discovery:${userId}`, not bare `userId` —
  * reserves the `plan:${planId}` naming Epic 3 introduces per AD-18."
@@ -334,7 +358,10 @@ export function createCoachAgent({
   // no-memory path as a `userId`/human-text miss below.
   const systemPrompt = dynamicSystemPromptMiddleware<{ personality?: string }>(async (state, runtime) => {
     const personality = resolvePersonality(runtime.context?.personality);
-    if (!memoryStore) return buildSystemPrompt(personality, [], extraSystemInstruction);
+    // Story 4.3 (AD-25): resolved once per turn, ahead of the memory lookup
+    // below, so it's folded into every return path's `extra` the same way.
+    const extra = appendVoiceLanguageHint(extraSystemInstruction, runtime.configurable?.voiceDetectedLanguage);
+    if (!memoryStore) return buildSystemPrompt(personality, [], extra);
 
     // Hardening: the Boundary ("retrieval failure never blocks a turn")
     // previously only covered `recallMemories`'s own internals. Wrapping
@@ -344,15 +371,15 @@ export function createCoachAgent({
     try {
       const userId = resolveUserId(runtime.configurable);
       const lastHuman = lastMessageOfType(state.messages, 'human');
-      if (!userId || !lastHuman?.text) return buildSystemPrompt(personality, [], extraSystemInstruction);
+      if (!userId || !lastHuman?.text) return buildSystemPrompt(personality, [], extra);
 
       const memories = await recallMemories(memoryStore, userId, lastHuman.text);
-      return buildSystemPrompt(personality, memories, extraSystemInstruction);
+      return buildSystemPrompt(personality, memories, extra);
     } catch (error) {
       console.error('[agent] memory-augmented system prompt failed, falling back to the base prompt:', {
         error: (error as Error)?.message,
       });
-      return buildSystemPrompt(personality, [], extraSystemInstruction);
+      return buildSystemPrompt(personality, [], extra);
     }
   });
   const forceToolChoice = createForceToolChoiceMiddleware();
