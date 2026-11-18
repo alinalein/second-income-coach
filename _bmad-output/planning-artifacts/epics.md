@@ -1186,7 +1186,7 @@ So that checking in feels tangibly worth it.
 
 **Given** the projection card
 **When** shown for a plan with a next step
-**Then** it always shows the line "at this pace · unlocks: <the specific unlocked opportunity>" (DE equivalent) under the estimate; it is a required part of the card and is never removed as a duplicate of the status column's next-step region (only omitted when there is no next step, i.e. on the last step or a completed plan)
+**Then** it always shows a line "at this pace · next step brings you to ~<amount>" (DE equivalent) under the estimate: the amount is the deterministic projection with the next step counted as completed (same money helper and estimate rules); it never repeats the next step's title or description (the status column already shows them); only omitted when there is no next step (last step, draft or completed plan)
 
 **Given** the projection card
 **When** built
