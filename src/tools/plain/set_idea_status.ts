@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { and, eq, ne } from 'drizzle-orm';
 import type { createDb } from '../../db/client.js';
-import { ideas } from '../../db/schema/index.js';
+import { ideas, plans } from '../../db/schema/index.js';
 
 type Db = ReturnType<typeof createDb>['db'];
 
@@ -25,6 +25,20 @@ export type SettableIdeaStatus = z.infer<typeof settableIdeaStatusSchema>;
  * (`src/api/routes/ideas.ts`) maps this to 404, same precedent as
  * `set_model.ts`'s `UnselectableModelError` -> 400. */
 export class IdeaNotFoundError extends Error {}
+
+/**
+ * Bug fix (user-reported, live): an idea that already has a `plans` row
+ * (created by `create_plan` once the idea was `selected`/`bookmarked`) could
+ * still be rejected — leaving that plan listed in the sidebar's "My plans"
+ * (`GET /api/plans`, which never filtered on idea status) but permanently
+ * inaccessible, since `POST /api/plans/select/:ideaId` 404s for any idea
+ * that isn't `selected`/`bookmarked`. Rejecting such an idea is refused
+ * outright now, rather than only hiding the resulting orphan afterward
+ * (`plans.ts`'s own `GET /` query, which still filters it defensively). The
+ * route (`src/api/routes/ideas.ts`) maps this to 409, same "state conflict"
+ * precedent as `activate_plan.ts`'s `PlanNotDraftError`.
+ */
+export class IdeaHasPlanError extends Error {}
 
 /**
  * AD-4: a plain, deterministic Postgres write — never agent-registered,
@@ -65,6 +79,13 @@ export async function setIdeaStatus(db: Db, userId: string, ideaId: string, stat
     // Re-rejecting an already-rejected idea is still allowed as a no-op.
     if (existing.status === 'rejected' && parsedStatus !== 'rejected') {
       throw new IdeaNotFoundError(`Idea "${ideaId}" is rejected and cannot be set to "${parsedStatus}"`);
+    }
+
+    if (parsedStatus === 'rejected' && existing.status !== 'rejected') {
+      const [existingPlan] = await tx.select({ id: plans.id }).from(plans).where(eq(plans.ideaId, ideaId)).limit(1);
+      if (existingPlan) {
+        throw new IdeaHasPlanError(`Idea "${ideaId}" already has a plan and cannot be rejected`);
+      }
     }
 
     await tx.update(ideas).set({ status: parsedStatus, updatedAt: new Date() }).where(eq(ideas.id, ideaId));

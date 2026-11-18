@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, ne } from 'drizzle-orm';
 import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { Command } from '@langchain/langgraph';
-import { AIMessage, HumanMessage } from '@langchain/core/messages';
+import { AIMessage, HumanMessage, type BaseMessage } from '@langchain/core/messages';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import {
   planResponseSchema,
@@ -15,6 +15,9 @@ import {
   startStepResponseSchema,
   completeStepResponseSchema,
   chatMessageSchema,
+  projectionResponseSchema,
+  checkInStatusResponseSchema,
+  resolveCurrency,
   type PlanResponse,
   type ChatMessage,
 } from '@app/shared';
@@ -26,10 +29,12 @@ import { evaluateUserMessage, evaluateAssistantMessage, defaultClassify, type Cl
 import { containsGuiltLanguage } from '../../agent/guilt-language.js';
 import { handleCreatePlan, type CreatePlanDeps } from '../../tools/llm/create_plan.js';
 import { getCurrentStep } from '../../tools/plain/get_current_step.js';
-import { recordCheckIn } from '../../tools/plain/record_check_in.js';
+import { recordCheckIn, getCheckInStatus } from '../../tools/plain/record_check_in.js';
 import { startStep } from '../../tools/plain/start_step.js';
 import { completeStep } from '../../tools/plain/complete_step.js';
-import { StepNotCurrentError } from '../../tools/plain/step-state.js';
+import { getProjection } from '../../tools/plain/get_projection.js';
+import { StepNotCurrentError, PlanNotActiveError } from '../../tools/plain/step-state.js';
+import { getUserSettings } from '../../db/settings-repository.js';
 import {
   getPendingReview,
   resumePausedPlan,
@@ -147,16 +152,126 @@ const PLAN_READY_MESSAGE_DE =
  */
 const START_STEP_ACK_TIMEOUT_MS = 10_000;
 
-function buildStartStepAckPrompt(language: 'de' | 'en', stepTitle: string): string {
-  return language === 'de'
-    ? `Die Person hat gerade mit dem Plan-Schritt "${stepTitle}" begonnen. Schreibe eine kurze (ein bis zwei Sätze), ` +
-        'motivierende und nicht-belehrende Bestätigung auf Deutsch, die diesen Start anerkennt. Erwähne nichts ' +
-        'Verpasstes, keine Verzögerung und keine frühere Pause — nur diesen Start selbst. Antworte nur mit der ' +
-        'Bestätigung selbst, ohne Anführungszeichen oder zusätzlichen Text.'
-    : `The person just started the plan step "${stepTitle}". Write a short (one to two sentences), motivating, ` +
-        'non-judgmental acknowledgment in English that recognizes this start. Never mention anything missed, any ' +
-        'delay, or a past pause — only this start itself. Reply with only the acknowledgment itself, no quotes or ' +
-        'extra text.';
+/** Bug fix (user-reported, live): marks a persisted `AIMessage` as this
+ * route's own start-of-step acknowledgment — never any other assistant
+ * message in the same plan thread (a genuine chat reply is never mistaken
+ * for one when `getRecentStartStepAckTexts` below re-reads the thread). */
+const STEP_START_ACK_KWARG = 'stepStartAck';
+
+/** Bug fix (user-reported, live): "consecutive start messages must not
+ * repeat each other" — how many of this thread's own previous start
+ * acknowledgments to show the model so it can avoid reusing their opener/
+ * wording. 3 is enough to break an emerging pattern without bloating the
+ * prompt. */
+const START_STEP_ACK_HISTORY_LIMIT = 3;
+
+/** Bug fix (user-reported, live): a short style nudge picked at random per
+ * call — on top of the no-repeat rule below, this is what actually varies
+ * a run that happens to have no prior history yet (the very first start in
+ * a thread) instead of always converging on the same "default" voice. */
+const START_STEP_ACK_STYLE_HINTS: Record<'de' | 'en', readonly string[]> = {
+  en: [
+    'Write in a practical, matter-of-fact tone.',
+    'Write in a light, casual tone.',
+    'Write in a direct, no-fuss tone.',
+  ],
+  de: [
+    'Schreibe in einem sachlichen, praktischen Ton.',
+    'Schreibe in einem lockeren, beiläufigen Ton.',
+    'Schreibe in einem direkten, knappen Ton.',
+  ],
+};
+
+/** Test-only seam precedent (`random: () => number`, same shape as other
+ * DI seams in this codebase) — defaults to `Math.random` so a test can pass
+ * a fixed value for a deterministic style hint. */
+function pickStartStepAckStyleHint(language: 'de' | 'en', random: () => number = Math.random): string {
+  const hints = START_STEP_ACK_STYLE_HINTS[language];
+  return hints[Math.floor(random() * hints.length)]!;
+}
+
+/**
+ * Bug fix (user-reported, live): "the model-written start messages repeat
+ * the same pattern" — `recentMessages` (this thread's own last
+ * `START_STEP_ACK_HISTORY_LIMIT` start acknowledgments, oldest first) are
+ * quoted back with an explicit no-repeat instruction, and the prompt now
+ * spells out variety rules directly (vary the opener, vary length, no stock
+ * phrases, name the concrete action, a randomly-picked tone hint) instead
+ * of leaving the model to find its own voice, which is what converged on
+ * the same "that's a meaningful step ... keep going at your own pace"
+ * phrasing every time.
+ */
+export function buildStartStepAckPrompt(
+  language: 'de' | 'en',
+  stepTitle: string,
+  recentMessages: readonly string[],
+  styleHint: string,
+): string {
+  const noRepeatLines =
+    recentMessages.length > 0
+      ? language === 'de'
+        ? [
+            'Deine letzten Start-Bestätigungen in diesem Chat waren:',
+            ...recentMessages.map((message) => `- "${message}"`),
+            'Verwende weder denselben Satzanfang noch dieselbe Formulierung wie diese — jede Bestätigung muss anders klingen.',
+          ]
+        : [
+            'Your last start acknowledgments in this chat were:',
+            ...recentMessages.map((message) => `- "${message}"`),
+            'Do not reuse their opener or wording — each acknowledgment must sound different from all of these.',
+          ]
+      : [];
+
+  const lines =
+    language === 'de'
+      ? [
+          `Die Person hat gerade mit dem Plan-Schritt "${stepTitle}" begonnen.`,
+          'Schreibe eine kurze, motivierende und nicht-belehrende Bestätigung auf Deutsch, die diesen Start anerkennt.',
+          'Variiere den Satzanfang jedes Mal — beginne nicht immer gleich (z. B. nicht immer mit "Du hast ... begonnen").',
+          'Variiere die Länge: oft nur ein kurzer Satz, manchmal zwei — nie mehr.',
+          'Keine Floskeln wie "das ist ein bedeutender Schritt", "bleib in deinem eigenen Tempo" oder "toller Einsatz".',
+          'Benenne die konkrete Handlung in einfachen, eigenen Worten statt einer generischen Floskel.',
+          styleHint,
+          ...noRepeatLines,
+          'Erwähne nichts Verpasstes, keine Verzögerung und keine frühere Pause — nur diesen Start selbst.',
+          'Antworte nur mit der Bestätigung selbst, ohne Anführungszeichen oder zusätzlichen Text.',
+        ]
+      : [
+          `The person just started the plan step "${stepTitle}".`,
+          'Write a short, motivating, non-judgmental acknowledgment in English that recognizes this start.',
+          'Vary the opener every time — never always start the same way (e.g. not always "You\'ve started...").',
+          'Vary the length: often just one short sentence, sometimes two — never more.',
+          'No stock phrases such as "that\'s a meaningful step", "keep going at your own pace", or "great work".',
+          'Name the concrete action in plain words of your own, not a generic stock phrase.',
+          styleHint,
+          ...noRepeatLines,
+          'Never mention anything missed, any delay, or a past pause — only this start itself.',
+          'Reply with only the acknowledgment itself, no quotes or extra text.',
+        ];
+
+  return lines.join('\n');
+}
+
+/**
+ * Bug fix (user-reported, live): reads this plan thread's own checkpointed
+ * history for the last `limit` start-of-step acknowledgments this route
+ * itself wrote (tagged via `STEP_START_ACK_KWARG` when persisted below) —
+ * never a genuine chat reply, which carries no such tag. Fail-open, same
+ * precedent as `detectUserReplyLanguage` (`ideas.ts`): a read error returns
+ * an empty list rather than blocking the start itself.
+ */
+async function getRecentStartStepAckTexts(agent: CoachAgent, threadId: string, limit: number): Promise<string[]> {
+  try {
+    const state = await agent.getState({ configurable: { thread_id: threadId } });
+    const messages = (state.values.messages ?? []) as BaseMessage[];
+    return messages
+      .filter((message) => message._getType() === 'ai' && message.additional_kwargs?.[STEP_START_ACK_KWARG] === true)
+      .slice(-limit)
+      .map((message) => message.text)
+      .filter((text): text is string => text.length > 0);
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -171,12 +286,15 @@ async function buildStartStepAckMessage(
   threadId: string,
   language: 'de' | 'en',
   stepTitle: string,
+  recentMessages: readonly string[],
+  random: () => number = Math.random,
 ): Promise<ChatMessage | undefined> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new Error('start_step ack: exceeded its budget')), START_STEP_ACK_TIMEOUT_MS);
 
   try {
-    const response = await model.invoke([new HumanMessage(buildStartStepAckPrompt(language, stepTitle))], {
+    const styleHint = pickStartStepAckStyleHint(language, random);
+    const response = await model.invoke([new HumanMessage(buildStartStepAckPrompt(language, stepTitle, recentMessages, styleHint))], {
       signal: controller.signal,
     });
     const text = (response.text ?? '').trim();
@@ -350,6 +468,14 @@ export function createPlansRouter({ env, db, agent, model, createDraft, activate
    * (Boundary: never a second "fetch the idea too" round trip from the
    * client). "Sorted by last activity" (AC) — `plans.updatedAt`, the same
    * column `activate_plan.ts`'s transactions already bump.
+   *
+   * Bug fix (user-reported, live): excludes a plan whose idea is now
+   * `rejected` — `set_idea_status.ts` now refuses to create this
+   * combination going forward (`IdeaHasPlanError`), but this filter stays
+   * as the defensive read-side guard (and covers any row that predates that
+   * fix). Without it, the plan stayed listed here forever while
+   * `POST /api/plans/select/:ideaId` already 404s for a non-`selected`/
+   * `bookmarked` idea — permanently inaccessible but still shown.
    */
   router.get('/', async (req, res) => {
     const userId = req.session.userId!;
@@ -359,7 +485,7 @@ export function createPlansRouter({ env, db, agent, model, createDraft, activate
         .select({ id: plans.id, ideaId: plans.ideaId, status: plans.status, updatedAt: plans.updatedAt, ideaTitle: ideas.title })
         .from(plans)
         .innerJoin(ideas, eq(ideas.id, plans.ideaId))
-        .where(eq(plans.userId, userId))
+        .where(and(eq(plans.userId, userId), ne(ideas.status, 'rejected')))
         .orderBy(desc(plans.updatedAt));
 
       res.json(
@@ -369,6 +495,24 @@ export function createPlansRouter({ env, db, agent, model, createDraft, activate
       );
     } catch (error) {
       console.error('[plans] list failed:', { userId, error: (error as Error)?.message });
+      res.status(503).json({ error: 'Service unavailable' });
+    }
+  });
+
+  /**
+   * Story 4.1 (AC, follow-up): user-scoped, never plan-scoped — "already
+   * answered today" for the energy pop-up, computed across every plan
+   * (`getCheckInStatus`). A single literal path segment, never collides
+   * with `/:planId/...` below regardless of registration order.
+   */
+  router.get('/check-in-status', async (req, res) => {
+    const userId = req.session.userId!;
+
+    try {
+      const result = await getCheckInStatus(db, userId);
+      res.json(checkInStatusResponseSchema.parse(result));
+    } catch (error) {
+      console.error('[plans] check-in-status read failed:', { userId, error: (error as Error)?.message });
       res.status(503).json({ error: 'Service unavailable' });
     }
   });
@@ -392,6 +536,39 @@ export function createPlansRouter({ env, db, agent, model, createDraft, activate
       res.json(currentStepResponseSchema.parse(result));
     } catch (error) {
       console.error('[plans] current-step read failed:', { userId, planId: planIdParse.data, error: (error as Error)?.message });
+      res.status(503).json({ error: 'Service unavailable' });
+    }
+  });
+
+  /**
+   * Story 4.4 (AD-4/AD-6/AD-27): direct, user-scoped read of the plan's
+   * live income/opportunity projection — a plain deterministic read via
+   * `getProjection`, same ownership-check precedent as `/:planId/current-step`
+   * above. `currency` is the user's own display-currency setting
+   * (`user_settings.currency`), read fresh on every call; `estimate` stays
+   * in its sourced currency (Boundary) — conversion/formatting happen
+   * client-side via `shared/money.ts` (same pattern `GET /api/ideas` uses).
+   */
+  router.get('/:planId/projection', async (req, res) => {
+    const userId = req.session.userId!;
+    const planIdParse = z.uuid().safeParse(req.params.planId);
+    if (!planIdParse.success) {
+      res.status(400).json({ error: 'Bad request' });
+      return;
+    }
+    const planId = planIdParse.data;
+
+    try {
+      if (!(await isPlanOwnedByUser(db, planId, userId))) {
+        res.status(404).json({ error: 'Plan not found' });
+        return;
+      }
+
+      const [settingsRow, data] = await Promise.all([getUserSettings(db, userId), getProjection(db, planId)]);
+
+      res.json(projectionResponseSchema.parse({ ...data, currency: resolveCurrency(settingsRow?.currency) }));
+    } catch (error) {
+      console.error('[plans] projection read failed:', { userId, planId, error: (error as Error)?.message });
       res.status(503).json({ error: 'Service unavailable' });
     }
   });
@@ -445,7 +622,10 @@ export function createPlansRouter({ env, db, agent, model, createDraft, activate
    * of the plan's current step — both reject with a 409 when `stepId` isn't
    * the plan's own current step, the same tool-level rejection the agent's
    * own `start_step`/`complete_step` tool calls enforce (AC: "the tool
-   * itself rejects the call, not just a UI-level guard").
+   * itself rejects the call, not just a UI-level guard"). Bug fix
+   * (user-reported, live): also 409s when the plan itself isn't `active`
+   * yet (`PlanNotActiveError`) — a `draft` plan awaiting review must not
+   * let its current step be started/completed early.
    */
   router.post('/:planId/steps/:stepId/start', async (req, res) => {
     const userId = req.session.userId!;
@@ -477,12 +657,16 @@ export function createPlansRouter({ env, db, agent, model, createDraft, activate
       // even though their discovery answers were in German.
       const threadId = buildPlanThreadId(planId);
       const replyLanguage = await detectUserReplyLanguage(agent, buildDiscoveryThreadId(userId));
-      let chatMessage = await buildStartStepAckMessage(model, classify, threadId, replyLanguage, result.step.title);
+      // Bug fix (user-reported, live): this thread's own previous start
+      // acknowledgments, quoted back to the model as a no-repeat rule
+      // (`buildStartStepAckMessage`'s own doc comment).
+      const recentAckMessages = await getRecentStartStepAckTexts(agent, threadId, START_STEP_ACK_HISTORY_LIMIT);
+      let chatMessage = await buildStartStepAckMessage(model, classify, threadId, replyLanguage, result.step.title, recentAckMessages);
       if (chatMessage) {
         try {
           await agent.updateState(
             { configurable: { thread_id: threadId } },
-            { messages: [new AIMessage({ id: chatMessage.id, content: chatMessage.content })] },
+            { messages: [new AIMessage({ id: chatMessage.id, content: chatMessage.content, additional_kwargs: { [STEP_START_ACK_KWARG]: true } })] },
           );
         } catch (error) {
           // Fail open, same as every other branch of this best-effort
@@ -498,6 +682,10 @@ export function createPlansRouter({ env, db, agent, model, createDraft, activate
     } catch (error) {
       if (error instanceof StepNotCurrentError) {
         res.status(409).json({ error: 'Step is not this plan\'s current step' });
+        return;
+      }
+      if (error instanceof PlanNotActiveError) {
+        res.status(409).json({ error: 'Plan is not active yet' });
         return;
       }
       console.error('[plans] start_step failed:', { userId, planId, error: (error as Error)?.message });
@@ -526,6 +714,10 @@ export function createPlansRouter({ env, db, agent, model, createDraft, activate
     } catch (error) {
       if (error instanceof StepNotCurrentError) {
         res.status(409).json({ error: 'Step is not this plan\'s current step' });
+        return;
+      }
+      if (error instanceof PlanNotActiveError) {
+        res.status(409).json({ error: 'Plan is not active yet' });
         return;
       }
       console.error('[plans] complete_step failed:', { userId, planId, error: (error as Error)?.message });

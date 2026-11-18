@@ -595,6 +595,87 @@ describe('handleGenerateIdeas (corrupted batch is rejected and retried, then a c
   });
 });
 
+// Bug fix (user-reported, live): "idea rejected (slot 0, attempt 2/2,
+// hardFailures=rawIntakeTokenLeak)" failed the whole batch even though the
+// other slot was fine. Table-driven (one `it.each`, per the user's own
+// request): the retry prompt now carries the concrete reason, one slot
+// exhausting its retries drops only that slot, and only a fully-failed
+// batch (every slot exhausted) still throws the existing neutral error.
+describe('handleGenerateIdeas (bug fix: per-slot retry reason, partial-batch success, whole-batch failure)', () => {
+  it.each<{
+    name: string;
+    run: (userId: string, intakeRow: IntakeResponse) => Promise<void>;
+  }>([
+    {
+      name: "a slot's retry prompt carries the concrete previous-failure reason, naming the exact leaked token",
+      run: async (userId, intakeRow) => {
+        const leaked = buildValidDraft(intakeRow, {
+          title: 'Bad',
+          rationale: ['Fits your weeklyTimeAvailability.', 'Good otherwise.'],
+        });
+        const writeIdea = vi.fn();
+        writeIdea.mockResolvedValueOnce(leaked);
+        writeIdea.mockResolvedValueOnce(buildValidDraft(intakeRow, { title: 'Good' }));
+        const deps = baseDeps({ env: { MISTRAL_API_KEY: 'test-key', IDEAS_PER_BATCH: 1, DAILY_SEARCH_BUDGET: 500 }, writeIdea });
+
+        const result = await handleGenerateIdeas(deps, configFor(userId), { replyLanguage: 'en' });
+
+        expect(result).toHaveLength(1);
+        expect(writeIdea).toHaveBeenCalledTimes(2);
+        const retryReasons = writeIdea.mock.calls[1]?.[7] as string[] | undefined;
+        expect(retryReasons?.length).toBe(1);
+        expect(retryReasons?.[0]).toContain('weeklyTimeAvailability');
+      },
+    },
+    {
+      name: 'one slot exhausting its own retry budget drops only that slot and returns the rest (never fails the whole batch)',
+      run: async (userId, intakeRow) => {
+        // Keyed by the seed's own `angle` (not call order — slots run in
+        // parallel via `Promise.allSettled`): slot 0 ("angle 1") always gets
+        // a draft that leaks a raw token, every attempt; slot 1 ("angle 2")
+        // always gets a valid, distinctly-titled draft.
+        const writeIdea = vi.fn().mockImplementation(async (_row: unknown, _lang: unknown, seed: { angle: string }) =>
+          seed.angle === 'angle 1'
+            ? buildValidDraft(intakeRow, { title: 'Bad', rationale: ['Fits your weeklyTimeAvailability.', 'Good otherwise.'] })
+            : buildValidDraft(intakeRow, { title: 'Good' }),
+        );
+        const deps = baseDeps({ env: { MISTRAL_API_KEY: 'test-key', IDEAS_PER_BATCH: 2, DAILY_SEARCH_BUDGET: 500 }, writeIdea });
+
+        const result = await handleGenerateIdeas(deps, configFor(userId), { replyLanguage: 'en' });
+
+        expect(result).toHaveLength(1);
+        expect(result[0]!.title).toBe('Good');
+        // 2 attempts for the dropped slot + 1 for the one that succeeded on
+        // its first attempt.
+        expect(writeIdea).toHaveBeenCalledTimes(3);
+        const rows = await db.select().from(ideas).where(eq(ideas.userId, userId));
+        expect(rows).toHaveLength(1);
+      },
+    },
+    {
+      name: 'every slot exhausting its own retry budget still fails the whole run with the existing neutral error',
+      run: async (userId, intakeRow) => {
+        const leaked = buildValidDraft(intakeRow, { title: 'Bad', rationale: ['Fits your weeklyTimeAvailability.', 'Good otherwise.'] });
+        const writeIdea = vi.fn().mockResolvedValue(leaked);
+        const deps = baseDeps({ env: { MISTRAL_API_KEY: 'test-key', IDEAS_PER_BATCH: 2, DAILY_SEARCH_BUDGET: 500 }, writeIdea });
+
+        await expect(handleGenerateIdeas(deps, configFor(userId), { replyLanguage: 'en' })).rejects.toThrow();
+
+        const rows = await db.select().from(ideas).where(eq(ideas.userId, userId));
+        expect(rows).toHaveLength(0);
+      },
+    },
+  ])('$name', async ({ run }) => {
+    const userId = await createTestUser();
+    try {
+      const intakeRow = await upsertIntake(db, userId, intakeArgs({ startingBudgetRange: 'under_100' }));
+      await run(userId, intakeRow);
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+});
+
 // Story 2.5: same `sourceEvidenceLooksBlockedOrHidden` check as the
 // baseline rate, applied to the demand-evidence citation/quote too (AC:
 // "login-walled salary sites ... are never used as a source" — not scoped
@@ -799,6 +880,9 @@ describe('handleGenerateIdeas (Story 2.4: regenerating appends, never deletes or
         expect.anything(),
         expect.arrayContaining(['Old idea', 'Kept idea']),
         expect.any(AbortSignal),
+        // Bug fix (item 2): the previous attempt's hard-failure reasons for
+        // this slot — empty on a first, successfully-accepted attempt.
+        [],
       );
     } finally {
       await cleanUp(userId);

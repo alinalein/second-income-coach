@@ -360,6 +360,9 @@ describe('createIdeasRouter POST /generate', () => {
         expect.anything(),
         [],
         expect.any(AbortSignal),
+        // Bug fix (item 2): the previous attempt's hard-failure reasons for
+        // this slot — empty on a first, successfully-accepted attempt.
+        [],
       );
     } finally {
       await cleanUp(userId);
@@ -633,6 +636,31 @@ describe('createIdeasRouter POST /:id/status', () => {
       const secondGet = await request(app).get('/api/ideas');
       expect(secondGet.body.ideas.map((idea: { id: string }) => idea.id)).not.toContain(ids[1]);
     } finally {
+      await cleanUp(userId);
+    }
+  });
+
+  // Bug fix (user-reported, live): rejecting an idea that already has a
+  // `plans` row is refused (409) instead of silently leaving that plan
+  // listed in `GET /api/plans` but permanently inaccessible (that route
+  // already 404s a non-`selected`/`bookmarked` idea's `/select/:ideaId`).
+  it('returns 409 and leaves the idea unchanged when rejecting an idea that already has a plan', async () => {
+    const userId = await createTestUser();
+    try {
+      const ids = await insertFiveIdeas(userId);
+      await db.update(ideas).set({ status: 'bookmarked' }).where(eq(ideas.id, ids[0]!));
+      await db.insert(plans).values({ ideaId: ids[0]!, userId, status: 'draft', threadId: `plan:${randomUUID()}` });
+
+      const res = await request(buildTestApp(fakeAgent(), userId)).post(`/api/ideas/${ids[0]}/status`).send({ status: 'rejected' });
+
+      expect(res.status).toBe(409);
+      const [row] = await db.select({ status: ideas.status }).from(ideas).where(eq(ideas.id, ids[0]!));
+      expect(row?.status).toBe('bookmarked');
+    } finally {
+      // This test is the only one in this file that inserts a `plans` row
+      // directly — `cleanUp`'s own `delete(ideas)` would otherwise violate
+      // `plans_idea_id_ideas_id_fk`.
+      await db.delete(plans).where(eq(plans.userId, userId));
       await cleanUp(userId);
     }
   });

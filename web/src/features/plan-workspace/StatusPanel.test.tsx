@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, cleanup } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
 import type { CurrentStepResponse } from '@app/shared';
 import { StatusPanel } from './StatusPanel';
 
@@ -61,7 +61,7 @@ describe('StatusPanel (AC: only current+next step visible)', () => {
       mockFetch({ '/api/plans/plan-1/current-step': () => new Response(JSON.stringify(body), { status: 200 }) }),
     );
 
-    render(<StatusPanel planId="plan-1" ideaTitle="Resell thrifted clothing" />);
+    render(<StatusPanel planId="plan-1" ideaTitle="Resell thrifted clothing" planStatus="active" />);
 
     // UI fix (user-reported): "it should not say 'your plan', it should say
     // 'your plan for <idea>'" — the idea's own title, not a bare generic
@@ -82,9 +82,37 @@ describe('StatusPanel (AC: only current+next step visible)', () => {
     // Spec 2.12 AC7: "Next (locked)" is renamed "Next step".
     const nextRegion = screen.getByText('Next step').closest('div')!;
     expect(nextRegion).toHaveTextContent('List a second item');
-    // The next step's own description never renders — only its title
-    // (AC: "only ... immediate-next step are visible", not its full detail).
-    expect(screen.queryByText('Repeat.')).not.toBeInTheDocument();
+    // Bug fix (user-reported): the next step's own description now renders
+    // here too (previously shown only on the projection card, duplicating
+    // it there) — still only current+next steps are ever exposed at all.
+    expect(screen.getByText('Repeat.')).toBeInTheDocument();
+  });
+
+  // Bug fix (user-reported): the next step's own full description was
+  // shown — it must be a short preview (word-boundary-truncated, ending in
+  // an ellipsis), never the complete text.
+  it('shows a truncated preview (not the full text) of a long next-step description', async () => {
+    const body: CurrentStepResponse = {
+      current: fakeStep(),
+      next: {
+        id: 'step-2',
+        stepOrder: 1,
+        title: 'List a second item',
+        description: ['This is a very long description that definitely exceeds the sixty character cutoff for sure.'],
+        dayOffset: 2,
+        status: 'pending',
+        startedAt: null,
+      },
+      gapDetected: false,
+      missedDays: 0,
+      checkedInToday: false,
+    };
+    vi.stubGlobal('fetch', mockFetch({ '/api/plans/plan-1/current-step': () => new Response(JSON.stringify(body), { status: 200 }) }));
+
+    render(<StatusPanel planId="plan-1" ideaTitle="Resell thrifted clothing" planStatus="active" />);
+
+    expect(await screen.findByText('This is a very long description that definitely exceeds the…')).toBeInTheDocument();
+    expect(screen.queryByText(/sixty character cutoff for sure/)).not.toBeInTheDocument();
   });
 
   it('renders no next region when the current step is the plan\'s last one', async () => {
@@ -100,9 +128,60 @@ describe('StatusPanel (AC: only current+next step visible)', () => {
       mockFetch({ '/api/plans/plan-1/current-step': () => new Response(JSON.stringify(body), { status: 200 }) }),
     );
 
-    render(<StatusPanel planId="plan-1" ideaTitle="Resell thrifted clothing" />);
+    render(<StatusPanel planId="plan-1" ideaTitle="Resell thrifted clothing" planStatus="active" />);
 
     expect(await screen.findByText('Last step')).toBeInTheDocument();
     expect(screen.queryByText('Next step')).not.toBeInTheDocument();
+  });
+});
+
+// Bug fix (user-reported, live), item 2: "the projection card refetches ...
+// after Start this step [or] Mark as done" — `StatusPanel` is the one
+// surface that owns those two actions (via `StepActions`); this confirms it
+// notifies `onPlanActivityChanged` (in addition to its own refetch) once
+// either one actually succeeds.
+describe('StatusPanel (AC follow-up: Start/Complete notify onPlanActivityChanged)', () => {
+  it.each([
+    [
+      'Start this step',
+      '/api/plans/plan-1/steps/step-1/start',
+      JSON.stringify({ step: { ...fakeStep(), startedAt: new Date().toISOString() } }),
+    ],
+    [
+      'Mark as done',
+      '/api/plans/plan-1/steps/step-1/complete',
+      JSON.stringify({ step: { ...fakeStep(), status: 'completed' }, planCompleted: false }),
+    ],
+  ] as const)('clicking "%s" calls onPlanActivityChanged once it succeeds', async (buttonLabel, actionPath, actionResponseBody) => {
+    const body: CurrentStepResponse = { current: fakeStep(), next: null, gapDetected: false, missedDays: 0, checkedInToday: false };
+    const onPlanActivityChanged = vi.fn();
+    vi.stubGlobal(
+      'fetch',
+      mockFetch({
+        '/api/plans/plan-1/current-step': () => new Response(JSON.stringify(body), { status: 200 }),
+        [actionPath]: () => new Response(actionResponseBody, { status: 200 }),
+      }),
+    );
+
+    render(<StatusPanel planId="plan-1" ideaTitle="Resell thrifted clothing" planStatus="active" onPlanActivityChanged={onPlanActivityChanged} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: buttonLabel }));
+
+    await waitFor(() => expect(onPlanActivityChanged).toHaveBeenCalledTimes(1));
+  });
+});
+
+// Bug fix (user-reported, live): a plan still awaiting human review/
+// activation must not let its current step be started/completed early —
+// the backend rejects it too (`PlanNotActiveError`), this is the UI mirror.
+describe('StatusPanel (AC follow-up: Start/Mark-as-done disabled before the plan is active)', () => {
+  it('disables both buttons while planStatus is "draft"', async () => {
+    const body: CurrentStepResponse = { current: fakeStep(), next: null, gapDetected: false, missedDays: 0, checkedInToday: false };
+    vi.stubGlobal('fetch', mockFetch({ '/api/plans/plan-1/current-step': () => new Response(JSON.stringify(body), { status: 200 }) }));
+
+    render(<StatusPanel planId="plan-1" ideaTitle="Resell thrifted clothing" planStatus="draft" />);
+
+    expect(await screen.findByRole('button', { name: 'Start this step' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Mark as done' })).toBeDisabled();
   });
 });

@@ -23,3 +23,19 @@ export function assertCurrentStep(steps: readonly PlanStepRow[], stepId: string)
   }
   return current;
 }
+
+/**
+ * Bug fix (user-reported, live): a plan still awaiting human confirmation
+ * (`draft` — Story 3.2's `PlanActivationPanel`) let its own current step be
+ * started/completed anyway, since neither tool checked plan status at all,
+ * only step status. Same "the tool itself rejects the call, not just a
+ * UI-level guard" precedent as `assertCurrentStep` above — the route maps
+ * this to a 409 too.
+ */
+export class PlanNotActiveError extends Error {}
+
+export function assertPlanActive(status: string): void {
+  if (status !== 'active') {
+    throw new PlanNotActiveError(`Plan is "${status}", not active — step actions are blocked until it is reviewed and activated`);
+  }
+}

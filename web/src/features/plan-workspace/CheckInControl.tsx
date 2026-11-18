@@ -12,6 +12,17 @@ export interface CheckInControlProps {
    * `get_current_step` (`checkedInToday`), so a page reload the same day
    * still starts in the answered state. */
   checkedInToday: boolean;
+  /** Story 4.1 (AC, follow-up), item 2: fires the instant the check-in
+   * write succeeds — before the "thanks" animation plays. `EnergyCheckInPopup`
+   * uses this to refresh the projection card right away, not after the
+   * multi-second confirmation sequence below. */
+  onRecorded?: () => void;
+  /** Story 4.1 (AC, follow-up): fires once this component reaches its
+   * final `'done'` state — either immediately (`checkedInToday` was already
+   * true) or after the confirmation sequence finishes. `EnergyCheckInPopup`
+   * uses this to close itself ("after choosing, show the short thanks and
+   * close"). */
+  onDone?: () => void;
 }
 
 const ENERGY_LEVELS: readonly CheckInEnergy[] = ['low', 'medium', 'high'];
@@ -33,7 +44,7 @@ type Status = 'idle' | 'sending' | 'sent' | 'done' | 'failed';
  * tap records the energy level via `POST /api/plans/:planId/check-in`
  * (`record_check_in`, AD-4: a plain deterministic write, never an LLM call).
  */
-export function CheckInControl({ planId, checkedInToday }: CheckInControlProps) {
+export function CheckInControl({ planId, checkedInToday, onRecorded, onDone }: CheckInControlProps) {
   const { t } = useTranslation('plan');
   // `checkedInToday` already true at mount (e.g. a reload later the same
   // day) goes straight to `done` — the transient "Thanks" confirmation is
@@ -46,11 +57,24 @@ export function CheckInControl({ planId, checkedInToday }: CheckInControlProps) 
   const [promptVisible, setPromptVisible] = React.useState(!checkedInToday);
   const [confirmationVisible, setConfirmationVisible] = React.useState(false);
   const timeoutIdsRef = React.useRef<ReturnType<typeof setTimeout>[]>([]);
+  // Kept in refs (same precedent as `PlanWorkspace.tsx`'s own
+  // `onPlanLoadedRef`) so a new callback identity on every parent render
+  // never changes when these actually fire — only the real state
+  // transitions below do.
+  const onRecordedRef = React.useRef(onRecorded);
+  React.useEffect(() => {
+    onRecordedRef.current = onRecorded;
+  }, [onRecorded]);
+  const onDoneRef = React.useRef(onDone);
+  React.useEffect(() => {
+    onDoneRef.current = onDone;
+  }, [onDone]);
 
   React.useEffect(() => {
     if (checkedInToday) {
       setStatus('done');
       setPromptVisible(false);
+      onDoneRef.current?.();
     }
   }, [checkedInToday]);
 
@@ -83,13 +107,17 @@ export function CheckInControl({ planId, checkedInToday }: CheckInControlProps) 
           setStatus('failed');
           return;
         }
+        onRecordedRef.current?.();
         setPromptVisible(false);
         after(FADE_MS, () => {
           setStatus('sent');
           setConfirmationVisible(true);
           after(CONFIRMATION_VISIBLE_MS, () => {
             setConfirmationVisible(false);
-            after(FADE_MS, () => setStatus('done'));
+            after(FADE_MS, () => {
+              setStatus('done');
+              onDoneRef.current?.();
+            });
           });
         });
       })

@@ -7,6 +7,8 @@ import { MessageCost } from '../../chat/MessageCost';
 import { createMessageFeedbackItem } from '../../chat/MessageFeedback';
 import { StatusPanel } from './StatusPanel';
 import { PlanActivationPanel } from './PlanActivationPanel';
+import { ProjectionCard } from './ProjectionCard';
+import { EnergyCheckInPopup } from './EnergyCheckInPopup';
 
 /**
  * Spec 2.12 AC2: the same time-based determinate-bar shape as
@@ -51,6 +53,19 @@ export interface PlanWorkspaceProps {
    * navigated here — never re-fetched, since the idea's own title doesn't
    * change. */
   ideaTitle: string;
+  /**
+   * Bug fix (user-reported, live): "My plans" in the sidebar didn't show a
+   * just-selected idea's brand-new plan. `App.tsx` bumps its own
+   * `plansRefreshKey` the moment navigation *into* this workspace starts
+   * (before the plan actually exists yet, since creation is this
+   * component's own lazy `POST /select/:ideaId` below) — so the sidebar's
+   * `GET /api/plans` fetch that triggers raced ahead of the real creation
+   * and never ran again afterward. This fires once the fetch above actually
+   * resolves (new or pre-existing plan alike — idempotent either way),
+   * letting the caller re-trigger that same refresh at the moment the data
+   * is actually ready.
+   */
+  onPlanLoaded?: (plan: PlanResponse) => void;
 }
 
 /**
@@ -68,7 +83,7 @@ export interface PlanWorkspaceProps {
  * header. 2.9 AC (global nav): there is no "Back to ideas" control here —
  * every navigation action lives in the app-wide sidebar now.
  */
-export function PlanWorkspace({ ideaId, ideaTitle }: PlanWorkspaceProps) {
+export function PlanWorkspace({ ideaId, ideaTitle, onPlanLoaded }: PlanWorkspaceProps) {
   const { t } = useTranslation('plan');
   const [plan, setPlan] = React.useState<PlanResponse | null>(null);
   const [loadFailed, setLoadFailed] = React.useState(false);
@@ -80,6 +95,14 @@ export function PlanWorkspace({ ideaId, ideaTitle }: PlanWorkspaceProps) {
   // `incomingMessage` prop (id-guarded there against a later history re-GET
   // that also picks up this same server-persisted message).
   const [incomingMessage, setIncomingMessage] = React.useState<ChatMessage | undefined>(undefined);
+  // Kept in a ref (not the main effect's own dependency array below) so a
+  // new `onPlanLoaded` function identity on every parent render never
+  // re-triggers the lazy `POST /select/:ideaId` fetch — only a genuine
+  // `ideaId` change does that.
+  const onPlanLoadedRef = React.useRef(onPlanLoaded);
+  React.useEffect(() => {
+    onPlanLoadedRef.current = onPlanLoaded;
+  }, [onPlanLoaded]);
   // Live-bug fix (user-reported): dev-only React StrictMode synchronously
   // runs this effect's cleanup and setup twice on mount, to surface exactly
   // this class of bug. The lazy `create_plan` call behind this fetch is not
@@ -150,8 +173,12 @@ export function PlanWorkspace({ ideaId, ideaTitle }: PlanWorkspaceProps) {
         const body: unknown = await res.json();
         const result = planResponseSchema.safeParse(body);
         if (inFlight.cancelled) return;
-        if (result.success) setPlan(result.data);
-        else setLoadFailed(true);
+        if (result.success) {
+          setPlan(result.data);
+          onPlanLoadedRef.current?.(result.data);
+        } else {
+          setLoadFailed(true);
+        }
       })
       .catch(() => {
         if (!inFlight.cancelled) {
@@ -171,6 +198,15 @@ export function PlanWorkspace({ ideaId, ideaTitle }: PlanWorkspaceProps) {
     () => (plan ? [MessageCost, createMessageFeedbackItem(`/api/plans/${plan.id}/messages`)] : []),
     [plan],
   );
+
+  // Story 4.4 (AC, follow-up), item 2: a small shared refresh signal — bumped
+  // after Start/Complete (via `StatusPanel`'s `onPlanActivityChanged`) or a
+  // check-in answer (via `EnergyCheckInPopup`'s `onCheckInRecorded`), and
+  // consumed by `ProjectionCard`'s own `key` below to force a fresh fetch.
+  // No workspace restructuring — one new state value, two existing callback
+  // props, one `key` attribute.
+  const [projectionRefreshKey, setProjectionRefreshKey] = React.useState(0);
+  const refreshProjection = React.useCallback(() => setProjectionRefreshKey((key) => key + 1), []);
 
   return (
     // Bug fix (user-reported): "the chat should have the full height of the
@@ -219,6 +255,12 @@ export function PlanWorkspace({ ideaId, ideaTitle }: PlanWorkspaceProps) {
           {plan.status === 'draft' ? (
             <PlanActivationPanel planId={plan.id} onActivated={(activatedPlan) => setPlan(activatedPlan)} />
           ) : null}
+          {/* Story 4.1 (AC, follow-up): the energy pop-up — mounted here
+           * (not a permanent status-column control) so it only ever exists
+           * on the plan-workspace route, never during intake or ideas; a
+           * Radix dialog portals itself regardless of where it sits in this
+           * tree, so its position here doesn't affect layout. */}
+          <EnergyCheckInPopup planId={plan.id} onCheckInRecorded={refreshProjection} />
           {/* 2.9 AC: layout-preview.html's own layout — status column beside
            * the chat, side by side, on a desktop width; only a narrow
            * screen stacks the status panel above the chat as a compact
@@ -232,9 +274,20 @@ export function PlanWorkspace({ ideaId, ideaTitle }: PlanWorkspaceProps) {
              * height, while the chat column (no override) stretches to the
              * row's full height. */}
             <div className="flex flex-col gap-4 sm:w-64 sm:shrink-0 sm:self-start">
-              <StatusPanel planId={plan.id} ideaTitle={ideaTitle} onStepStarted={setIncomingMessage} />
+              <StatusPanel
+                planId={plan.id}
+                ideaTitle={ideaTitle}
+                planStatus={plan.status}
+                onStepStarted={setIncomingMessage}
+                onPlanActivityChanged={refreshProjection}
+              />
               {/* Code Map: "projection card extension point (a slot in the
-               * sidebar/header) ... renders nothing until 4.4". */}
+               * sidebar/header) ... renders nothing until 4.4". Story 4.4
+               * fills it here — this file's own layout is otherwise
+               * unchanged. `key` forces a fresh mount/fetch on the shared
+               * refresh signal above (item 2) — no internal change to
+               * `ProjectionCard` itself needed. */}
+              <ProjectionCard key={projectionRefreshKey} planId={plan.id} />
             </div>
             <div className="flex min-h-0 flex-1 flex-col">
               {/* Story 5.2/5.3: `MessageCost` + `MessageFeedback` registered

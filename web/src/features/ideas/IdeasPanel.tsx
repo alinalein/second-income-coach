@@ -1324,6 +1324,10 @@ export function IdeasPanel({
     if (onlyBookmarked) return ideas.filter((idea) => idea.status === 'bookmarked' && !idea.hasPlan);
     return ideas.filter((idea) => idea.status === 'suggested');
   }, [ideas, onlyIdeaId, onlyBookmarked]);
+  // UX fix (user-reported): "Generate new ideas" is a "New ideas"-view-only
+  // action (it replaces the `suggested` batch) — the "Bookmarked" views
+  // (`onlyBookmarked`/`onlyIdeaId`) never show it.
+  const isNewIdeasView = !onlyIdeaId && !onlyBookmarked;
 
   return (
     <>
@@ -1431,8 +1435,12 @@ export function IdeasPanel({
          * its own real height and the layout never jumps when a generation
          * starts or ends.
          */}
-        {phase !== 'loading' ? (
-          <CardFooter className="flex flex-col items-start gap-3">
+        {phase !== 'loading' && isNewIdeasView ? (
+          // UX fix (user-reported, live): back to the original Story 2.2
+          // side-by-side layout (`flex-row`, button `shrink-0`, the status
+          // column taking the remaining width) — a later round stacked
+          // these (`flex-col`), which regressed it back under the button.
+          <CardFooter className="flex flex-row items-start gap-4">
             {/* Spec 2.12 AC1: called with no arguments here — a manual
              * click always takes the unchanged, single-stage timing (never
              * `isAuto`); passing `handleGenerate` directly as the handler
@@ -1441,35 +1449,37 @@ export function IdeasPanel({
             <Button
               type="button"
               size="sm"
-              className="gap-2"
+              className="shrink-0 gap-2"
               disabled={generating || generateBlocked}
               onClick={() => handleGenerate()}
             >
               {generating ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : null}
               {generating ? t('generatingButton') : ideas.length > 0 ? t('generateNewButton') : t('generateButton')}
             </Button>
-            {/* Story 2.11 (AC5/AC6): a plain limit notice, never worded
-             * like an error. */}
-            {generateBlocked ? (
-              <Badge variant="muted" role="status" className="whitespace-normal text-left">
-                {generateLimit?.reason === 'shared_budget'
-                  ? t('limit.sharedBudgetExhausted')
-                  : t('limit.userLimitReached', { limit: generateLimit?.limit, resetTime: generateLimitResetTime })}
-              </Badge>
-            ) : null}
-            {/* Story 2.2 follow-up fix 2: an indeterminate (no percentage) progress
-             * indicator while POST /api/ideas/generate is pending — a live region
-             * so assistive tech announces the status/hint text as it appears,
-             * not just on first render. */}
-            <div
-              className={`flex w-full flex-1 flex-col gap-2 transition-opacity duration-200 ${generating ? 'opacity-100' : 'opacity-0'}`}
-              aria-live="polite"
-              role={generating ? 'status' : undefined}
-              aria-hidden={!generating}
-            >
-              <DeterminateProgressBar percent={progress} label={generatingStatusLabel} />
-              <p className="text-sm font-medium">{generatingStatusLabel}</p>
-              <p className="text-xs text-muted-foreground">{t('generatingHint')}</p>
+            <div className="flex flex-1 flex-col gap-2">
+              {/* Story 2.11 (AC5/AC6): a plain limit notice, never worded
+               * like an error. */}
+              {generateBlocked ? (
+                <Badge variant="muted" role="status" className="whitespace-normal text-left">
+                  {generateLimit?.reason === 'shared_budget'
+                    ? t('limit.sharedBudgetExhausted')
+                    : t('limit.userLimitReached', { limit: generateLimit?.limit, resetTime: generateLimitResetTime })}
+                </Badge>
+              ) : null}
+              {/* Story 2.2 follow-up fix 2: an indeterminate (no percentage) progress
+               * indicator while POST /api/ideas/generate is pending — a live region
+               * so assistive tech announces the status/hint text as it appears,
+               * not just on first render. */}
+              <div
+                className={`flex flex-1 flex-col gap-2 transition-opacity duration-200 ${generating ? 'opacity-100' : 'opacity-0'}`}
+                aria-live="polite"
+                role={generating ? 'status' : undefined}
+                aria-hidden={!generating}
+              >
+                <DeterminateProgressBar percent={progress} label={generatingStatusLabel} />
+                <p className="text-sm font-medium">{generatingStatusLabel}</p>
+                <p className="text-xs text-muted-foreground">{t('generatingHint')}</p>
+              </div>
             </div>
           </CardFooter>
         ) : null}

@@ -1,7 +1,7 @@
 import { StrictMode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, cleanup, waitFor, within } from '@testing-library/react';
-import type { PlanResponse, CurrentStepResponse } from '@app/shared';
+import type { PlanResponse, CurrentStepResponse, ProjectionResponse } from '@app/shared';
 import { PlanWorkspace } from './PlanWorkspace';
 
 function mockFetch(responses: Record<string, Response | (() => Response)>) {
@@ -19,9 +19,23 @@ function fakePlan(): PlanResponse {
   return { id: 'plan-1', ideaId: 'idea-1', status: 'draft', threadId: 'plan:plan-1', createdAt: now, updatedAt: now };
 }
 
+// Story 4.4: `ProjectionCard` now fills the sidebar's projection extension
+// point too, fetching this endpoint on mount alongside `StatusPanel`'s own
+// `current-step` read — mocked here so these pre-existing (Story 3.1)
+// tests keep passing unchanged.
+function fakeProjection(): ProjectionResponse {
+  return { estimate: { amountMinorUnits: 0, currencyCode: 'EUR' }, currency: 'EUR', progressRatio: 0, unlockedOpportunity: null };
+}
+
+// Story 4.1 (AC, follow-up): `EnergyCheckInPopup` now also fetches this on
+// mount — `answeredToday: true` here so these pre-existing (Story 3.1/4.4)
+// tests never see the pop-up open and don't need to account for it.
+const CHECK_IN_STATUS_ANSWERED = { '/api/plans/check-in-status': () => new Response(JSON.stringify({ answeredToday: true }), { status: 200 }) };
+
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  window.localStorage.clear();
 });
 
 // Code Map: "`PlanWorkspace` fetched via `POST /api/plans/select/:ideaId`
@@ -35,8 +49,10 @@ describe('PlanWorkspace (AC: lazy create-or-fetch wires ChatThread to the plan t
     const fetchMock = mockFetch({
       '/api/plans/select/idea-1': () => new Response(JSON.stringify(plan), { status: 200 }),
       '/api/plans/plan-1/current-step': () => new Response(JSON.stringify(currentStep), { status: 200 }),
+      '/api/plans/plan-1/projection': () => new Response(JSON.stringify(fakeProjection()), { status: 200 }),
       '/api/plans/plan-1/messages': () => new Response(JSON.stringify({ messages: [] }), { status: 200 }),
       '/api/plans/plan-1/activate': () => new Response(JSON.stringify({ review: null }), { status: 200 }),
+      ...CHECK_IN_STATUS_ANSWERED,
     });
     vi.stubGlobal('fetch', fetchMock);
 
@@ -63,8 +79,10 @@ describe('PlanWorkspace (AC: lazy create-or-fetch wires ChatThread to the plan t
     const fetchMock = mockFetch({
       '/api/plans/select/idea-1': () => new Response(JSON.stringify(plan), { status: 200 }),
       '/api/plans/plan-1/current-step': () => new Response(JSON.stringify(currentStep), { status: 200 }),
+      '/api/plans/plan-1/projection': () => new Response(JSON.stringify(fakeProjection()), { status: 200 }),
       '/api/plans/plan-1/messages': () => new Response(JSON.stringify({ messages: [] }), { status: 200 }),
       '/api/plans/plan-1/activate': () => new Response(JSON.stringify({ review: null }), { status: 200 }),
+      ...CHECK_IN_STATUS_ANSWERED,
     });
     vi.stubGlobal('fetch', fetchMock);
 
@@ -93,6 +111,33 @@ describe('PlanWorkspace (AC: lazy create-or-fetch wires ChatThread to the plan t
     expect(fetchMock).not.toHaveBeenCalledWith(expect.stringContaining('/current-step'), expect.anything());
     expect(fetchMock).not.toHaveBeenCalledWith(expect.stringContaining('/messages'), expect.anything());
   });
+
+  // Bug fix (user-reported, live): the sidebar's "My plans" refresh (keyed
+  // off `App.tsx`'s `plansRefreshKey`) fired the moment navigation into this
+  // workspace *started* — before this component's own lazy
+  // `POST /select/:ideaId` below had actually created the plan, so a
+  // brand-new plan never showed up there. `onPlanLoaded` lets the caller
+  // re-trigger that same refresh once the plan data is actually ready.
+  it('calls onPlanLoaded with the resolved plan once POST /select/:ideaId succeeds', async () => {
+    const plan = fakePlan();
+    const currentStep: CurrentStepResponse = { current: null, next: null, gapDetected: false, missedDays: 0, checkedInToday: false };
+    const fetchMock = mockFetch({
+      '/api/plans/select/idea-1': () => new Response(JSON.stringify(plan), { status: 200 }),
+      '/api/plans/plan-1/current-step': () => new Response(JSON.stringify(currentStep), { status: 200 }),
+      '/api/plans/plan-1/projection': () => new Response(JSON.stringify(fakeProjection()), { status: 200 }),
+      '/api/plans/plan-1/messages': () => new Response(JSON.stringify({ messages: [] }), { status: 200 }),
+      '/api/plans/plan-1/activate': () => new Response(JSON.stringify({ review: null }), { status: 200 }),
+      ...CHECK_IN_STATUS_ANSWERED,
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const onPlanLoaded = vi.fn();
+
+    render(<PlanWorkspace ideaId="idea-1" ideaTitle="Resell thrifted clothing" onPlanLoaded={onPlanLoaded} />);
+
+    await waitFor(() => {
+      expect(onPlanLoaded).toHaveBeenCalledWith(plan);
+    });
+  });
 });
 
 // Spec 2.12 AC2: the old indeterminate spinner is replaced by the same
@@ -115,6 +160,8 @@ describe('PlanWorkspace (Spec 2.12 AC2: determinate bar while the plan is create
         ['/api/plans/plan-1/current-step', currentStep],
         ['/api/plans/plan-1/messages', { messages: [] }],
         ['/api/plans/plan-1/activate', { review: null }],
+        ['/api/plans/check-in-status', { answeredToday: true }],
+        ['/api/plans/plan-1/projection', fakeProjection()],
       ].find(([key]) => url.includes(key as string));
       if (!match) throw new Error(`Unmocked fetch: ${url}`);
       return Promise.resolve(new Response(JSON.stringify(match[1]), { status: 200 }));
@@ -149,6 +196,8 @@ describe('PlanWorkspace (Spec 2.12 AC6: chat column fills height, status column 
       '/api/plans/plan-1/current-step': () => new Response(JSON.stringify(currentStep), { status: 200 }),
       '/api/plans/plan-1/messages': () => new Response(JSON.stringify({ messages: [] }), { status: 200 }),
       '/api/plans/plan-1/activate': () => new Response(JSON.stringify({ review: null }), { status: 200 }),
+      ...CHECK_IN_STATUS_ANSWERED,
+      '/api/plans/plan-1/projection': () => new Response(JSON.stringify(fakeProjection()), { status: 200 }),
     });
     vi.stubGlobal('fetch', fetchMock);
 

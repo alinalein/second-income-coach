@@ -3,7 +3,7 @@ import { tool } from 'langchain';
 import { stepActionToolSchema, planStepResponseSchema, type CompleteStepResponse, type PlanStepResponse } from '@app/shared';
 import type { createDb } from '../../db/client.js';
 import { plans, planSteps } from '../../db/schema/index.js';
-import { assertCurrentStep } from './step-state.js';
+import { assertCurrentStep, assertPlanActive } from './step-state.js';
 import { derivePlanIdFromThreadId, type GetCurrentStepRunConfig } from './get_current_step.js';
 
 type Db = ReturnType<typeof createDb>['db'];
@@ -35,6 +35,9 @@ function toStepResponse(row: PlanStepRow): PlanStepResponse {
  */
 export async function completeStep(db: Db, planId: string, stepId: string): Promise<CompleteStepResponse> {
   return db.transaction(async (tx) => {
+    const [plan] = await tx.select({ status: plans.status }).from(plans).where(eq(plans.id, planId)).limit(1);
+    if (plan) assertPlanActive(plan.status);
+
     const steps = await tx.select().from(planSteps).where(eq(planSteps.planId, planId));
     const current = assertCurrentStep(steps, stepId);
 

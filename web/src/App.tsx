@@ -453,7 +453,15 @@ export function App() {
               />
             </div>
           ) : route.kind === 'plan' ? (
-            <PlanWorkspace ideaId={route.ideaId} ideaTitle={route.ideaTitle ?? ''} />
+            <PlanWorkspace
+              ideaId={route.ideaId}
+              ideaTitle={route.ideaTitle ?? ''}
+              // Bug fix (user-reported, live): the early bump in `navigate`
+              // above races ahead of this workspace's own lazy plan
+              // creation — this re-triggers the sidebar's "My plans" refetch
+              // once the plan actually exists.
+              onPlanLoaded={() => setPlansRefreshKey((k) => k + 1)}
+            />
           ) : (
             <IdeasPanel
               key={ideasCurrencyKey}

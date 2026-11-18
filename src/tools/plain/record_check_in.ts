@@ -1,9 +1,16 @@
-import { eq } from 'drizzle-orm';
+import { and, eq, gte } from 'drizzle-orm';
 import { tool } from 'langchain';
-import { recordCheckInRequestSchema, checkInResponseSchema, type RecordCheckInRequest, type CheckInResponse } from '@app/shared';
+import {
+  recordCheckInRequestSchema,
+  checkInResponseSchema,
+  checkInStatusResponseSchema,
+  type RecordCheckInRequest,
+  type CheckInResponse,
+  type CheckInStatusResponse,
+} from '@app/shared';
 import type { createDb } from '../../db/client.js';
 import { plans, checkIns } from '../../db/schema/index.js';
-import { derivePlanIdFromThreadId, type GetCurrentStepRunConfig } from './get_current_step.js';
+import { derivePlanIdFromThreadId, startOfUtcDay, type GetCurrentStepRunConfig } from './get_current_step.js';
 
 type Db = ReturnType<typeof createDb>['db'];
 type CheckInRow = typeof checkIns.$inferSelect;
@@ -20,6 +27,24 @@ function toCheckInResponse(row: CheckInRow): CheckInResponse {
     note: row.note,
     createdAt: row.createdAt.toISOString(),
   });
+}
+
+/**
+ * Story 4.1 (AC, follow-up): "the energy question is asked at most once per
+ * calendar day per user across ALL plans ... 'already answered today' is
+ * computed from the user's check-ins across plans." A plain, deterministic
+ * read (AD-4) — no `planId` filter at all, by design: a check-in recorded
+ * against any one of the user's plans today counts for every plan. Same UTC
+ * calendar-day precedent as `get_current_step.ts`'s own `startOfUtcDay`
+ * (no-timezone-handling, consistent across this codebase).
+ */
+export async function getCheckInStatus(db: Db, userId: string): Promise<CheckInStatusResponse> {
+  const [row] = await db
+    .select({ id: checkIns.id })
+    .from(checkIns)
+    .where(and(eq(checkIns.userId, userId), gte(checkIns.createdAt, startOfUtcDay(new Date()))))
+    .limit(1);
+  return checkInStatusResponseSchema.parse({ answeredToday: Boolean(row) });
 }
 
 /**

@@ -2,8 +2,8 @@ import { eq } from 'drizzle-orm';
 import { tool } from 'langchain';
 import { stepActionToolSchema, planStepResponseSchema, type StartStepResponse, type PlanStepResponse } from '@app/shared';
 import type { createDb } from '../../db/client.js';
-import { planSteps } from '../../db/schema/index.js';
-import { assertCurrentStep } from './step-state.js';
+import { plans, planSteps } from '../../db/schema/index.js';
+import { assertCurrentStep, assertPlanActive } from './step-state.js';
 import { derivePlanIdFromThreadId, type GetCurrentStepRunConfig } from './get_current_step.js';
 
 type Db = ReturnType<typeof createDb>['db'];
@@ -29,8 +29,17 @@ function toStepResponse(row: PlanStepRow): PlanStepResponse {
  * call mutates this state. Idempotent on repeat calls against the same
  * current step (re-starting just refreshes `startedAt`), since nothing in
  * the ACs requires a second start to be an error.
+ *
+ * Bug fix (user-reported, live): also rejects a plan that isn't `active`
+ * yet (`assertPlanActive`) — a `draft` plan awaiting human confirmation
+ * must not let its own current step be started early. `plan` missing
+ * entirely is left to `assertCurrentStep` below, same defensive precedent
+ * as the rest of this file.
  */
 export async function startStep(db: Db, planId: string, stepId: string): Promise<StartStepResponse> {
+  const [plan] = await db.select({ status: plans.status }).from(plans).where(eq(plans.id, planId)).limit(1);
+  if (plan) assertPlanActive(plan.status);
+
   const steps = await db.select().from(planSteps).where(eq(planSteps.planId, planId));
   assertCurrentStep(steps, stepId);
 
@@ -64,4 +73,4 @@ export function createStartStepTool(db: Db) {
   );
 }
 
-export { StepNotCurrentError } from './step-state.js';
+export { StepNotCurrentError, PlanNotActiveError } from './step-state.js';

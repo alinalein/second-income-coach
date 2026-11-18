@@ -7,9 +7,9 @@ import { users, intake, ideas, plans, planSteps, checkIns } from '../../db/schem
 import { upsertIntake } from './submit_intake.js';
 import { startStep } from './start_step.js';
 import { completeStep } from './complete_step.js';
-import { recordCheckIn } from './record_check_in.js';
+import { recordCheckIn, getCheckInStatus } from './record_check_in.js';
 import { getCurrentStep } from './get_current_step.js';
-import { StepNotCurrentError } from './step-state.js';
+import { StepNotCurrentError, PlanNotActiveError } from './step-state.js';
 
 function intakeArgs(overrides: Partial<SubmitIntakeToolArgs> = {}): SubmitIntakeToolArgs {
   return {
@@ -127,6 +127,28 @@ describe('start_step / complete_step reject on a non-current step (AD-13 state-m
   });
 });
 
+// Bug fix (user-reported, live): a draft plan awaiting review could still
+// have its own current step started/completed — neither tool checked plan
+// status at all, only step status.
+describe('start_step / complete_step reject on a non-active plan (bug fix)', () => {
+  it.each([
+    ['start_step', (planId: string, stepId: string) => startStep(db, planId, stepId)],
+    ['complete_step', (planId: string, stepId: string) => completeStep(db, planId, stepId)],
+  ] as const)('%s rejects a plan that is still draft', async (_name, call) => {
+    const { userId, ideaId } = await createTestUserAndIdea();
+    try {
+      const planId = await createActivePlan(userId, ideaId);
+      await db.update(plans).set({ status: 'draft' }).where(eq(plans.id, planId));
+      const rows = await db.select().from(planSteps).where(eq(planSteps.planId, planId));
+      const current = rows.find((row) => row.status === 'current')!;
+
+      await expect(call(planId, current.id)).rejects.toThrow(PlanNotActiveError);
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+});
+
 describe('startStep (AC: distinct start-of-action write)', () => {
   it('sets startedAt on the current step and leaves its status unchanged', async () => {
     const { userId, ideaId } = await createTestUserAndIdea();
@@ -222,6 +244,34 @@ describe('getCurrentStep.checkedInToday (bug fix: once-per-day check-in ask)', (
       await recordCheckIn(db, planId, { energy: 'high' });
 
       expect((await getCurrentStep(db, planId)).checkedInToday).toBe(true);
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+});
+
+// Story 4.1 (AC, follow-up): "once per calendar day per user across ALL
+// plans" — `getCheckInStatus` takes no `planId` at all (user-scoped only),
+// so recording against any one plan must satisfy it; a check-in from
+// before today's UTC boundary must not.
+describe('getCheckInStatus (AC follow-up: once per calendar day, across every plan)', () => {
+  it.each([
+    ["a check-in recorded today", async (_userId: string, planId: string) => recordCheckIn(db, planId, { energy: 'medium' }), true],
+    [
+      "a check-in from before today's UTC boundary",
+      async (userId: string, planId: string) => {
+        await recordCheckIn(db, planId, { energy: 'medium' });
+        await db.update(checkIns).set({ createdAt: new Date(Date.now() - 25 * 60 * 60 * 1000) }).where(eq(checkIns.userId, userId));
+      },
+      false,
+    ],
+  ] as const)('%s -> answeredToday is %s', async (_name, setup, expected) => {
+    const { userId, ideaId } = await createTestUserAndIdea();
+    try {
+      const planId = await createActivePlan(userId, ideaId);
+      await setup(userId, planId);
+
+      expect((await getCheckInStatus(db, userId)).answeredToday).toBe(expected);
     } finally {
       await cleanUp(userId);
     }

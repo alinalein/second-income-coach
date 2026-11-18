@@ -28,7 +28,7 @@ import {
   SearchServiceUnavailableError,
   type GenerateIdeasDeps,
 } from '../../tools/llm/generate_ideas.js';
-import { setIdeaStatus, IdeaNotFoundError, settableIdeaStatusSchema } from '../../tools/plain/set_idea_status.js';
+import { setIdeaStatus, IdeaNotFoundError, IdeaHasPlanError, settableIdeaStatusSchema } from '../../tools/plain/set_idea_status.js';
 import {
   getUserGenerationCount,
   incrementAndGetUserGenerationCount,
@@ -241,8 +241,10 @@ export function createIdeasRouter({
   // `setIdeaStatus` is never agent-registered (AD-4). `:id` is validated as
   // a UUID and the body against `settableIdeaStatusSchema`; either failure
   // is a 400 with no row changes. An unknown-or-foreign idea id is a 404
-  // (`IdeaNotFoundError`); any other failure (e.g. a lost DB connection) is
-  // a 503, same vocabulary as `GET /` above.
+  // (`IdeaNotFoundError`); rejecting an idea that already has a `plans` row
+  // is a 409 (`IdeaHasPlanError`, bug fix: that plan would otherwise become
+  // permanently inaccessible); any other failure (e.g. a lost DB
+  // connection) is a 503, same vocabulary as `GET /` above.
   router.post('/:id/status', async (req, res) => {
     const userId = req.session.userId!;
 
@@ -259,6 +261,10 @@ export function createIdeasRouter({
     } catch (error) {
       if (error instanceof IdeaNotFoundError) {
         res.status(404).json({ error: 'Idea not found' });
+        return;
+      }
+      if (error instanceof IdeaHasPlanError) {
+        res.status(409).json({ error: 'Idea already has a plan and cannot be rejected' });
         return;
       }
       console.error('[ideas] status update failed:', { userId, error: (error as Error)?.message });

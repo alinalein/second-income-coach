@@ -14,6 +14,7 @@ import type { ClassifyText } from '../../agent/moderation.js';
 import { createActivatePlanGraph } from '../../tools/plain/activate_plan.js';
 import { users, ideas, plans, planSteps, intake, checkIns } from '../../db/schema/index.js';
 import { upsertIntake } from '../../tools/plain/submit_intake.js';
+import { recordCheckIn } from '../../tools/plain/record_check_in.js';
 
 // Bug fix (user-reported, live): Drizzle's `node-postgres` driver wraps the
 // real `pg` error — a genuine unique-violation's `.code` lives at
@@ -371,6 +372,60 @@ describe('createPlansRouter GET /:planId/current-step', () => {
   });
 });
 
+// Story 4.4 (AC: "a plain deterministic tool (AD-4)" exposed user-scoped,
+// same ownership-check precedent as `GET /:planId/current-step` above).
+describe('createPlansRouter GET /:planId/projection', () => {
+  // Security-relevant failure branch: a plan id that exists but belongs to
+  // another user is a 404, never another user's projection.
+  it('returns 404 when the plan does not belong to this user', async () => {
+    const userId = await createTestUser();
+    const otherUserId = await createTestUser();
+    try {
+      const ideaId = await insertIdea(otherUserId, 'selected');
+      const [plan] = await db
+        .insert(plans)
+        .values({ ideaId, userId: otherUserId, status: 'active', threadId: `plan:${randomUUID()}` })
+        .returning();
+
+      const res = await request(buildTestApp(fakeAgent(), userId)).get(`/api/plans/${plan!.id}/projection`);
+
+      expect(res.status).toBe(404);
+    } finally {
+      await cleanUp(userId);
+      await cleanUp(otherUserId);
+    }
+  });
+
+  // AC: "the income estimate reads the currency value from the
+  // `user_settings` row ... EUR by default" — this test user has no
+  // `user_settings` row at all (never created via the real sign-in flow),
+  // same precedent as the other route tests in this file; the route must
+  // still default to EUR rather than fail.
+  it('returns the projection with the estimate in the idea\'s sourced currency and the user\'s default currency', async () => {
+    const userId = await createTestUser();
+    try {
+      const ideaId = await insertIdea(userId, 'selected');
+      const [plan] = await db
+        .insert(plans)
+        .values({ ideaId, userId, status: 'active', threadId: `plan:${randomUUID()}` })
+        .returning();
+      await db.insert(planSteps).values([
+        { planId: plan!.id, stepOrder: 0, title: 'Now', description: ['Do this.'], dayOffset: 0, status: 'current' },
+        { planId: plan!.id, stepOrder: 1, title: 'Next', description: ['Then this.'], dayOffset: 2, status: 'pending' },
+      ]);
+
+      const res = await request(buildTestApp(fakeAgent(), userId)).get(`/api/plans/${plan!.id}/projection`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.currency).toBe('EUR');
+      expect(res.body.estimate.currencyCode).toBe('EUR');
+      expect(res.body.unlockedOpportunity.title).toBe('Next');
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+});
+
 // AC (4.1): "the check-in ... passes through the same moderation ...
 // hooks as any other turn (AD-11)" — `note` is this route's one new
 // user-authored free text, moderated the same `evaluateUserMessage` way
@@ -666,6 +721,54 @@ describe('createPlansRouter GET / (Story 2.9: My-plans list)', () => {
       await cleanUp(otherUserId);
     }
   });
+
+  // Bug fix (user-reported, live): a plan whose idea was later rejected
+  // (an idea/plan combination `set_idea_status.ts` now refuses to create
+  // going forward) must not keep appearing here — it would otherwise be
+  // permanently inaccessible (`POST /select/:ideaId` 404s a rejected idea)
+  // but still shown as if it were openable.
+  it('excludes a plan whose idea is now rejected', async () => {
+    const userId = await createTestUser();
+    try {
+      const ideaId = await insertIdea(userId, 'rejected');
+      await db.insert(plans).values({ ideaId, userId, status: 'draft', threadId: `plan:${randomUUID()}` });
+
+      const res = await request(buildTestApp(fakeAgent(), userId)).get('/api/plans');
+
+      expect(res.status).toBe(200);
+      expect(res.body.plans).toEqual([]);
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+});
+
+// Story 4.1 (AC, follow-up): user-scoped, never leaks across users — a
+// check-in recorded against one plan must be visible to the energy pop-up
+// regardless of which *other* plan the user later opens (no `planId` in
+// this request at all), and never visible to a different user.
+describe('createPlansRouter GET /check-in-status', () => {
+  it('reflects a check-in made against a different plan than the one open now, scoped to this user only', async () => {
+    const userId = await createTestUser();
+    const otherUserId = await createTestUser();
+    try {
+      const ideaIdA = await insertIdea(userId, 'selected');
+      const [planA] = await db.insert(plans).values({ ideaId: ideaIdA, userId, status: 'active', threadId: `plan:${randomUUID()}` }).returning();
+      const ideaIdB = await insertIdea(userId, 'bookmarked');
+      await db.insert(plans).values({ ideaId: ideaIdB, userId, status: 'paused', threadId: `plan:${randomUUID()}` });
+      await recordCheckIn(db, planA!.id, { energy: 'low' });
+
+      const res = await request(buildTestApp(fakeAgent(), userId)).get('/api/plans/check-in-status');
+      expect(res.status).toBe(200);
+      expect(res.body.answeredToday).toBe(true);
+
+      const otherRes = await request(buildTestApp(fakeAgent(), otherUserId)).get('/api/plans/check-in-status');
+      expect(otherRes.body.answeredToday).toBe(false);
+    } finally {
+      await cleanUp(userId);
+      await cleanUp(otherUserId);
+    }
+  });
 });
 
 /** Spec 2.12 AC8: a plan + its one `current` step, ready for `start_step`. */
@@ -745,6 +848,42 @@ describe('createPlansRouter POST /:planId/steps/:stepId/start (Spec 2.12 AC8: ch
 
       const [updatedStep] = await db.select().from(planSteps).where(eq(planSteps.id, stepId));
       expect(updatedStep!.startedAt).not.toBeNull();
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+
+  // Bug fix (user-reported, live): "consecutive start messages must not
+  // repeat each other" — the prompt sent to the model must quote this
+  // thread's own last start acknowledgments (never an untagged, genuine
+  // chat reply) and carry an explicit no-repeat instruction.
+  it('prompts the model with this thread\'s own recent start acknowledgments and a no-repeat rule', async () => {
+    const userId = await createTestUser();
+    try {
+      const { planId, stepId } = await insertPlanWithCurrentStep(userId);
+      const priorMessages = [
+        new AIMessage({ content: "You've started X — that's a meaningful step.", additional_kwargs: { stepStartAck: true } }),
+        new AIMessage({ content: "You've started Y — keep going at your own pace.", additional_kwargs: { stepStartAck: true } }),
+        // Untagged — a genuine chat reply, never mistaken for a start ack.
+        new AIMessage('A genuine chat reply, not a start acknowledgment.'),
+      ];
+      const getState = vi.fn().mockResolvedValue({ values: { messages: priorMessages } });
+      const updateState = vi.fn().mockResolvedValue(undefined);
+      const agent = fakeAgent({ getState, updateState });
+      const invoke = vi.fn().mockResolvedValue(new AIMessage('Fresh wording this time.'));
+      const model = { invoke } as unknown as BaseChatModel;
+
+      const res = await request(buildTestApp(agent, userId, { model, classify: fakeModeration('pass') }))
+        .post(`/api/plans/${planId}/steps/${stepId}/start`)
+        .send();
+
+      expect(res.status).toBe(200);
+      const [[invokedMessages]] = invoke.mock.calls as [[{ content: string }[]]];
+      const prompt = invokedMessages[0]!.content;
+      expect(prompt).toContain("You've started X — that's a meaningful step.");
+      expect(prompt).toContain("You've started Y — keep going at your own pace.");
+      expect(prompt).not.toContain('A genuine chat reply');
+      expect(prompt).toMatch(/do not reuse their opener or wording/i);
     } finally {
       await cleanUp(userId);
     }

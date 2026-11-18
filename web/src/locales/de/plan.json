@@ -22,13 +22,20 @@
   },
   "stepActions": {
     "startButton": "Diesen Schritt starten",
-    "starting": "Wird gestartet…",
-    "startedHint": "Du hast diesen Schritt gestartet.",
+    "inProgress": "In Bearbeitung",
     "completeButton": "Als erledigt markieren",
-    "completing": "Wird abgeschlossen…",
     "completedHint": "Gut gemacht — weiter geht's mit dem nächsten Schritt.",
     "planCompletedHint": "Du hast deinen ganzen Plan abgeschlossen — sehr gut gemacht!",
     "failed": "Etwas ist schiefgelaufen. Bitte versuche es erneut."
+  },
+  "projectionCard": {
+    "title": "Prognose",
+    "loading": "Lädt…",
+    "loadFailed": "Deine Prognose konnte nicht geladen werden.",
+    "amountPrefix": "~",
+    "paceSubline": "bei diesem Tempo · schaltet frei: {{opportunity}}",
+    "estimateBadge": "(ca.)",
+    "estimateBadgeFull": "Schätzung"
   },
   "activation": {
     "title": "Plan prüfen & aktivieren",

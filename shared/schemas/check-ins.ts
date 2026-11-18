@@ -75,3 +75,16 @@ export const completeStepResponseSchema = z.object({
 });
 
 export type CompleteStepResponse = z.infer<typeof completeStepResponseSchema>;
+
+/**
+ * Story 4.1 (AC, follow-up): `GET /api/plans/check-in-status` — whether
+ * this user has already answered (or dismissed) today's energy question,
+ * computed from the user's own check-ins *across every plan*, never
+ * scoped to one plan (AC: "once per calendar day per user across ALL
+ * plans, not per plan"). User-scoped only; carries no `planId`.
+ */
+export const checkInStatusResponseSchema = z.object({
+  answeredToday: z.boolean(),
+});
+
+export type CheckInStatusResponse = z.infer<typeof checkInStatusResponseSchema>;

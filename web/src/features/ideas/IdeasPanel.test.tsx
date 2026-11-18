@@ -549,6 +549,27 @@ describe('IdeasPanel (UX fix: onlyBookmarked shows every bookmarked idea)', () =
   });
 });
 
+// UX fix (user-reported): "Generate new ideas" replaces the `suggested`
+// batch — it's a "New ideas"-view-only action, never shown on either
+// bookmarked view.
+describe('IdeasPanel (UX fix: no "Generate new ideas" button in a bookmarked view)', () => {
+  it.each([
+    ['onlyBookmarked', { onlyBookmarked: true }],
+    ['onlyIdeaId', { onlyIdeaId: 'idea-1' }],
+  ] as const)('%s view shows no generate button', async (_name, props) => {
+    const bookmarked: IdeaResponse = { ...fakeIdea(), id: 'idea-1', title: 'A bookmarked idea', status: 'bookmarked' };
+    vi.stubGlobal(
+      'fetch',
+      mockFetch({ ...INTAKE_NULL_RESPONSE, '/api/ideas': () => new Response(JSON.stringify({ ideas: [bookmarked], currency: 'EUR' }), { status: 200 }) }),
+    );
+
+    render(<IdeasPanel {...props} />);
+
+    expect(await screen.findByText('A bookmarked idea')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /generate/i })).not.toBeInTheDocument();
+  });
+});
+
 // Story 2.8 AC2/AC6: a short instruction line under the heading once ideas
 // exist; no blank band is left when there's nothing to act on yet.
 describe('IdeasPanel (Story 2.8 AC2/AC6: explanation line)', () => {
@@ -562,7 +583,9 @@ describe('IdeasPanel (Story 2.8 AC2/AC6: explanation line)', () => {
     render(<IdeasPanel />);
 
     expect(
-      await screen.findByText("Choose one idea to turn into a plan, reject the ones that aren't for you, or generate a new batch."),
+      await screen.findByText(
+        "Choose one idea to turn into a plan, bookmark one to save it for later, reject the ones that aren't for you, or generate a new batch.",
+      ),
     ).toBeInTheDocument();
   });
 

@@ -133,6 +133,8 @@ export * from '../money.js';
 export * from '../region.js';
 export * from './settings.js';
 export * from './check-ins.js';
+export * from './projection.js';
+
 /**
  * Story 1.5: the turn-scoped SSE progress/result wire contract.
  * `progress.ts` imports `chatMessageSchema` from `./chat.js` directly

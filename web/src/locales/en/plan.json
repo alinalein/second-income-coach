@@ -22,13 +22,20 @@
   },
   "stepActions": {
     "startButton": "Start this step",
-    "starting": "Starting…",
-    "startedHint": "You've started this step.",
+    "inProgress": "In progress",
     "completeButton": "Mark as done",
-    "completing": "Finishing…",
     "completedHint": "Nicely done — on to the next step.",
     "planCompletedHint": "You've completed your whole plan — well done!",
     "failed": "Something went wrong. Please try again."
+  },
+  "projectionCard": {
+    "title": "Projection",
+    "loading": "Loading…",
+    "loadFailed": "Couldn't load your projection.",
+    "amountPrefix": "~",
+    "paceSubline": "at this pace · unlocks: {{opportunity}}",
+    "estimateBadge": "(est.)",
+    "estimateBadgeFull": "estimate"
   },
   "activation": {
     "title": "Review & activate your plan",
