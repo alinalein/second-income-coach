@@ -1022,7 +1022,7 @@ So that I get specific encouragement without empty praise.
 
 **Given** an active plan
 **When** the user checks in
-**Then** a lightweight energy/status input is requested before any task-related ask (`record_check_in`)
+**Then** a lightweight energy/status input is requested before any task-related ask (`record_check_in`); the energy question is asked at most once per calendar day per user across ALL plans (not per plan, not again on a plan switch), as a small dismissible pop-up over the window (not a permanent control in the plan's status column); dismissing it counts as answered for the day with no energy stored and no nagging; the answer is stored against the plan open at that moment, and "already answered today" is computed from the user's check-ins across plans
 
 **Given** the user starts a step
 **When** `start_step` is called
