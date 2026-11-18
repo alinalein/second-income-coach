@@ -1185,6 +1185,10 @@ So that checking in feels tangibly worth it.
 **Then** it is a plain deterministic tool (AD-4) - no LLM computes the projection math
 
 **Given** the projection card
+**When** shown for a plan with a next step
+**Then** it always shows the line "at this pace · unlocks: <the specific unlocked opportunity>" (DE equivalent) under the estimate; it is a required part of the card and is never removed as a duplicate of the status column's next-step region (only omitted when there is no next step, i.e. on the last step or a completed plan)
+
+**Given** the projection card
 **When** built
 **Then** it fills the projection-card extension point of the workspace from Story 3.1 as its own component - the workspace layout is not edited by this story
 
