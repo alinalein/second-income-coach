@@ -25,7 +25,13 @@ export interface VoiceRouterDeps {
  */
 export function createVoiceRouter({ env, transcribeAudio = createTranscribeAudio(env) }: VoiceRouterDeps) {
   const router = Router();
-  const strictLimiter = createStrictRateLimiter(env);
+  // Near-live mode (`VoiceInput.tsx`): re-transcribes the growing clip
+  // every `CHUNK_INTERVAL_MS` (1.2s) while recording, capped at ~60s of
+  // accumulated audio — worst case ~50 interim calls plus the final one
+  // inside a single `RATE_LIMIT_WINDOW_MS`. The default strict limit (10)
+  // is sized for one-shot cost-bearing calls (`create_plan`/
+  // `generate_ideas`), not this periodic pattern, so this route overrides it.
+  const strictLimiter = createStrictRateLimiter(env, { limit: 60 });
 
   router.post(
     '/transcribe',

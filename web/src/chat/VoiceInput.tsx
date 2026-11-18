@@ -25,7 +25,7 @@ type NoticeKind = 'permissionDenied' | 'unsupported' | 'transcriptionFailed';
  * transcription endpoint has no streaming/WebSocket variant (verified
  * against its own docs), so this is the closest available approximation:
  * the text catches up every couple of seconds, not instantly. */
-const CHUNK_INTERVAL_MS = 2500;
+const CHUNK_INTERVAL_MS = 1200;
 
 /** Each interim call re-transcribes the *entire* clip so far (the endpoint
  * has no "continue from here" mode), so cost/latency grow with recording
