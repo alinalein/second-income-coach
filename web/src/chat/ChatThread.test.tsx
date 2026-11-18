@@ -245,28 +245,14 @@ describe('ChatThread (AC: chat UI)', () => {
   });
 });
 
-// Story 2.13 AC (refined): pinning only kicks in once the chat is almost
-// full. "the view scrolls so the user's new message sits at the top" / "a
-// bottom spacer ... so the reply is never cut off" / "the user has scrolled
-// up manually ... the view is not moved against their will".
-describe('ChatThread (Story 2.13: chat scroll behaviour)', () => {
-  // Simulates the scroll region's layout so the almost-full measurement
-  // (`clientHeight` vs `scrollHeight`) can be controlled from a test —
-  // jsdom never computes real layout, both are normally 0.
-  function mockScrollRegionSize(clientHeight: number, scrollHeight: number): void {
-    Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, value: clientHeight });
-    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', { configurable: true, value: scrollHeight });
-  }
-
-  afterEach(() => {
-    Reflect.deleteProperty(HTMLElement.prototype, 'clientHeight');
-    Reflect.deleteProperty(HTMLElement.prototype, 'scrollHeight');
-  });
-
-  // AC: "while the conversation still fits comfortably ... NO pinning, NO
-  // bottom spacer" — content height below the container's own height.
-  it('does not pin or add a bottom spacer when the chat comfortably fits', async () => {
-    mockScrollRegionSize(600, 100);
+describe('ChatThread (Story 2.13 amended: chat scroll behaviour)', () => {
+  // AC: "the view follows the newest content only while the user is already
+  // at (or near) the bottom ... it is never moved when the user has
+  // scrolled up to read earlier messages."
+  it.each([
+    { label: 'at the bottom', distanceFromBottom: 0, expectScroll: true },
+    { label: 'scrolled up to read earlier messages', distanceFromBottom: 500, expectScroll: false },
+  ])('$label -> follows new content: $expectScroll', async ({ distanceFromBottom, expectScroll }) => {
     vi.stubGlobal(
       'fetch',
       vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
@@ -274,7 +260,7 @@ describe('ChatThread (Story 2.13: chat scroll behaviour)', () => {
         if (!url.includes('/api/chat/messages')) throw new Error(`Unmocked fetch: ${url}`);
         if (init?.method === 'POST') {
           return Promise.resolve(
-            sseResponse([resultFrame({ id: 'reply-4', role: 'assistant', kind: 'message', content: 'Sure!', createdAt: new Date().toISOString() })]),
+            sseResponse([resultFrame({ id: 'reply-1', role: 'assistant', kind: 'message', content: 'Sure!', createdAt: new Date().toISOString() })]),
           );
         }
         return Promise.resolve(new Response(JSON.stringify({ messages: [] }), { status: 200 }));
@@ -283,171 +269,23 @@ describe('ChatThread (Story 2.13: chat scroll behaviour)', () => {
     const scrollToSpy = vi.spyOn(Element.prototype, 'scrollTo');
 
     render(<ChatThread />);
+    const scrollNode = await screen.findByTestId('chat-scroll-region');
+    Object.defineProperty(scrollNode, 'clientHeight', { configurable: true, value: 600 });
+    Object.defineProperty(scrollNode, 'scrollTop', { configurable: true, writable: true, value: 0 });
+    Object.defineProperty(scrollNode, 'scrollHeight', { configurable: true, value: 600 + distanceFromBottom });
+    fireEvent.scroll(scrollNode);
+    scrollToSpy.mockClear();
+
     const input = (await screen.findByRole('textbox', { name: /message/i })) as HTMLTextAreaElement;
-    fireEvent.change(input, { target: { value: 'Give me an example' } });
+    fireEvent.change(input, { target: { value: 'hello' } });
     fireEvent.click(screen.getByRole('button', { name: /send/i }));
 
     expect(await screen.findByText('Sure!')).toBeInTheDocument();
-    expect(scrollToSpy).not.toHaveBeenCalled();
-    expect(screen.getByTestId('chat-bottom-spacer')).toHaveStyle({ minHeight: '0px' });
-  });
-
-  // AC: "almost full ... scroll the user's new message to the top ... keep
-  // the bottom spacer of about one viewport" — content height already at/
-  // above the container's own height (bug fix: a scrollbar must already be
-  // warranted — see `ALMOST_FULL_THRESHOLD_RATIO`'s own comment).
-  it('pins the new message to the top and keeps a bottom spacer when the chat is almost full', async () => {
-    mockScrollRegionSize(600, 650);
-    vi.stubGlobal(
-      'fetch',
-      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-        const url = typeof input === 'string' ? input : input.toString();
-        if (!url.includes('/api/chat/messages')) throw new Error(`Unmocked fetch: ${url}`);
-        if (init?.method === 'POST') {
-          return Promise.resolve(
-            sseResponse([resultFrame({ id: 'reply-5', role: 'assistant', kind: 'message', content: 'Here is a plan.', createdAt: new Date().toISOString() })]),
-          );
-        }
-        return Promise.resolve(new Response(JSON.stringify({ messages: [] }), { status: 200 }));
-      }),
-    );
-    const scrollToSpy = vi.spyOn(Element.prototype, 'scrollTo');
-
-    render(<ChatThread />);
-    const input = (await screen.findByRole('textbox', { name: /message/i })) as HTMLTextAreaElement;
-    fireEvent.change(input, { target: { value: 'Plan my day' } });
-    fireEvent.click(screen.getByRole('button', { name: /send/i }));
-
-    expect(await screen.findByText('Here is a plan.')).toBeInTheDocument();
-    await waitFor(() => expect(scrollToSpy).toHaveBeenCalled());
-    expect(screen.getByTestId('chat-bottom-spacer')).not.toHaveStyle({ minHeight: '0px' });
-  });
-
-  it('stops auto-scrolling for the rest of the turn once the user scrolls away on their own', async () => {
-    mockScrollRegionSize(600, 650);
-    let releaseReply: (() => void) | undefined;
-    const replyGate = new Promise<void>((resolve) => {
-      releaseReply = resolve;
-    });
-
-    vi.stubGlobal(
-      'fetch',
-      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-        const url = typeof input === 'string' ? input : input.toString();
-        if (!url.includes('/api/chat/messages')) throw new Error(`Unmocked fetch: ${url}`);
-        if (init?.method === 'POST') {
-          const encoder = new TextEncoder();
-          const body = new ReadableStream<Uint8Array>({
-            async start(controller) {
-              await replyGate;
-              controller.enqueue(
-                encoder.encode(
-                  resultFrame({ id: 'reply-6', role: 'assistant', kind: 'message', content: 'Here you go.', createdAt: new Date().toISOString() }),
-                ),
-              );
-              controller.close();
-            },
-          });
-          return Promise.resolve(new Response(body, { status: 200 }));
-        }
-        return Promise.resolve(new Response(JSON.stringify({ messages: [] }), { status: 200 }));
-      }),
-    );
-    const scrollToSpy = vi.spyOn(Element.prototype, 'scrollTo');
-
-    render(<ChatThread />);
-    const input = (await screen.findByRole('textbox', { name: /message/i })) as HTMLTextAreaElement;
-    fireEvent.change(input, { target: { value: 'Plan something' } });
-    fireEvent.click(screen.getByRole('button', { name: /send/i }));
-
-    await waitFor(() => expect(scrollToSpy).toHaveBeenCalled());
-    const callsBeforeManualScroll = scrollToSpy.mock.calls.length;
-
-    // Past the programmatic-scroll suppression window, so the next `scroll`
-    // event registers as the user's own, not an echo of the call above.
-    await new Promise((resolve) => setTimeout(resolve, 600));
-    fireEvent.scroll(screen.getByTestId('chat-scroll-region'));
-
-    releaseReply?.();
-    await screen.findByText('Here you go.');
-
-    expect(scrollToSpy.mock.calls.length).toBe(callsBeforeManualScroll);
-  });
-
-  // Bug fix (user-reported): the chat kept pinning on *every* send after the
-  // first pin — a previous turn's bottom spacer (sized to ~one viewport)
-  // stayed in the DOM and was counted in `scrollHeight`, so every later
-  // measurement read as "almost full" no matter how little real content had
-  // grown. `clientHeight`/`scrollHeight` are mocked on the real nodes here
-  // (not the whole prototype) so `scrollHeight` reflects the spacer's own
-  // live `offsetHeight` — exactly what the fix (collapsing the spacer before
-  // measuring) must exclude.
-  it('measures real content without the spacer, so a short follow-up does not re-pin right after an earlier pin', async () => {
-    let realContentHeight = 100;
-
-    vi.stubGlobal(
-      'fetch',
-      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-        const url = typeof input === 'string' ? input : input.toString();
-        if (!url.includes('/api/chat/messages')) throw new Error(`Unmocked fetch: ${url}`);
-        if (init?.method === 'POST') {
-          const { content } = JSON.parse(String(init.body)) as { content: string };
-          return Promise.resolve(
-            sseResponse([
-              resultFrame({ id: `reply-${content}`, role: 'assistant', kind: 'message', content: `Reply to ${content}`, createdAt: new Date().toISOString() }),
-            ]),
-          );
-        }
-        return Promise.resolve(new Response(JSON.stringify({ messages: [] }), { status: 200 }));
-      }),
-    );
-    const scrollToSpy = vi.spyOn(Element.prototype, 'scrollTo');
-
-    render(<ChatThread />);
-    const scrollNode = screen.getByTestId('chat-scroll-region');
-    const spacerNode = screen.getByTestId('chat-bottom-spacer');
-    Object.defineProperty(scrollNode, 'clientHeight', { configurable: true, value: 600 }); // tall container
-    Object.defineProperty(spacerNode, 'offsetHeight', {
-      configurable: true,
-      get: () => parseFloat(spacerNode.style.minHeight || '0') || 0,
-    });
-    Object.defineProperty(scrollNode, 'scrollHeight', {
-      configurable: true,
-      get: () => realContentHeight + spacerNode.offsetHeight,
-    });
-
-    const input = (await screen.findByRole('textbox', { name: /message/i })) as HTMLTextAreaElement;
-    async function send(content: string): Promise<void> {
-      fireEvent.change(input, { target: { value: content } });
-      fireEvent.click(screen.getByRole('button', { name: /send/i }));
-      await screen.findByText(`Reply to ${content}`);
+    if (expectScroll) {
+      expect(scrollToSpy).toHaveBeenCalled();
+    } else {
+      expect(scrollToSpy).not.toHaveBeenCalled();
     }
-
-    // 3 short messages: real content stays below the container's own
-    // height (600) throughout — no pin on any of them.
-    await send('one');
-    expect(scrollToSpy).not.toHaveBeenCalled();
-    realContentHeight = 300;
-    await send('two');
-    expect(scrollToSpy).not.toHaveBeenCalled();
-    realContentHeight = 480;
-    await send('three');
-    expect(scrollToSpy).not.toHaveBeenCalled();
-
-    // Real content crosses the threshold (now already overflowing the
-    // container, not just close to it): pins once, spacer grows to ~one
-    // viewport.
-    realContentHeight = 650;
-    await send('four');
-    expect(scrollToSpy).toHaveBeenCalled();
-    expect(parseFloat(spacerNode.style.minHeight || '0')).toBeGreaterThan(0);
-    const callsAfterPin = scrollToSpy.mock.calls.length;
-
-    // Short follow-up right after: real content (spacer excluded) is back
-    // below the threshold, so this one does not re-pin.
-    realContentHeight = 200;
-    await send('five');
-    expect(scrollToSpy.mock.calls.length).toBe(callsAfterPin);
   });
 });
 

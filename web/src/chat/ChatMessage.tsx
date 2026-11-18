@@ -204,10 +204,7 @@ export function ChatMessage({ message, animate = false, footerItems = [] }: Chat
   }, [isRevealing]);
 
   return (
-    // `data-message-id`: lets `ChatThread` scroll a specific message into
-    // view (bug fix, below) without needing a ref threaded in through this
-    // component's own props.
-    <div data-message-id={message.id} className={cn('flex', isUser ? 'justify-end' : 'justify-start')}>
+    <div className={cn('flex', isUser ? 'justify-end' : 'justify-start')}>
       <div
         role={role}
         className={cn(

@@ -258,3 +258,20 @@ textarea::placeholder {
   color: var(--foreground);
   opacity: 1;
 }
+
+/* User-reported: the chat scroll region's scrollbar read too heavy against
+   the glass panel — thin and low-contrast instead of the OS default. */
+.chat-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.chat-scrollbar::-webkit-scrollbar {
+  width: 8px;
+}
+.chat-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.chat-scrollbar::-webkit-scrollbar-thumb {
+  background-color: var(--border);
+  border-radius: 9999px;
+}
