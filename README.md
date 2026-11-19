@@ -25,7 +25,7 @@ Idea-generation quizzes already solve half of this. None pair tailored ideas wit
 | CAP-8 | Token count + estimated cost shown under every response |
 | CAP-9 | Thumbs up/down feedback, never gating the chat |
 | CAP-10 | Bilingual (German/English) chat, matched per message to whatever language the user used |
-| CAP-11 | A public, unauthenticated "Quality & Decisions" page: eval results, key architecture decisions, and a reflection — all generated from source, never hand-copied |
+| CAP-11 | A signed-in "Quality & Decisions" page (`/quality`, linked in the sidebar footer): eval results, key architecture decisions, and a reflection — all generated from source, never hand-copied |
 
 Full detail: [`_bmad-output/specs/spec-second-income-coach/SPEC.md`](_bmad-output/specs/spec-second-income-coach/SPEC.md).
 
@@ -218,6 +218,8 @@ Other commands:
 | `npm run typecheck` | `tsc --noEmit` for every workspace |
 | `npm test` | Vitest for every workspace |
 | `npm run db:up` / `npm run db:down` | Start/stop the local Postgres container |
+| `npm run eval` | Full eval suite on demand (real model + judge calls over OpenRouter, never part of `npm test`); needs `OPENROUTER_API_KEY` in `.env` |
+| `npm run eval:report` | Builds the quality report from the last `npm run eval` results (run `eval` first); also refreshes `src/evals/published/eval-results.json` (committed — Story 7.5 reads it) when the run was complete, never from a partial/`-t` run |
 
 The frontend defaults to light mode; the dark-mode toggle (top-right) persists the choice in `localStorage` across reloads. Teal accent tokens and contrast ratios are pinned in `stack.md` and wired in `web/src/index.css`.
 

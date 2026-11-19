@@ -6,7 +6,7 @@
   "input": [
     {
       "role": "human",
-      "content": "Hallo! Hier sind meine Angaben: Fähigkeiten/Interessen: 'Backen und das Verkaufen von selbstgemachten Pralinen.' Verfügbare Zeit pro Woche: unter 5 Stunden. Startbudget: unter 100 Euro. Risikobereitschaft: niedrig. Was mich bisher aufgehalten hat: 'Ich fange immer super motiviert an, aber sobald es zur Routine wird und nichts mehr neu ist, verliere ich die Lust und höre auf.' Bitte trag das für mich ein."
+      "content": "Hallo! Hier sind meine Angaben: Fähigkeiten/Interessen: 'Backen und das Verkaufen von selbstgemachten Pralinen.' Verfügbare Zeit pro Woche: unter 5 Stunden. Startbudget: unter 100 Euro. Risikobereitschaft: niedrig. Was mich bisher aufgehalten hat: 'Ich fange immer super motiviert an, aber sobald es zur Routine wird und nichts mehr neu ist, verliere ich die Lust und höre auf.' Ich wohne in Österreich. Bitte trag das für mich ein."
     }
   ],
   "referenceTrajectory": [
@@ -20,7 +20,7 @@
           "type": "function",
           "function": {
             "name": "submit_intake",
-            "arguments": "{\"skillsInterests\":\"Backen und das Verkaufen von selbstgemachten Pralinen.\",\"weeklyTimeAvailability\":\"under_5h\",\"startingBudgetRange\":\"under_100\",\"riskTolerance\":\"low\",\"stoppedBeforeText\":\"Ich fange immer super motiviert an, aber sobald es zur Routine wird und nichts mehr neu ist, verliere ich die Lust und höre auf.\",\"failurePattern\":\"loses_interest_once_routine\"}"
+            "arguments": "{\"skillsInterests\":\"Backen und das Verkaufen von selbstgemachten Pralinen.\",\"weeklyTimeAvailability\":\"under_5h\",\"startingBudgetRange\":\"under_100\",\"riskTolerance\":\"low\",\"stoppedBeforeText\":\"Ich fange immer super motiviert an, aber sobald es zur Routine wird und nichts mehr neu ist, verliere ich die Lust und höre auf.\",\"country\":\"AT\",\"failurePattern\":\"loses_interest_once_routine\"}"
           }
         }
       ]

@@ -16,6 +16,7 @@ import { createJudgeModels } from './judges.js';
 import { sumUsage } from './usage.js';
 import { EVAL_MODEL_IDS, JUDGE_MODEL_IDS, TRAJECTORY_ACCURACY_TARGET, type JudgeModelId } from './constants.js';
 import type { ModelCallUsageRow } from './cost.js';
+import { runMistralJailbreakFlagRate, type MistralJailbreakFlagRateResult } from './mistral-jailbreak-flag-rate.js';
 
 /**
  * Story 6.2 (AC1): the committed, versioned fixture shape every file under
@@ -36,6 +37,34 @@ interface Fixture {
    * (Intent: "no reference required to pass structurally" for a quality
    * case). */
   referenceTrajectory?: FlexibleChatCompletionMessage[];
+}
+
+/**
+ * Fix (2026-11-19): `submit_intake`'s two free-text args (`skillsInterests`,
+ * `stoppedBeforeText`) are meant to be echoed back near-verbatim from the
+ * user's quoted text, but a model occasionally drops trailing sentence
+ * punctuation when doing so (observed: `claude-haiku-4.5` intermittently
+ * returning "...aufhören" instead of "...aufhören."). `toolArgsMatchMode:
+ * 'exact'` has no tolerance for that, so this normalizes only these two
+ * fields (trailing `.`/`!`/`?` and surrounding whitespace) before comparing
+ * — every other arg, including the structured enums, is still compared
+ * byte-for-byte via `_exactMatch`-equivalent deep equality below.
+ */
+const SUBMIT_INTAKE_FREE_TEXT_KEYS = new Set(['skillsInterests', 'stoppedBeforeText']);
+
+function normalizeSubmitIntakeArgValue(key: string, value: unknown): unknown {
+  if (!SUBMIT_INTAKE_FREE_TEXT_KEYS.has(key) || typeof value !== 'string') return value;
+  return value.trim().replace(/[.!?]+$/u, '');
+}
+
+function submitIntakeArgsMatch(toolCall: Record<string, unknown>, referenceToolCall: Record<string, unknown>): boolean {
+  const keys = new Set([...Object.keys(toolCall), ...Object.keys(referenceToolCall)]);
+  for (const key of keys) {
+    if (normalizeSubmitIntakeArgValue(key, toolCall[key]) !== normalizeSubmitIntakeArgValue(key, referenceToolCall[key])) {
+      return false;
+    }
+  }
+  return true;
 }
 
 const evalsDir = fileURLToPath(new URL('.', import.meta.url));
@@ -112,6 +141,11 @@ interface ResultRow {
 
 const resultRows: ResultRow[] = [];
 
+/** AD-23's non-gating metric — populated by the dedicated `it` below, which
+ * runs regardless of the deterministic/quality matrix above (real network
+ * call, but never affects this suite's own pass/fail). */
+let mistralJailbreakFlagRateResult: MistralJailbreakFlagRateResult | undefined;
+
 /** Story 6.3 (AC: cost "against the actual calls the eval run itself
  * made"): one entry per real model call this run makes — pushed only on
  * the success path, right where each `outputs` trajectory is obtained, so
@@ -134,8 +168,14 @@ async function runDeterministicCase(modelId: string, fixture: Fixture): Promise<
     modelCallUsages.push({ modelId, caseId: fixture.id, ...sumUsage(outputs) });
     // Boundaries: "createTrajectoryMatchEvaluator with toolArgsMatchMode:
     // 'exact'" — trajectoryMatchMode left at its library default (strict),
-    // no judge model involved (AC2).
-    const evaluator = createTrajectoryMatchEvaluator({ toolArgsMatchMode: 'exact' });
+    // no judge model involved (AC2). `toolArgsMatchOverrides` narrows that
+    // exactness to `submit_intake`'s two free-text args only (see
+    // `submitIntakeArgsMatch`'s doc comment) — every other tool/fixture
+    // still gets the library's own unmodified `_exactMatch`.
+    const evaluator = createTrajectoryMatchEvaluator({
+      toolArgsMatchMode: 'exact',
+      toolArgsMatchOverrides: { submit_intake: submitIntakeArgsMatch },
+    });
     const result = await evaluator({ outputs, referenceOutputs: fixture.referenceTrajectory! });
     return {
       ...base,
@@ -183,6 +223,34 @@ function getOrGenerateQualityTrajectory(modelId: string, fixture: Fixture): Prom
   return generated;
 }
 
+/**
+ * Fix (2026-11-19): observed judge-call hangs are `deepseek/deepseek-v4.1-flash`
+ * intermittently stalling past Vitest's own 120s `testTimeout` — the same
+ * judge call elsewhere in the same run returns in 5-13s, so this isn't "merely
+ * slow," it's upstream flakiness. Racing the call against a budget safely
+ * under that 120s ceiling means a hang surfaces as this row's own `error`
+ * (the I/O matrix's existing "judge call failure" outcome, via the `catch`
+ * below) instead of the whole `it` being killed from outside before that
+ * `catch` ever runs.
+ */
+const QUALITY_JUDGE_CALL_TIMEOUT_MS = 90_000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
 async function runQualityCase(modelId: string, fixture: Fixture, judgeId: JudgeModelId): Promise<ResultRow> {
   const base = {
     modelId,
@@ -203,7 +271,11 @@ async function runQualityCase(modelId: string, fixture: Fixture, judgeId: JudgeM
     // case, built via `createChatModel`/`createJudgeModels` (OpenRouter),
     // passed as `judge` — never the `model: "provider:id"` string form.
     const evaluator = createTrajectoryLLMAsJudge({ prompt: TRAJECTORY_ACCURACY_PROMPT, judge: judgeModels[judgeId] });
-    const result = await evaluator({ outputs: generation.outputs });
+    const result = await withTimeout(
+      evaluator({ outputs: generation.outputs }),
+      QUALITY_JUDGE_CALL_TIMEOUT_MS,
+      `judge call (${judgeId}) timed out after ${QUALITY_JUDGE_CALL_TIMEOUT_MS}ms`,
+    );
     return {
       ...base,
       score: result.score,
@@ -278,6 +350,15 @@ describe('trajectory eval suite (Story 6.2, AD-23)', () => {
     }
   }
 
+  // AD-23: real call against the actual Mistral classifier (the one
+  // network call in this suite not gated behind an evaluated model) — never
+  // asserted on beyond "didn't throw" (the function itself never throws;
+  // see its own doc comment), since a flag miss or a failed call is itself
+  // a valid, recorded, non-gating outcome, not a test failure.
+  it('AD-23: records Mistral Moderation\'s own jailbreak-flag rate on the 4 direct-injection inputs (non-gating)', async () => {
+    mistralJailbreakFlagRateResult = await runMistralJailbreakFlagRate(process.env.MISTRAL_API_KEY);
+  });
+
   // Runs last (Vitest executes `it`s within one `describe` in declaration
   // order): writes the one results file only once every case/model/judge
   // combination above has already pushed its row — an interrupted run
@@ -312,6 +393,7 @@ describe('trajectory eval suite (Story 6.2, AD-23)', () => {
           perModelAccuracy: aggregatePerModelAccuracy(resultRows),
           rows: resultRows,
           modelCallUsages,
+          mistralJailbreakFlagRate: mistralJailbreakFlagRateResult,
         },
         null,
         2,

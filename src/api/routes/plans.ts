@@ -488,7 +488,7 @@ export function createPlansRouter({ env, db, agent, model, createDraft, activate
   const router = Router();
   // Intent/Code Map: "create_plan is LLM-backed and cost-bearing like
   // generate_ideas's POST; reuse the same strict tier."
-  const strictLimiter = createStrictRateLimiter(env);
+  const strictLimiter = createStrictRateLimiter(env, { limit: 40 });
   // AD-11: same `defaultClassify(env)` real-Mistral-call precedent as
   // `intake.ts`'s own router.
   const classify = classifyOverride ?? defaultClassify(env);

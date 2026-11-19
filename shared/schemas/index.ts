@@ -148,3 +148,10 @@ export * from './voice.js';
  * (Spec 2.12) — no circular import back into this file any more.
  */
 export * from './progress.js';
+
+/**
+ * Stories 6.2/6.3 follow-up: the committed `src/evals/published/
+ * eval-results.json` shape Story 7.5's public Quality & Decisions page
+ * validates against.
+ */
+export * from './eval-results.js';

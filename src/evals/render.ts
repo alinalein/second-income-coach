@@ -1,4 +1,4 @@
-import type { ReportData } from './build-report.js';
+import type { ReportData, MistralJailbreakFlagRateSection } from './build-report.js';
 import type { ModelCostSummary } from './cost.js';
 
 function pct(value: number): string {
@@ -58,10 +58,28 @@ export function renderMarkdown(report: ReportData): string {
   lines.push('');
   lines.push(`Overall (built suites only): ${report.guardrails.allBuiltSuitesPassed ? '✅ all passed' : '❌ at least one failed'}`);
   lines.push('');
-  lines.push('**Pending** (named by AD-23, not yet built — shown explicitly, never hidden):');
+  if (report.guardrails.pending.length > 0) {
+    lines.push('**Pending** (named by AD-23, not yet built — shown explicitly, never hidden):');
+    lines.push('');
+    for (const category of report.guardrails.pending) {
+      lines.push(`- ${category.label} — ${category.reason}`);
+    }
+    lines.push('');
+  }
+
+  lines.push("**Mistral Moderation's own jailbreak-flag rate** (AD-23, non-gating — never affects the pass/fail bar above):");
   lines.push('');
-  for (const category of report.guardrails.pending) {
-    lines.push(`- ${category.label} — ${category.reason}`);
+  if (report.mistralJailbreakFlagRate.status === 'ok') {
+    const { flaggedCount, total, rows } = report.mistralJailbreakFlagRate;
+    lines.push(`flagged ${flaggedCount} of ${total}`);
+    lines.push('');
+    lines.push('| Input | Flagged | Jailbreaking score |');
+    lines.push('|---|---|---|');
+    for (const row of rows) {
+      lines.push(`| ${row.label} | ${row.flagged ? '✅' : '—'} | ${row.jailbreakingScore ?? 'n/a'} |`);
+    }
+  } else {
+    lines.push(`Pending/error — ${report.mistralJailbreakFlagRate.reason}`);
   }
   lines.push('');
 
@@ -77,6 +95,16 @@ export function renderMarkdown(report: ReportData): string {
   lines.push('');
   for (const entry of report.judgeRegistryOverlap.filter((o) => o.alsoRegistryEntry)) {
     lines.push(`Known limitation: \`${entry.judgeId}\` is both a pinned judge and a user-selectable registry entry — it can judge its own model's trajectories.`);
+  }
+  lines.push('');
+
+  lines.push('## Quality (LLM-as-judge) scores');
+  lines.push('');
+  lines.push('| Model | Case | Judge | Score | Comment / error |');
+  lines.push('|---|---|---|---|---|');
+  for (const entry of report.qualityResults) {
+    const scoreCell = entry.error !== undefined ? '⚠️ error' : String(entry.score);
+    lines.push(`| ${entry.modelId} | ${entry.caseId} | ${entry.judgeId} | ${scoreCell} | ${entry.error ?? entry.comment ?? ''} |`);
   }
   lines.push('');
 
@@ -133,8 +161,25 @@ export function renderHtml(report: ReportData): string {
 
   const pendingItems = report.guardrails.pending.map((category) => `<li>${escape(category.label)} — ${escape(category.reason)}</li>`).join('\n');
 
+  const mistralFlagRateSection = ((section: MistralJailbreakFlagRateSection): string => {
+    if (section.status === 'ok') {
+      const rows = section.rows
+        .map((row) => `<tr><td>${escape(row.label)}</td><td>${row.flagged ? '✅' : '—'}</td><td>${escape(row.jailbreakingScore ?? 'n/a')}</td></tr>`)
+        .join('\n');
+      return `<p>flagged ${section.flaggedCount} of ${section.total}</p>\n<table><tr><th>Input</th><th>Flagged</th><th>Jailbreaking score</th></tr>\n${rows}\n</table>`;
+    }
+    return `<p>Pending/error — ${escape(section.reason)}</p>`;
+  })(report.mistralJailbreakFlagRate);
+
   const judgeRows = report.judgeModelIds
     .map((judgeId) => `<tr><td>${escape(judgeId)}</td><td>${escape((report.judgeScoredModels[judgeId] ?? []).join(', ') || '(none this run)')}</td></tr>`)
+    .join('\n');
+
+  const qualityRows = report.qualityResults
+    .map((entry) => {
+      const scoreCell = entry.error !== undefined ? '⚠️ error' : escape(String(entry.score));
+      return `<tr><td>${escape(entry.modelId)}</td><td>${escape(entry.caseId)}</td><td>${escape(entry.judgeId)}</td><td>${scoreCell}</td><td>${escape(entry.error ?? entry.comment ?? '')}</td></tr>`;
+    })
     .join('\n');
 
   const costRows = report.cost.perModel
@@ -176,15 +221,23 @@ ${accuracyRows}
 ${guardrailRows}
 </table>
 <p>Overall (built suites only): ${report.guardrails.allBuiltSuitesPassed ? '✅ all passed' : '❌ at least one failed'}</p>
-<p><strong>Pending</strong> (named by AD-23, not yet built — shown explicitly, never hidden):</p>
-<ul>
-${pendingItems}
-</ul>
+${
+  report.guardrails.pending.length > 0
+    ? `<p><strong>Pending</strong> (named by AD-23, not yet built — shown explicitly, never hidden):</p>\n<ul>\n${pendingItems}\n</ul>`
+    : ''
+}
+<p><strong>Mistral Moderation's own jailbreak-flag rate</strong> (AD-23, non-gating — never affects the pass/fail bar above):</p>
+${mistralFlagRateSection}
 
 <h2>Judges</h2>
 <p>Pinned judge models: ${escape(report.judgeModelIds.join(', '))}</p>
 <table><tr><th>Judge</th><th>Scored models</th></tr>
 ${judgeRows}
+</table>
+
+<h2>Quality (LLM-as-judge) scores</h2>
+<table><tr><th>Model</th><th>Case</th><th>Judge</th><th>Score</th><th>Comment / error</th></tr>
+${qualityRows}
 </table>
 
 <h2>Estimated run cost</h2>
@@ -222,12 +275,14 @@ export function renderJsonSummary(report: ReportData): object {
       judgeModelIds: report.judgeModelIds,
       judgeScoredModels: report.judgeScoredModels,
       registryOverlap: report.judgeRegistryOverlap,
+      qualityResults: report.qualityResults,
     },
     safety: {
       suites: report.guardrails.suites,
       allBuiltSuitesPassed: report.guardrails.allBuiltSuitesPassed,
       pending: report.guardrails.pending,
     },
+    mistralJailbreakFlagRate: report.mistralJailbreakFlagRate,
     cost: {
       perModel: report.cost.perModel,
       totalEstimatedCostUsd: report.cost.totalEstimatedCostUsd,

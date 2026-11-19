@@ -56,17 +56,14 @@ export const GUARDRAIL_SUITES: readonly GuardrailSuiteDef[] = [
 /**
  * Story 6.1's own "Pending" list, carried forward here rather than
  * re-derived. `guilt-streak-language` and `hitl-bypass` were removed once
- * CAP-4/Epic 3 shipped and their own guardrail suites above were added —
- * only a genuinely unbuilt category stays here. Must appear in the report as
+ * CAP-4/Epic 3 shipped their own guardrail suites above; `mistral-flag-rate`
+ * was removed (Stories 6.2/6.3 follow-up) once `trajectory.eval.ts` started
+ * actually running it — that metric's own live/error state now renders via
+ * `ReportData.mistralJailbreakFlagRate` instead of this static list. Only a
+ * genuinely unbuilt category belongs here. Must appear in the report as
  * pending, never hidden and never silently counted as passing.
  */
-export const PENDING_GUARDRAIL_CATEGORIES: readonly PendingGuardrailCategory[] = [
-  {
-    id: 'mistral-flag-rate',
-    label: "Mistral Moderation's own jailbreak-flag rate on the 4 direct-injection inputs (non-gating visibility metric)",
-    reason: 'requires a live run against the real Mistral classifier; not wired into any eval run yet',
-  },
-];
+export const PENDING_GUARDRAIL_CATEGORIES: readonly PendingGuardrailCategory[] = [];
 
 interface VitestJsonReport {
   numTotalTests: number;

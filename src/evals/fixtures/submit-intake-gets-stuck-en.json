@@ -6,7 +6,7 @@
   "input": [
     {
       "role": "human",
-      "content": "Here's my intake: Skills/interests: 'Photography and editing photos.' Weekly time availability: 10 to 20 hours. Starting budget range: 500 to 2000 euros. Risk tolerance: high. What's stopped me before: 'I get everything set up and then I just don't know what the next step actually is, so I stall out and never move forward.' Please save this."
+      "content": "Here's my intake: Skills/interests: 'Photography and editing photos.' Weekly time availability: 10 to 20 hours. Starting budget range: 500 to 2000 euros. Risk tolerance: high. What's stopped me before: 'I get everything set up and then I just don't know what the next step actually is, so I stall out and never move forward.' I'm based in Austria. Please save this."
     }
   ],
   "referenceTrajectory": [
@@ -20,7 +20,7 @@
           "type": "function",
           "function": {
             "name": "submit_intake",
-            "arguments": "{\"skillsInterests\":\"Photography and editing photos.\",\"weeklyTimeAvailability\":\"10_to_20h\",\"startingBudgetRange\":\"500_to_2000\",\"riskTolerance\":\"high\",\"stoppedBeforeText\":\"I get everything set up and then I just don't know what the next step actually is, so I stall out and never move forward.\",\"failurePattern\":\"gets_stuck_no_next_step\"}"
+            "arguments": "{\"skillsInterests\":\"Photography and editing photos.\",\"weeklyTimeAvailability\":\"10_to_20h\",\"startingBudgetRange\":\"500_to_2000\",\"riskTolerance\":\"high\",\"stoppedBeforeText\":\"I get everything set up and then I just don't know what the next step actually is, so I stall out and never move forward.\",\"country\":\"AT\",\"failurePattern\":\"gets_stuck_no_next_step\"}"
           }
         }
       ]

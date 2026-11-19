@@ -1,4 +1,5 @@
 import { fileURLToPath } from 'node:url';
+import { config as loadDotenv } from 'dotenv';
 import { defineConfig } from 'vitest/config';
 
 /**
@@ -18,6 +19,11 @@ import { defineConfig } from 'vitest/config';
  * root).
  */
 const evalsDir = fileURLToPath(new URL('.', import.meta.url));
+
+// Load the repo-root `.env` (never overriding variables already set inline) so
+// `npm run eval` finds OPENROUTER_API_KEY without a manual `source .env`.
+// Runs in the main vitest process; workers inherit `process.env`.
+loadDotenv({ path: fileURLToPath(new URL('../../.env', import.meta.url)), quiet: true });
 
 export default defineConfig({
   test: {

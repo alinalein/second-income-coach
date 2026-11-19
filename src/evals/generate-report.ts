@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildReport, type TrajectoryResults } from './build-report.js';
+import { publishedEvalResultsSchema } from '@app/shared';
+import { assessRunCompleteness, buildReport, type TrajectoryResults } from './build-report.js';
 import { runGuardrailSuites, type GuardrailSuiteResult } from './guardrails.js';
 import { renderHtml, renderJsonSummary, renderMarkdown } from './render.js';
 
@@ -16,10 +17,20 @@ import { renderHtml, renderJsonSummary, renderMarkdown } from './render.js';
 export interface RunGenerateReportOptions {
   trajectoryResultsPath: string;
   outDir: string;
+  /** Story 7.5's input file (committed, not gitignored) — distinct from
+   * `outDir`/`results/`, which stays gitignored generated output. */
+  publishedResultsPath: string;
   /** Injectable seam (Review Triage Log: "no test exercised `main()` at
    * all") — the real default spawns real `vitest` child processes; tests
    * inject a fake so the pipeline is exercised without that cost. */
   runGuardrailSuites: () => GuardrailSuiteResult[];
+}
+
+export interface PublishResult {
+  written: boolean;
+  /** Only set when `written` is false — why the published file was left
+   * untouched ("never from a partial run"). */
+  reason?: string;
 }
 
 export interface RunGenerateReportResult {
@@ -27,6 +38,7 @@ export interface RunGenerateReportResult {
   reportHtmlPath: string;
   reportJsonPath: string;
   allBuiltSuitesPassed: boolean;
+  published: PublishResult;
 }
 
 /**
@@ -53,9 +65,29 @@ export function runGenerateReport(options: RunGenerateReportOptions): RunGenerat
   fs.mkdirSync(options.outDir, { recursive: true });
   fs.writeFileSync(reportMdPath, renderMarkdown(report));
   fs.writeFileSync(reportHtmlPath, renderHtml(report));
-  fs.writeFileSync(reportJsonPath, JSON.stringify(renderJsonSummary(report), null, 2));
+  const jsonSummary = renderJsonSummary(report);
+  fs.writeFileSync(reportJsonPath, JSON.stringify(jsonSummary, null, 2));
 
-  return { reportMdPath, reportHtmlPath, reportJsonPath, allBuiltSuitesPassed: report.guardrails.allBuiltSuitesPassed };
+  // "Never from a partial run": a `-t`-filtered `npm run eval` must never
+  // overwrite the committed published file with incomplete data — checked
+  // against the raw trajectory results (not the rendered report, which has
+  // already smoothed a missing `mistralJailbreakFlagRate` into "pending").
+  const completeness = assessRunCompleteness(trajectoryResults);
+  let published: PublishResult;
+  if (completeness.complete) {
+    // Same numbers as report.json, nothing hand-copied — `jsonSummary` is
+    // the exact object already written above. Validated against the shared
+    // schema Story 7.5 also validates with, so a shape drift here fails
+    // loudly now rather than silently breaking that page later.
+    publishedEvalResultsSchema.parse(jsonSummary);
+    fs.mkdirSync(path.dirname(options.publishedResultsPath), { recursive: true });
+    fs.writeFileSync(options.publishedResultsPath, JSON.stringify(jsonSummary, null, 2));
+    published = { written: true };
+  } else {
+    published = { written: false, reason: completeness.reason };
+  }
+
+  return { reportMdPath, reportHtmlPath, reportJsonPath, allBuiltSuitesPassed: report.guardrails.allBuiltSuitesPassed, published };
 }
 
 const evalsDir = fileURLToPath(new URL('.', import.meta.url));
@@ -63,13 +95,20 @@ const srcDir = path.join(evalsDir, '..');
 
 function main(): void {
   try {
+    const publishedResultsPath = path.join(evalsDir, 'published', 'eval-results.json');
     const result = runGenerateReport({
       trajectoryResultsPath: path.join(evalsDir, 'results', 'trajectory-results.json'),
       outDir: path.join(evalsDir, 'results'),
+      publishedResultsPath,
       runGuardrailSuites: () => runGuardrailSuites(srcDir),
     });
 
     console.log(`Evaluation report written to:\n  ${result.reportMdPath}\n  ${result.reportHtmlPath}\n  ${result.reportJsonPath}`);
+    if (result.published.written) {
+      console.log(`Published results refreshed at:\n  ${publishedResultsPath}\nCommit this file.`);
+    } else {
+      console.warn(`Published results NOT refreshed (left untouched) — ${result.published.reason}`);
+    }
     if (!result.allBuiltSuitesPassed) {
       console.error('Warning: at least one built guardrail suite failed — see the report for details.');
       process.exitCode = 1;
