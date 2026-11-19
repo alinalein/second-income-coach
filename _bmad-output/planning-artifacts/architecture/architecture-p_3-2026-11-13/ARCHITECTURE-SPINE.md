@@ -157,29 +157,6 @@ web/
   src/             # React frontend, TanStack Query hooks
 ```
 
-## Capability → Architecture Map
-
-| Capability / Area | Lives in | Governed by |
-| --- | --- | --- |
-| CAP-1 — Intake | `tools/plain/submit_intake`, `db/` (hard-state tables) | AD-3, AD-4, AD-16 |
-| CAP-2 — Idea generation | `tools/llm/generate_ideas`, `tools/plain/set_idea_status`, `tools/mcp/web_search` | AD-4, AD-5, AD-6, AD-13, AD-27 |
-| CAP-3 — Plan generation | `tools/llm/create_plan`, `tools/plain/get_current_step` | AD-3, AD-4, AD-13 |
-| CAP-4 — Check-ins (text + voice) | `tools/plain/{start_step,complete_step,record_check_in}`, `voice/` | AD-3, AD-4, AD-8, AD-9, AD-10, AD-11, AD-12, AD-15, AD-17 |
-| CAP-5 — Income/opportunity projection | `tools/plain/get_projection` | AD-4, AD-6, AD-27 |
-| CAP-6 — Plan activation (HITL) | `tools/plain/activate_plan` | AD-13, AD-14 |
-| CAP-7 — Settings (personality + model registry + UI language + currency) | `tools/plain/{set_personality,set_model,set_ui_language,set_currency}` | AD-20, AD-24, AD-27 |
-| CAP-8 — Token & cost tracking | `api/` (post-turn computation) | AD-21, AD-27 |
-| CAP-9 — Feedback | `tools/plain/record_feedback` | AD-11, AD-22 |
-| CAP-10 — Bilingual chat (DE/EN) | `agent/` (prompt construction), `voice/` | AD-24, AD-25, AD-26 |
-| CAP-11 — Quality & Decisions page (public) | `web/src/` (public route) | AD-17 (scoped exception), AD-28, AD-29 |
-| CAP-12 — Agent progress display & chat Markdown rendering | `agent/` (step/tool → label mapping), `api/` (SSE channel), `web/src/chat/` (`ChatThread`/`ChatMessage`) | AD-11, AD-12, AD-19 (amended), AD-24, AD-30 (amended), AD-31, AD-32 |
-| Cross-cutting: moderation & safety | `agent/` middleware hooks | AD-11, AD-12 |
-| Cross-cutting: resilience | `agent/` node config | AD-7 |
-| Cross-cutting: shared types | `shared/schemas/` | AD-16 |
-| Cross-cutting: thread/session mapping | `api/` (Express), `agent/` | AD-17, AD-18 |
-| Cross-cutting: request/response delivery | `api/` (Express) | AD-19 |
-| Cross-cutting: web/API security (SQLi, XSS, CORS, rate limiting, CSRF, TLS) | `api/` (Express), `db/` (Drizzle) | AD-30 |
-
 ## Deferred
 
 - **v2 voice (`gpt-audio-mini` speech-to-speech)** — waits until the v1 record→transcribe→review flow has proven itself in real use (per AD-9); the unified speech-to-speech path removes the transcript-review step and isn't needed to clear the course deadline. Note: `gpt-audio-mini-2025-12-15` (the Stack-table pin) currently has a live OpenAI deprecation notice (replacement `gpt-audio-1.5`); re-check its status directly against OpenAI's deprecations page before v2 work starts rather than trusting this pin.
