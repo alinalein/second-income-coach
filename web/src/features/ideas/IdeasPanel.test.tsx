@@ -779,14 +779,48 @@ describe('IdeasPanel (revert-on-failure)', () => {
     const rejectButton = await screen.findByRole('button', { name: 'Reject' });
     fireEvent.click(rejectButton);
 
-    // Optimistic: the card disappears the instant Reject is clicked, before
-    // the (failing) response has resolved.
-    expect(screen.queryByText(idea.title)).not.toBeInTheDocument();
+    // UX fix (user-requested): the card now fades out in place first
+    // (still mounted, `aria-hidden`) instead of vanishing from the DOM the
+    // instant Reject is clicked — the real status change (what used to
+    // remove it right away) is deliberately delayed so the disappearance
+    // itself can animate; see `postIdeaStatus`'s own doc comment.
+    const card = screen.getByText(idea.title).closest('[class*="rounded-xl"]')!;
+    expect(card).toHaveAttribute('aria-hidden', 'true');
 
-    // Reverted once the request fails — the card is back, and the failure
-    // is surfaced.
-    expect(await screen.findByText(idea.title)).toBeInTheDocument();
+    // Reverted once the (failing) response settles — in this test that
+    // happens well before the exit fade's own delay, so the status change
+    // was never actually applied: the card simply becomes visible again,
+    // never having left the DOM at all, and the failure is surfaced.
+    await waitFor(() => expect(card).not.toHaveAttribute('aria-hidden'));
     expect(await screen.findByRole('alert')).toHaveTextContent("That didn't save. Please try again.");
+  });
+});
+
+// UX fix (user-requested): Reject/Bookmark removing a card from this view
+// used to be instant, which read as a jump once the remaining cards
+// snapped into its spot. Covers the success path (the revert-on-failure
+// describe above covers the cancelled-fade failure path).
+describe('IdeasPanel (UX fix: a card fades out before it actually leaves the grid)', () => {
+  it('keeps a rejected card mounted and aria-hidden during the exit fade, then removes it', async () => {
+    const idea: IdeaResponse = { ...fakeIdea(), status: 'suggested' };
+    vi.stubGlobal(
+      'fetch',
+      mockFetch({
+        ...INTAKE_NULL_RESPONSE,
+        '/api/ideas/idea-1/status': () => new Response(null, { status: 204 }),
+        '/api/ideas': () => new Response(JSON.stringify({ ideas: [idea], currency: 'EUR' }), { status: 200 }),
+      }),
+    );
+
+    render(<IdeasPanel />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Reject' }));
+
+    const card = screen.getByText(idea.title).closest('[class*="rounded-xl"]')!;
+    expect(card).toHaveAttribute('aria-hidden', 'true');
+    // Still mounted, not gone yet — the exit fade hasn't finished.
+    expect(screen.getByText(idea.title)).toBeInTheDocument();
+
+    await waitFor(() => expect(screen.queryByText(idea.title)).not.toBeInTheDocument());
   });
 });
 
@@ -881,6 +915,37 @@ describe('IdeasPanel (bug fix, live: opening one card\'s Details fades out only 
 
     fireEvent.click(screen.getByRole('button', { name: 'Details – Idea 1' }));
     expect(card4).not.toHaveAttribute('aria-hidden');
+  });
+});
+
+// Bug fix (user-reported, live): opening one card's "Details" used to
+// close whatever other card's panel was already open (a single
+// `openDetailsIdeaId`) — several can now stay open at once, each closing
+// only via its own toggle, never because a different card's was opened.
+describe('IdeasPanel (bug fix, live: several cards\' Details panels can stay open at once)', () => {
+  it('keeps two different cards open at the same time, each closing only via its own toggle', async () => {
+    const ideas: IdeaResponse[] = [1, 2].map((n) => ({ ...fakeIdea(), id: `idea-${n}`, title: `Idea ${n}` }));
+    vi.stubGlobal(
+      'fetch',
+      mockFetch({
+        ...INTAKE_NULL_RESPONSE,
+        '/api/ideas': () => new Response(JSON.stringify({ ideas, currency: 'EUR' }), { status: 200 }),
+      }),
+    );
+
+    render(<IdeasPanel />);
+    await screen.findByText('Idea 1');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Details – Idea 1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Details – Idea 2' }));
+
+    expect(screen.getByRole('button', { name: 'Details – Idea 1' })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('button', { name: 'Details – Idea 2' })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getAllByText('Based on 3 of your inputs').every((element) => element.closest('[hidden]') === null)).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Details – Idea 1' }));
+    expect(screen.getByRole('button', { name: 'Details – Idea 1' })).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getByRole('button', { name: 'Details – Idea 2' })).toHaveAttribute('aria-expanded', 'true');
   });
 });
 

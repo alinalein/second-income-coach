@@ -125,6 +125,54 @@ describe('pickCurrentAndNext (AC/AD-4: capped to current+next)', () => {
   });
 });
 
+// AD-4 amendment (Story 4.5 bug fix, user-reported): "on a COMPLETED plan,
+// 'tell me more about step 3' -> model says it cannot see step 3" — the
+// cap stays for future steps only, so every completed step's title/
+// description is always returned, on both an active and a completed plan,
+// and never anything beyond `next`.
+describe('pickCurrentAndNext (AD-4 amendment: completedSteps)', () => {
+  it.each([
+    [
+      'an active plan returns completed steps but never a future step beyond next',
+      [
+        step({ stepOrder: 0, status: 'completed', title: 'Step 1', description: ['Do step 1.'] }),
+        step({ stepOrder: 1, status: 'completed', title: 'Step 2', description: ['Do step 2.'] }),
+        step({ stepOrder: 2, status: 'current', title: 'Step 3' }),
+        step({ stepOrder: 3, status: 'pending', title: 'Step 4' }),
+        step({ stepOrder: 4, status: 'pending', title: 'Step 5' }),
+      ],
+      null,
+      [
+        { stepOrder: 0, title: 'Step 1', description: ['Do step 1.'] },
+        { stepOrder: 1, title: 'Step 2', description: ['Do step 2.'] },
+      ],
+    ],
+    [
+      'a completed plan (no current step) returns every completed step',
+      [
+        step({ stepOrder: 0, status: 'completed', title: 'Step 1', description: ['Do step 1.'] }),
+        step({ stepOrder: 1, status: 'completed', title: 'Step 2', description: ['Do step 2.'] }),
+        step({ stepOrder: 2, status: 'completed', title: 'Step 3', description: ['Do step 3.'] }),
+      ],
+      new Date('2026-01-15T00:00:00.000Z'),
+      [
+        { stepOrder: 0, title: 'Step 1', description: ['Do step 1.'] },
+        { stepOrder: 1, title: 'Step 2', description: ['Do step 2.'] },
+        { stepOrder: 2, title: 'Step 3', description: ['Do step 3.'] },
+      ],
+    ],
+  ] as const)('%s', (_label, rows, completedAt, expectedCompletedSteps) => {
+    const result = pickCurrentAndNext(rows, undefined, completedAt);
+
+    expect(result.completedSteps).toEqual(expectedCompletedSteps);
+    // Never a step beyond `next`, regardless of how many completed steps
+    // are also returned.
+    if (result.current) {
+      expect(result.next?.stepOrder ?? -1).toBeLessThanOrEqual(result.current.stepOrder + 1);
+    }
+  });
+});
+
 // Bug fix (user-reported): "how's your energy today" must ask at most once
 // per calendar day, regardless of how long the user was away.
 describe('startOfUtcDay (bug fix: once-per-day check-in ask)', () => {

@@ -58,7 +58,7 @@ afterEach(() => {
 // input at all, so there's nothing here to disable).
 describe('VoiceInput (I/O matrix: no MediaRecorder)', () => {
   it('shows a neutral note instead of a mic button when MediaRecorder is unavailable', () => {
-    render(<VoiceInput fillDraft={vi.fn()} disabled={false} />);
+    render(<VoiceInput fillDraft={vi.fn()} disabled={false} getSendCount={() => 0} />);
 
     expect(screen.getByText(chatEn.voice.unsupported)).toBeInTheDocument();
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
@@ -79,7 +79,7 @@ describe('VoiceInput (I/O matrix: happy path)', () => {
     );
     const fillDraft = vi.fn();
 
-    render(<VoiceInput fillDraft={fillDraft} disabled={false} />);
+    render(<VoiceInput fillDraft={fillDraft} disabled={false} getSendCount={() => 0} />);
 
     fireEvent.click(screen.getByRole('button', { name: chatEn.voice.micLabel }));
     await waitFor(() => expect(screen.getByRole('button', { name: chatEn.voice.stopLabel })).toBeInTheDocument());
@@ -108,7 +108,7 @@ describe('VoiceInput (near-live mode: interim updates while still recording)', (
     );
     const fillDraft = vi.fn();
 
-    render(<VoiceInput fillDraft={fillDraft} disabled={false} />);
+    render(<VoiceInput fillDraft={fillDraft} disabled={false} getSendCount={() => 0} />);
 
     fireEvent.click(screen.getByRole('button', { name: chatEn.voice.micLabel }));
     await waitFor(() => expect(screen.getByRole('button', { name: chatEn.voice.stopLabel })).toBeInTheDocument());
@@ -136,7 +136,7 @@ describe('VoiceInput (I/O matrix: mic permission denied)', () => {
   it('shows a neutral note and returns to idle when getUserMedia rejects', async () => {
     stubSupportedMediaApis(vi.fn().mockRejectedValue(new Error('denied')));
 
-    render(<VoiceInput fillDraft={vi.fn()} disabled={false} />);
+    render(<VoiceInput fillDraft={vi.fn()} disabled={false} getSendCount={() => 0} />);
 
     fireEvent.click(screen.getByRole('button', { name: chatEn.voice.micLabel }));
 
@@ -153,7 +153,7 @@ describe('VoiceInput (I/O matrix: transcription call fails)', () => {
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(new Response('', { status: 503 }))));
     const fillDraft = vi.fn();
 
-    render(<VoiceInput fillDraft={fillDraft} disabled={false} />);
+    render(<VoiceInput fillDraft={fillDraft} disabled={false} getSendCount={() => 0} />);
 
     fireEvent.click(screen.getByRole('button', { name: chatEn.voice.micLabel }));
     await waitFor(() => expect(screen.getByRole('button', { name: chatEn.voice.stopLabel })).toBeInTheDocument());
@@ -183,7 +183,7 @@ describe('VoiceInput (review fix: unmount mid-transcription)', () => {
     );
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
-    const { unmount } = render(<VoiceInput fillDraft={vi.fn()} disabled={false} />);
+    const { unmount } = render(<VoiceInput fillDraft={vi.fn()} disabled={false} getSendCount={() => 0} />);
 
     fireEvent.click(screen.getByRole('button', { name: chatEn.voice.micLabel }));
     await waitFor(() => expect(screen.getByRole('button', { name: chatEn.voice.stopLabel })).toBeInTheDocument());
@@ -196,5 +196,43 @@ describe('VoiceInput (review fix: unmount mid-transcription)', () => {
 
     expect(consoleErrorSpy).not.toHaveBeenCalled();
     consoleErrorSpy.mockRestore();
+  });
+});
+
+// Bug fix (user-reported, live): "sent a voice message, but the input
+// still showed the (already-sent) transcript afterward" — the final
+// transcription call is async; if the user sends (text, or an earlier
+// interim-filled draft) before it resolves, `getSendCount()` will have
+// moved on by then, and the stale result must never repopulate the
+// now-empty, already-sent draft.
+describe('VoiceInput (bug fix, live: a stale transcription result is dropped once the draft has already been sent)', () => {
+  it('does not fill the draft with the final transcript if a send happened while it was still in flight', async () => {
+    stubSupportedMediaApis(vi.fn().mockResolvedValue(fakeStream()));
+    let resolveFetch: (response: Response) => void = () => undefined;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        () =>
+          new Promise<Response>((resolve) => {
+            resolveFetch = resolve;
+          }),
+      ),
+    );
+    const fillDraft = vi.fn();
+    let sendCount = 0;
+
+    render(<VoiceInput fillDraft={fillDraft} disabled={false} getSendCount={() => sendCount} />);
+
+    fireEvent.click(screen.getByRole('button', { name: chatEn.voice.micLabel }));
+    await waitFor(() => expect(screen.getByRole('button', { name: chatEn.voice.stopLabel })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: chatEn.voice.stopLabel }));
+
+    // The user sends a message (this recording's own transcript, or
+    // something else entirely) before the transcription call resolves.
+    sendCount += 1;
+    resolveFetch(new Response(JSON.stringify({ transcript: 'Hallo', detectedLanguage: 'de' }), { status: 200 }));
+    await waitFor(() => expect(screen.getByRole('button', { name: chatEn.voice.micLabel })).toBeInTheDocument());
+
+    expect(fillDraft).not.toHaveBeenCalled();
   });
 });

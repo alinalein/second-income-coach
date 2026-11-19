@@ -1,7 +1,7 @@
 import { and, eq, gte, ne, sql } from 'drizzle-orm';
 import { tool } from 'langchain';
 import { z } from 'zod';
-import { currentStepResponseSchema, type CurrentStepResponse, type PlanStepResponse } from '@app/shared';
+import { currentStepResponseSchema, type CompletedStepResponse, type CurrentStepResponse, type PlanStepResponse } from '@app/shared';
 import type { createDb } from '../../db/client.js';
 import { plans, planSteps, checkIns } from '../../db/schema/index.js';
 
@@ -18,6 +18,10 @@ function toStepResponse(row: PlanStepRow): PlanStepResponse {
     status: row.status as PlanStepResponse['status'],
     startedAt: row.startedAt ? row.startedAt.toISOString() : null,
   };
+}
+
+function toCompletedStepResponse(row: PlanStepRow): CompletedStepResponse {
+  return { stepOrder: row.stepOrder, title: row.title, description: row.description };
 }
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
@@ -57,6 +61,12 @@ export function startOfUtcDay(date: Date): Date {
  * has the next-higher `stepOrder`, or `null` when `current` is the plan's
  * last step (or when there is no `current` step at all, a defensive-only
  * case `create_plan`'s own write never produces).
+ *
+ * AD-4 amendment (Story 4.5 bug fix): the cap stays for *future* steps
+ * only — `completedSteps` below returns every `status === 'completed'`
+ * row's title/description regardless of `current`, so a chat question
+ * about a step the user already finished can be answered on both an
+ * active and a completed plan.
  */
 export interface GapFlags {
   gapDetected: boolean;
@@ -82,17 +92,23 @@ export function pickCurrentAndNext(
 ): CurrentStepResponse {
   const ordered = [...rows].sort((a, b) => a.stepOrder - b.stepOrder);
   const currentIndex = ordered.findIndex((row) => row.status === 'current');
-  const completion = completedAt
-    ? { completedAt: completedAt.toISOString(), completedSteps: ordered.filter((row) => row.status === 'completed').length }
-    : null;
+  const completedRows = ordered.filter((row) => row.status === 'completed');
+  const completedSteps = completedRows.map(toCompletedStepResponse);
+  const completion = completedAt ? { completedAt: completedAt.toISOString(), completedSteps: completedRows.length } : null;
 
   if (currentIndex === -1) {
-    return currentStepResponseSchema.parse({ current: null, next: null, ...gap, completion });
+    return currentStepResponseSchema.parse({ current: null, next: null, completedSteps, ...gap, completion });
   }
 
   const current = toStepResponse(ordered[currentIndex]!);
   const nextRow = ordered[currentIndex + 1];
-  return currentStepResponseSchema.parse({ current, next: nextRow ? toStepResponse(nextRow) : null, ...gap, completion });
+  return currentStepResponseSchema.parse({
+    current,
+    next: nextRow ? toStepResponse(nextRow) : null,
+    completedSteps,
+    ...gap,
+    completion,
+  });
 }
 
 /**
@@ -187,9 +203,11 @@ export function createGetCurrentStepTool(db: Db) {
     {
       name: 'get_current_step',
       description:
-        'Call this when the user asks what their current step or next step is, or anything about where they ' +
-        "are in their plan. Returns only the plan's current step and the immediate next step — never the full " +
-        'list of steps.',
+        'Call this when the user asks what their current step or next step is, anything about where they are ' +
+        'in their plan, or anything about a step they already completed (e.g. "what exactly was step 3?") — ' +
+        "including on a completed plan, where there is no current step. Returns the plan's current step, the " +
+        'immediate next step, and the title/description of every already-completed step. Never reveals any ' +
+        'step beyond the immediate next one.',
       schema: z.object({}),
     },
   );

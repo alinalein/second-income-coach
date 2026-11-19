@@ -9,6 +9,7 @@ import { IntakeForm } from './features/intake/IntakeForm';
 import { IdeasPanel } from './features/ideas/IdeasPanel';
 import { PlanWorkspace } from './features/plan-workspace/PlanWorkspace';
 import { SettingsPage } from './features/settings/SettingsPage';
+import { QualityPage } from './features/quality/QualityPage';
 import { Sidebar, SidebarMobileMenuButton, useIsDesktop } from './features/sidebar/Sidebar';
 import { useAppliedUiLanguage } from './features/settings/useAppliedUiLanguage';
 
@@ -225,6 +226,7 @@ function signOut(onSignedOut: () => void) {
 export type Route =
   | { kind: 'ideas' }
   | { kind: 'settings' }
+  | { kind: 'quality' }
   | { kind: 'plan'; ideaId: string; ideaTitle: string | null }
   | { kind: 'bookmarked'; ideaId: string }
   // UX fix (user-reported): the sidebar's "Bookmarked" entry is now one
@@ -235,6 +237,7 @@ export type Route =
 
 function parsePath(pathname: string): Route {
   if (pathname === '/settings') return { kind: 'settings' };
+  if (pathname === '/quality') return { kind: 'quality' };
   if (pathname === '/bookmarked') return { kind: 'bookmarkedAll' };
   const planMatch = /^\/plan\/([^/]+)$/.exec(pathname);
   if (planMatch) return { kind: 'plan', ideaId: planMatch[1]!, ideaTitle: null };
@@ -245,6 +248,7 @@ function parsePath(pathname: string): Route {
 
 function pathForRoute(route: Route): string {
   if (route.kind === 'settings') return '/settings';
+  if (route.kind === 'quality') return '/quality';
   if (route.kind === 'plan') return `/plan/${route.ideaId}`;
   if (route.kind === 'bookmarked') return `/bookmarked/${route.ideaId}`;
   if (route.kind === 'bookmarkedAll') return '/bookmarked';
@@ -338,9 +342,21 @@ function useResolvedPlanTitle(route: Route, setRoute: (route: Route) => void): v
  * content just swapped in the same commit, and a height difference between
  * the two plans read as a jump. Folding the specific `ideaId` into the key
  * makes every distinct plan/idea its own transition too.
+ *
+ * Bug fix (user-reported, live): "from login to form, it jumps, not a
+ * smooth transition" — this used to key the loading state on `hasIntake
+ * === null` alone, but the actual loading paragraph below also stays
+ * visible while `!uiLanguageReady` (a signed-in user's real UI language
+ * is still being applied). `hasIntake` routinely resolves first, flipping
+ * this key to `'intake'`/etc. while the loading text is still the thing
+ * on screen — so the *content* swap from "Loading…" to the real intake
+ * form, once `uiLanguageReady` catches up, happened inside the same
+ * `FadeIn` mount with no key change at all, snapping in with no fade.
+ * Folding `uiLanguageReady` in here too keeps this key in exact lockstep
+ * with the render condition below it mirrors.
  */
-export function computeViewKey(hasIntake: boolean | null, showIntakeForm: boolean, route: Route): string {
-  if (hasIntake === null) return 'loading';
+export function computeViewKey(hasIntake: boolean | null, uiLanguageReady: boolean, showIntakeForm: boolean, route: Route): string {
+  if (hasIntake === null || !uiLanguageReady) return 'loading';
   if (showIntakeForm) return 'intake';
   if (route.kind === 'plan' || route.kind === 'bookmarked') return `${route.kind}:${route.ideaId}`;
   return route.kind;
@@ -428,28 +444,39 @@ export function App() {
   // split via `useIsDesktop` (JS `matchMedia`), not a `sm:hidden` CSS
   // toggle — see that hook's own doc comment for why.
   const isDesktop = useIsDesktop();
-  const viewKey = computeViewKey(hasIntake, showIntakeForm, route);
+  const viewKey = computeViewKey(hasIntake, uiLanguageReady, showIntakeForm, route);
 
   if (authStatus.state !== 'authenticated') {
+    // UX fix (user-requested): sign-in and the signed-in app shell used to
+    // be two completely different top-level trees swapped in one commit —
+    // the moment OAuth resolves (the first-ever sign-in's own jump straight
+    // into the intake form included), the sign-in screen vanished and the
+    // app shell snapped in with no transition at all. `FadeIn` (already
+    // used below for every view-to-view swap inside the signed-in app) is
+    // reused here, keyed on sign-in state, so this top-level swap gets the
+    // exact same smooth fade the rest of the app already has.
     return (
-      <div className="min-h-screen text-foreground">
-        <header className="border-b border-border">
-          <div className="mx-auto flex max-w-3xl items-center justify-between px-6 py-4">
-            <span className="text-sm font-semibold tracking-tight">{t('app.title')}</span>
-            <div className="flex items-center gap-2">
-              <SignInLanguageToggle />
-              <ThemeToggle />
+      <FadeIn key="signed-out">
+        <div className="min-h-screen text-foreground">
+          <header className="border-b border-border">
+            <div className="mx-auto flex max-w-3xl items-center justify-between px-6 py-4">
+              <span className="text-sm font-semibold tracking-tight">{t('app.title')}</span>
+              <div className="flex items-center gap-2">
+                <SignInLanguageToggle />
+                <ThemeToggle />
+              </div>
             </div>
-          </div>
-        </header>
-        <main className="mx-auto flex max-w-3xl flex-col gap-6 px-6 py-10">
-          <SignInCard showError={hasAuthError} />
-        </main>
-      </div>
+          </header>
+          <main className="mx-auto flex max-w-3xl flex-col gap-6 px-6 py-10">
+            <SignInCard showError={hasAuthError} />
+          </main>
+        </div>
+      </FadeIn>
     );
   }
 
   return (
+    <FadeIn key="signed-in">
     <div className="flex h-screen overflow-hidden text-foreground">
       {/* 2.9 AC: the sidebar shows once this signed-in user has an intake —
        * not before (the no-intake-yet screen has nothing to navigate to). */}
@@ -525,6 +552,10 @@ export function App() {
                 }}
               />
             </div>
+          ) : route.kind === 'quality' ? (
+            <div className="mx-auto w-full max-w-3xl">
+              <QualityPage onBackToApp={() => navigate({ kind: 'ideas' })} />
+            </div>
           ) : route.kind === 'plan' ? (
             <PlanWorkspace
               ideaId={route.ideaId}
@@ -548,5 +579,6 @@ export function App() {
         </main>
       </div>
     </div>
+    </FadeIn>
   );
 }

@@ -390,14 +390,31 @@ export function createIdeasRouter({
       );
 
       const [after, currency] = await Promise.all([getIdeasByUserId(db, userId), getUserCurrency(db, userId)]);
-      // Story 2.4 AC1: `regenerated` is now "exactly IDEAS_PER_BATCH brand-
-      // new ids appeared" — an append, not a replace, so the old
+      // Story 2.4 AC1: `regenerated` is "at least one brand-new id
+      // appeared" — an append, not a replace, so the old
       // `afterSuggested.length === env.IDEAS_PER_BATCH` formula (which
       // assumed the suggested count was always reset to exactly the batch
       // size) no longer holds once a previous run's suggested ideas are
       // still there too.
+      //
+      // Bug fix (user-reported, live): this used to require *exactly*
+      // `env.IDEAS_PER_BATCH` new ids — but `generate_ideas.ts`'s own
+      // `generateOneIdeaSlot`/`handleGenerateIdeas` (Bug fix, item 3)
+      // deliberately treats a partial batch (a slot dropped after
+      // exhausting its retries) as a *success*, only throwing when every
+      // slot fails: "a partial batch (fewer than ideasPerBatch accepted) is
+      // a success, not a degraded one." The strict `=== IDEAS_PER_BATCH`
+      // check here contradicted that — any single dropped slot (one bad
+      // quote, or now one rationale-shape rejection) reported the whole
+      // request as a 502 failure to the browser even though the accepted
+      // ideas had already been written to Postgres, hiding real, valid
+      // ideas behind a generic error and discarding one of that batch's
+      // generation-count allowance for nothing. `newIds.length > 0` matches
+      // `generate_ideas.ts`'s own success contract exactly: only a
+      // genuinely empty result (every slot failed) is reported as a
+      // failure.
       const newIds = after.filter((idea) => !beforeIds.has(idea.id));
-      const regenerated = newIds.length === env.IDEAS_PER_BATCH;
+      const regenerated = newIds.length > 0;
 
       if (!regenerated) {
         // I/O matrix: "Agent doesn't call the tool" / a tool error (e.g. no

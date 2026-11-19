@@ -328,6 +328,11 @@ const AUTO_GENERATE_TOTAL_DURATION_MS = TYPICAL_GENERATE_DURATION_MS + AUTO_GENE
  * reaching 100% instead of being cut off mid-animation by the same render
  * that swaps the ideas in. */
 const PROGRESS_COMPLETE_DELAY_MS = 300;
+/** UX fix (user-requested): matches `IdeaCard`'s own `transition-opacity
+ * duration-200` — how long a Bookmark/Reject/Select click's exit fade
+ * plays before the real status change (and the resulting grid reflow) is
+ * actually applied. See `postIdeaStatus`'s own doc comment. */
+const EXIT_TRANSITION_MS = 200;
 
 function DeterminateProgressBar({ percent, label }: { percent: number; label: string }) {
   return (
@@ -542,6 +547,7 @@ function IdeaCard({
   detailsOpen,
   onToggleDetails,
   fadeOut,
+  exitingView,
 }: {
   idea: IdeaWithPlanResponse;
   /** Story 2.7: the cached translation for this idea into the current UI
@@ -566,21 +572,35 @@ function IdeaCard({
   onRequestSelect: (idea: IdeaWithPlanResponse) => void;
   pending: boolean;
   /** Bug fix (user-reported, live): lifted up to `IdeasPanel` (was this
-   * component's own local `useState`) — only one card's details can be
-   * open across the whole grid at a time now, so every *other* card can
-   * know to fade out while it's open (`fadeOut` below), which a purely
-   * local state could never express. */
+   * component's own local `useState`) — any number of cards' panels can be
+   * open at once now (`IdeasPanel`'s own `openDetailsIdeaIds`, a `Set`);
+   * opening one never closes another, which only closes via its own
+   * toggle. Lifted (not local) so every card directly below an open one
+   * can know to fade out while it's open (`fadeOut` below), which a
+   * purely local state could never express. */
   detailsOpen: boolean;
   onToggleDetails: () => void;
   /** Bug fix (user-reported, live, two rounds): "the card [whose space the
    * floating details panel opens over] is supposed to disappear" — true
-   * for exactly the one card directly below the open one (same grid
-   * column, one row down — `IdeasPanel`'s own `ideaIdDirectlyBelowOpen`),
+   * for exactly the one card directly below *this* open one (same grid
+   * column, one row down — `IdeasPanel`'s own `ideaIdsDirectlyBelowOpen`),
    * never any other card. The first version faded every *other* card in
    * the whole grid instead (simpler — no grid-position math needed), but
    * that was explicitly rejected live: "now all cards around it
    * disappear, not only the card below." */
   fadeOut: boolean;
+  /** UX fix (user-requested): Bookmark/Reject removing a card from this
+   * view used to be instant — the optimistic status update dropped it
+   * from `visibleIdeas` in the very same render as the click, so the
+   * remaining cards snapped into its spot with no transition at all (CSS
+   * Grid has no native animated reflow). `IdeasPanel`'s own
+   * `exitingIdeaIds` keeps this card mounted (same key, same node) for one
+   * short fade first — its own opacity genuinely transitions since it's an
+   * existing node changing state, not a fresh mount — and only applies
+   * the real status change once that fade finishes, so the disappearance
+   * itself is soft; the sibling reflow that follows is a smaller, separate
+   * jump most users don't register the same way. */
+  exitingView: boolean;
 }) {
   const { t } = useTranslation('ideas');
   // Story 2.7: only the 4 fields a translation ever covers are overridden —
@@ -655,9 +675,9 @@ function IdeaCard({
     // entire subtree, panel included, paint above every sibling; closing
     // drops it back to the default stacking order.
     <Card
-      aria-hidden={fadeOut || undefined}
-      inert={fadeOut || undefined}
-      className={`relative grid grid-cols-1 row-span-5 gap-4 p-4 [grid-template-rows:subgrid] transition-opacity duration-200 ${detailsOpen ? 'z-30' : ''} ${fadeOut ? 'pointer-events-none opacity-0' : ''}`}
+      aria-hidden={fadeOut || exitingView || undefined}
+      inert={fadeOut || exitingView || undefined}
+      className={`relative grid grid-cols-1 row-span-5 gap-4 p-4 [grid-template-rows:subgrid] transition-opacity duration-200 ${detailsOpen ? 'z-30' : ''} ${fadeOut || exitingView ? 'pointer-events-none opacity-0' : ''}`}
     >
       {/* Block: status badge (Story 2.3 AC2, only once the idea has left
        * `suggested`) + idea type inline, title below with normal
@@ -997,12 +1017,14 @@ export function IdeasPanel({
   // `null` means closed. Panel-level (not per-card) since only one dialog
   // can be open at a time.
   const [confirmIdea, setConfirmIdea] = React.useState<IdeaWithPlanResponse | null>(null);
-  // Bug fix (user-reported, live): which idea's "Details" panel is open —
+  // Bug fix (user-reported, live): which ideas' "Details" panels are open —
   // lifted up from `IdeaCard`'s own former local state, same reasoning as
-  // `confirmIdea` above (only one open at a time, panel-level so every
-  // *other* card can fade out while it's open — see `IdeaCard`'s own
-  // `fadeOut` prop doc comment).
-  const [openDetailsIdeaId, setOpenDetailsIdeaId] = React.useState<string | null>(null);
+  // `confirmIdea` above (panel-level so every card directly below an open
+  // one can fade out while it's open — see `IdeaCard`'s own `fadeOut` prop
+  // doc comment). A `Set`, not a single id: any number of cards can be open
+  // at once now — opening one must never close another that's already
+  // open; each only ever closes via its own toggle.
+  const [openDetailsIdeaIds, setOpenDetailsIdeaIds] = React.useState<ReadonlySet<string>>(new Set());
   // Bug fix (user-reported, live): true while `handleConfirmSelect`'s own
   // `postIdeaStatus` call is in flight — the dialog used to close the
   // instant the button was clicked (`setConfirmIdea(null)` ran
@@ -1021,6 +1043,10 @@ export function IdeasPanel({
   // it was, revert-scoped to this one action, right next to this notice).
   const [pendingIdeaIds, setPendingIdeaIds] = React.useState<ReadonlySet<string>>(new Set());
   const [statusUpdateFailed, setStatusUpdateFailed] = React.useState(false);
+  // UX fix (user-requested): which card(s) are mid-fade-out after a
+  // Bookmark/Reject/Select click that removes them from this view — see
+  // `postIdeaStatus`'s own doc comment.
+  const [exitingIdeaIds, setExitingIdeaIds] = React.useState<ReadonlySet<string>>(new Set());
 
   // Story 2.6 AC5: lifted up from `IdeaCard` — one `useViewerCountry()`
   // call (one `/api/intake` fetch) for the whole grid instead of one per
@@ -1223,6 +1249,17 @@ export function IdeasPanel({
    * uses its own `priorById` snapshot captured from `ideas` at its own call
    * time. Never calls `set_idea_status`'s persistence logic directly
    * (Boundary) — only ever this one HTTP call.
+   *
+   * UX fix (user-requested): a status change that removes the target card
+   * from this view (`willLeaveView`) used to apply instantly, dropping it
+   * from `visibleIdeas` in the same render as the click — the remaining
+   * cards snapped into its spot with no transition (CSS Grid has no native
+   * animated reflow). The card is now marked `exitingIdeaIds` first (an
+   * existing, still-mounted node, so its own opacity transition genuinely
+   * animates) and the real status change is applied `EXIT_TRANSITION_MS`
+   * later, once that fade has actually played. A failure before the fade
+   * finishes just cancels it (nothing was ever applied to revert); a
+   * failure after reverts as before.
    */
   const postIdeaStatus = React.useCallback(
     (ideaId: string, status: SettableStatus): Promise<boolean> => {
@@ -1236,7 +1273,53 @@ export function IdeasPanel({
         affectedIds.forEach((id) => next.add(id));
         return next;
       });
-      setIdeas((current) => applyOptimisticIdeaStatus(current, ideaId, status));
+
+      // Only the single target card can actually leave *this* view from a
+      // Bookmark/Reject/Select click (a `selected` sweep only ever demotes
+      // an already-`bookmarked` sibling, which stays visible either way):
+      // `onlyIdeaId` keeps showing that one idea regardless of status;
+      // `onlyBookmarked` only loses a card that stops being `bookmarked`;
+      // the default "New ideas" view loses it on *any* status change
+      // (nothing here keeps `suggested`).
+      const willLeaveView = onlyIdeaId ? false : onlyBookmarked ? status !== 'bookmarked' : true;
+      let statusApplied = false;
+      let exitCancelled = false;
+
+      const applyStatusChange = () => {
+        statusApplied = true;
+        setIdeas((current) => applyOptimisticIdeaStatus(current, ideaId, status));
+      };
+
+      if (willLeaveView) {
+        setExitingIdeaIds((prev) => new Set(prev).add(ideaId));
+        window.setTimeout(() => {
+          if (!isMountedRef.current) return;
+          setExitingIdeaIds((prev) => {
+            if (!prev.has(ideaId)) return prev;
+            const next = new Set(prev);
+            next.delete(ideaId);
+            return next;
+          });
+          if (!exitCancelled) applyStatusChange();
+        }, EXIT_TRANSITION_MS);
+      } else {
+        applyStatusChange();
+      }
+
+      const handleFailure = () => {
+        if (!isMountedRef.current) return;
+        if (statusApplied) {
+          setIdeas((current) => revertOptimisticIdeaStatus(current, priorById));
+        } else {
+          exitCancelled = true;
+          setExitingIdeaIds((prev) => {
+            const next = new Set(prev);
+            next.delete(ideaId);
+            return next;
+          });
+        }
+        setStatusUpdateFailed(true);
+      };
 
       return fetch(`/api/ideas/${ideaId}/status`, {
         method: 'POST',
@@ -1246,19 +1329,13 @@ export function IdeasPanel({
       })
         .then((res) => {
           if (!res.ok) {
-            if (isMountedRef.current) {
-              setIdeas((current) => revertOptimisticIdeaStatus(current, priorById));
-              setStatusUpdateFailed(true);
-            }
+            handleFailure();
             return false;
           }
           return true;
         })
         .catch(() => {
-          if (isMountedRef.current) {
-            setIdeas((current) => revertOptimisticIdeaStatus(current, priorById));
-            setStatusUpdateFailed(true);
-          }
+          handleFailure();
           return false;
         })
         .finally(() => {
@@ -1271,7 +1348,7 @@ export function IdeasPanel({
           }
         });
     },
-    [ideas],
+    [ideas, onlyIdeaId, onlyBookmarked],
   );
 
   /** Bookmark/Reject keep their current direct-call, fire-and-forget
@@ -1507,30 +1584,36 @@ export function IdeasPanel({
   // action (it replaces the `suggested` batch) — the "Bookmarked" views
   // (`onlyBookmarked`/`onlyIdeaId`) never show it.
   const isNewIdeasView = !onlyIdeaId && !onlyBookmarked;
-  // Bug fix (user-reported, live): guards against a stale
-  // `openDetailsIdeaId` — if that exact idea left `visibleIdeas`
+  // Bug fix (user-reported, live): guards against a stale id in
+  // `openDetailsIdeaIds` — if that exact idea left `visibleIdeas`
   // (Select/Reject remove it from this grid entirely) while its panel was
   // open, every *remaining* card would otherwise read `fadeOut: true`
   // forever (its own id never matches anything left), a permanent dead
   // end with no way to un-fade them.
-  const safeOpenDetailsIdeaId = visibleIdeas.some((idea) => idea.id === openDetailsIdeaId) ? openDetailsIdeaId : null;
+  const safeOpenDetailsIdeaIds = React.useMemo(
+    () => new Set([...openDetailsIdeaIds].filter((id) => visibleIdeas.some((idea) => idea.id === id))),
+    [openDetailsIdeaIds, visibleIdeas],
+  );
   // Bug fix (user-reported, live, follow-up): fading *every* other card
   // (this function's own previous version) was wrong — only the one card
-  // the floating panel actually opens over (directly below, in the same
-  // grid column) should fade; every other card must stay exactly as it
-  // was. `gridColumnCount` (tracked live, Tailwind's own `sm:`/`lg:`
+  // a given floating panel actually opens over (directly below it, in the
+  // same grid column) should fade; every other card must stay exactly as
+  // it was. `gridColumnCount` (tracked live, Tailwind's own `sm:`/`lg:`
   // breakpoints) turns "the card below" into a plain index offset into
   // `visibleIdeas`, since this grid has no gaps/blanks — row-major order,
-  // `columnCount` apart is always the same column, one row down. `null`
-  // whenever nothing's open, or the open card is already in the grid's
-  // last row (nothing below it to cover).
+  // `columnCount` apart is always the same column, one row down. Several
+  // cards can be open at once now, so this unions "the card directly
+  // below" across every one of them, not just a single open id.
   const gridColumnCount = useIdeaGridColumnCount();
-  const ideaIdDirectlyBelowOpen = React.useMemo(() => {
-    if (!safeOpenDetailsIdeaId) return null;
-    const openIndex = visibleIdeas.findIndex((idea) => idea.id === safeOpenDetailsIdeaId);
-    const belowIndex = openIndex + gridColumnCount;
-    return openIndex >= 0 && belowIndex < visibleIdeas.length ? visibleIdeas[belowIndex]!.id : null;
-  }, [safeOpenDetailsIdeaId, visibleIdeas, gridColumnCount]);
+  const ideaIdsDirectlyBelowOpen = React.useMemo(() => {
+    const result = new Set<string>();
+    for (const openId of safeOpenDetailsIdeaIds) {
+      const openIndex = visibleIdeas.findIndex((idea) => idea.id === openId);
+      const belowIndex = openIndex + gridColumnCount;
+      if (openIndex >= 0 && belowIndex < visibleIdeas.length) result.add(visibleIdeas[belowIndex]!.id);
+    }
+    return result;
+  }, [safeOpenDetailsIdeaIds, visibleIdeas, gridColumnCount]);
 
   return (
     <>
@@ -1628,9 +1711,20 @@ export function IdeasPanel({
                     // (those are genuinely changing too). An unrelated card's
                     // own action is unaffected.
                     pending={pendingIdeaIds.has(idea.id)}
-                    detailsOpen={safeOpenDetailsIdeaId === idea.id}
-                    onToggleDetails={() => setOpenDetailsIdeaId((prev) => (prev === idea.id ? null : idea.id))}
-                    fadeOut={ideaIdDirectlyBelowOpen === idea.id}
+                    detailsOpen={safeOpenDetailsIdeaIds.has(idea.id)}
+                    onToggleDetails={() =>
+                      setOpenDetailsIdeaIds((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(idea.id)) {
+                          next.delete(idea.id);
+                        } else {
+                          next.add(idea.id);
+                        }
+                        return next;
+                      })
+                    }
+                    fadeOut={ideaIdsDirectlyBelowOpen.has(idea.id)}
+                    exitingView={exitingIdeaIds.has(idea.id)}
                   />
                 );
               })}

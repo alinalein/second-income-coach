@@ -22,6 +22,7 @@ import { createIdeasRouter } from './routes/ideas.js';
 import { createPlansRouter } from './routes/plans.js';
 import { createPlanChatRouter } from './routes/plan-chat.js';
 import { createSettingsRouter } from './routes/settings.js';
+import { createQualityRouter } from './routes/quality.js';
 import { createVoiceRouter, MAX_VOICE_AUDIO_BYTES } from './routes/voice.js';
 
 export interface AppDeps {
@@ -161,6 +162,11 @@ export function createApp({
 
   // Story 5.1: personality + model settings, same auth gate as /api/chat.
   app.use('/api/settings', createSettingsRouter({ env, db }));
+
+  // Story 7.5 (AD-28, no exception): the Quality & Decisions page's data
+  // endpoint, same auth gate as every other route below the blanket
+  // `requireAuth` above.
+  app.use('/api/quality', createQualityRouter());
 
   // Story 4.3 (AD-9/AD-10): the one voice-transcription route, same auth
   // gate as every other route below it — `createVoiceRouter`'s own

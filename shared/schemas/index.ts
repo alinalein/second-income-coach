@@ -151,7 +151,11 @@ export * from './progress.js';
 
 /**
  * Stories 6.2/6.3 follow-up: the committed `src/evals/published/
- * eval-results.json` shape Story 7.5's public Quality & Decisions page
+ * eval-results.json` shape Story 7.5's signed-in Quality & Decisions page
  * validates against.
  */
 export * from './eval-results.js';
+
+/** Story 7.5: `GET /api/quality`'s response shape, validated both
+ * server-side (before responding) and client-side (the `/quality` page). */
+export * from './quality.js';

@@ -105,15 +105,34 @@ export const planStepResponseSchema = z.object({
 
 export type PlanStepResponse = z.infer<typeof planStepResponseSchema>;
 
+/** AD-4 amendment (Story 4.5 bug fix): a completed step's content, as
+ * exposed alongside `current`/`next` for a chat question about a step the
+ * user already finished — title/description only, no `dayOffset`/
+ * `startedAt`/`status` (those only matter for current/future steps). */
+export const completedStepResponseSchema = z.object({
+  stepOrder: z.number().int().nonnegative(),
+  title: z.string().min(1),
+  description: z.array(stepActionSchema).min(1),
+});
+
+export type CompletedStepResponse = z.infer<typeof completedStepResponseSchema>;
+
 /** `GET /api/plans/:planId/current-step`'s response shape — capped to
- * current + immediate-next (Boundary: "`get_current_step` is the only path
- * returning step content ... capped to current+next"). `current` is
- * `null` only in the pathological case of a plan with no `current`-status
- * step at all (never expected from `create_plan`'s own write, defensive
- * only); `next` is `null` whenever `current` is the plan's last step. */
+ * current + immediate-next + already-completed steps (AD-4 amendment:
+ * "the cap stays for FUTURE steps only" — Boundary: "`get_current_step` is
+ * the only path returning step content"). `current` is `null` only in the
+ * pathological case of a plan with no `current`-status step at all (never
+ * expected from `create_plan`'s own write, defensive only, and always the
+ * case once the plan is `completed`); `next` is `null` whenever `current`
+ * is the plan's last step. */
 export const currentStepResponseSchema = z.object({
   current: planStepResponseSchema.nullable(),
   next: planStepResponseSchema.nullable(),
+  /** AD-4 amendment (Story 4.5 bug fix): every step with `status ===
+   * 'completed'` — for both an active and a completed plan — so a chat
+   * question about a past step ("what exactly was step 3") can be answered
+   * without exposing anything beyond `next`. */
+  completedSteps: z.array(completedStepResponseSchema),
   /**
    * Story 4.2 (AD-15): set when this call just detected a missed-check-in
    * gap and auto-recalculated the timeline — `true` only on the one call

@@ -97,8 +97,17 @@ export const IDEAS_MODEL_NODE_RETRY_POLICY: RetryPolicy = {
  * heavier. Unlike that constant's own series of live-measured raises, this
  * one has only the single data point above — 60s is a generous margin
  * past it, not a second measurement.
+ *
+ * Bug fix (user-reported, live): raised 60s -> 120s — a second live data
+ * point ("regenerating plan," the server's own log: "Node 'review'
+ * exceeded its run timeout of 60000ms (elapsed: 60002ms)") landed right at
+ * this same ceiling again, confirming 60s wasn't the generous margin the
+ * previous raise assumed — this is the same recurring category
+ * `IDEAS_MODEL_NODE_TIMEOUT_MS`'s own doc comment describes (a
+ * regenerate's heavier prompt occasionally running long), not a one-off.
+ * Doubled again, same proportion as the 30s -> 60s raise.
  */
-export const PLAN_MODEL_NODE_TIMEOUT_MS = 60_000;
+export const PLAN_MODEL_NODE_TIMEOUT_MS = 120_000;
 
 /**
  * Story 3.1 (Boundary: "one attempt, no whole-turn retry ... mirroring

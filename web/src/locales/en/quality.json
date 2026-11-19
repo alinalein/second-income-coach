@@ -1,0 +1,80 @@
+{
+  "title": "Quality & Decisions",
+  "backToApp": "Back to app",
+  "loading": "Loading…",
+  "error": "Couldn't load this page's data. Please try again.",
+  "contentLanguageNotice": "The report and decision content below is in English, regardless of your language setting.",
+  "evaluationResults": {
+    "heading": "Evaluation results",
+    "runDate": "Run date",
+    "accuracyTarget": "Target: {{target}}% tool-call accuracy per model",
+    "accuracyTable": {
+      "model": "Model",
+      "passed": "Passed",
+      "accuracy": "Accuracy",
+      "target": "Meets target"
+    },
+    "guardrails": {
+      "heading": "Guardrail suites",
+      "allPassedLabel": "100% passing",
+      "notAllPassedLabel": "Not all passing",
+      "suite": "Suite",
+      "result": "Result"
+    },
+    "judgeScores": {
+      "heading": "Judge quality scores",
+      "judgeModelsLabel": "Judge models",
+      "model": "Model",
+      "case": "Case",
+      "judge": "Judge",
+      "score": "Score",
+      "errorLabel": "Error",
+      "yes": "Yes",
+      "no": "No"
+    },
+    "mistralFlagRate": {
+      "heading": "Mistral jailbreak flag rate",
+      "flaggedOf": "{{flagged}} of {{total}} flagged",
+      "pending": "Not yet recorded: {{reason}}"
+    },
+    "cost": {
+      "heading": "Estimated cost",
+      "model": "Model",
+      "input": "Input tokens",
+      "output": "Output tokens",
+      "cost": "Estimated cost",
+      "total": "Total estimated cost",
+      "mechanism": "Mechanism",
+      "unpriced": "Not priced"
+    },
+    "limitations": {
+      "heading": "Known limitations"
+    }
+  },
+  "decisions": {
+    "heading": "Key decisions",
+    "reason": "Why",
+    "tradeoff": "Trade-off"
+  },
+  "reflection": {
+    "heading": "Reflection",
+    "promptVsRagVsAgents": "Agent vs. prompt engineering vs. RAG",
+    "knownWeaknesses": {
+      "heading": "Known weaknesses & improvement suggestions",
+      "weakness": "Weakness",
+      "impact": "Impact",
+      "suggestion": "Suggestion"
+    },
+    "edgeCases": {
+      "heading": "Edge cases and potential problems",
+      "scenario": "Scenario",
+      "whatHappens": "What happens",
+      "suggestion": "Suggestion"
+    },
+    "codeImprovements": {
+      "heading": "Code improvement suggestions",
+      "suggestion": "Suggestion",
+      "why": "Why"
+    }
+  }
+}

@@ -217,9 +217,10 @@ const agentContextSchema = z.object({
  * history instead.
  */
 const PLAN_COMPLETED_SYSTEM_NOTE =
-  'This plan is already completed — every step is finished. Answer questions about it and its completed ' +
-  'steps from the conversation history as usual, but never call start_step or complete_step on it, and never ' +
-  'suggest starting a new step on this plan.';
+  'This plan is already completed — every step is finished, so there is no current step. For any question ' +
+  'about a completed step (e.g. what a specific step was), call get_current_step — it returns every ' +
+  'completed step, not just what is in the conversation history. Never call start_step or complete_step on ' +
+  'this plan, and never suggest starting a new step on it.';
 
 function withPlanCompletedNote(extraSystemInstruction: string | undefined, planCompleted: boolean | undefined): string | undefined {
   if (!planCompleted) return extraSystemInstruction;

@@ -318,6 +318,29 @@ body::before {
   -webkit-backdrop-filter: blur(16px) saturate(150%) !important;
 }
 
+/* Bug fix (user-reported, live): these dialogs (confirm/generating/
+   setting-up-plan/review-your-plan) pop in instantly with no transition at
+   all — `DialogContent`'s own `data-[state=open]:animate-in fade-in-0
+   zoom-in-95 ...` classes (`shadcn-glass-ui`) assume the `tailwindcss-
+   animate` plugin's keyframes/utilities, which this project never
+   installed, so they're plain unknown class names with no CSS behind them.
+   Same `@starting-style` technique as `.details-panel` above (already
+   proven in this file) instead of adding that dependency: opacity-only
+   (never `transform` — `DialogContent`'s own `translate-x-[-50%]
+   translate-y-[-50%]` centering must stay exactly as Tailwind composed it,
+   nothing here needs to duplicate or fight with that). Scoped to these two
+   classes only — every dialog in the app already uses one of them. */
+.popup-glass-strong,
+.popup-glass-dense {
+  transition: opacity 180ms ease-out;
+}
+@starting-style {
+  .popup-glass-strong[data-state='open'],
+  .popup-glass-dense[data-state='open'] {
+    opacity: 0;
+  }
+}
+
 header {
   @apply glass-chrome shadow-[var(--shadow)];
 }

@@ -85,8 +85,23 @@ export interface ChatThreadProps {
    * they hit this component's own existing Send button when ready, same as
    * a typed message. `detectedLanguage` (from a voice transcript) rides
    * along with whatever is eventually sent, attached at submit time;
-   * `disabled` mirrors the text input's own `sending`-gated state. */
-  inputExtra?: (fillDraft: (content: string, detectedLanguage?: DetectedLanguage) => void, disabled: boolean) => React.ReactNode;
+   * `disabled` mirrors the text input's own `sending`-gated state.
+   *
+   * Bug fix (user-reported, live): "sent a voice message, but the input
+   * still showed the (already-sent) transcript afterward" — transcription
+   * is async (an interim one every ~1.2s while still recording, then the
+   * final one on stop) and has no idea a send already happened in the
+   * meantime; a late-resolving call could call `fillDraft` again *after*
+   * `handleSubmit` had already cleared the draft for that exact message,
+   * repopulating the box with stale text. `getSendCount` lets an
+   * `inputExtra` extension (here, `VoiceInput`) capture "how many sends
+   * have happened" when it starts a recording and skip filling the draft
+   * if that count has moved on by the time its own async result arrives. */
+  inputExtra?: (
+    fillDraft: (content: string, detectedLanguage?: DetectedLanguage) => void,
+    disabled: boolean,
+    getSendCount: () => number,
+  ) => React.ReactNode;
   /** Spec 2.12 AC8: a message the caller wants shown live the moment it
    * arrives (here: `start_step`'s own direct-model-call acknowledgment),
    * without waiting for a reload/re-fetch of this thread's history. Id-
@@ -109,6 +124,11 @@ export function ChatThread({ endpoint = DEFAULT_CHAT_ENDPOINT, footerItems = [],
   // review/correct the transcript in this same input before sending, and
   // an edit is still the same (voice-originated) message.
   const [pendingVoiceLanguage, setPendingVoiceLanguage] = React.useState<DetectedLanguage | undefined>(undefined);
+  // Bug fix (user-reported, live): bumped on every successful send — see
+  // `inputExtra`'s own `getSendCount` doc comment above. A ref (not state):
+  // nothing here needs to trigger a re-render, only to be read later from
+  // an async callback outside `VoiceInput`.
+  const sendCountRef = React.useRef(0);
   // User-reported: the composer's text field stayed a fixed one-line
   // height even as `draft` grew past it (typed, or filled by voice) — the
   // end of a long message was never visible at once. Uncapped auto-grow
@@ -308,6 +328,7 @@ export function ChatThread({ endpoint = DEFAULT_CHAT_ENDPOINT, footerItems = [],
       const content = draft.trim();
       if (!content || sending) return;
       setDraft('');
+      sendCountRef.current += 1;
       sendMessage(content, pendingVoiceLanguage);
       setPendingVoiceLanguage(undefined);
     },
@@ -322,6 +343,7 @@ export function ChatThread({ endpoint = DEFAULT_CHAT_ENDPOINT, footerItems = [],
     setDraft(content);
     setPendingVoiceLanguage(detectedLanguage);
   }, []);
+  const getSendCount = React.useCallback(() => sendCountRef.current, []);
 
   return (
     // User-reported: the chat fills the full height of its column (PlanWorkspace gives
@@ -400,7 +422,7 @@ export function ChatThread({ endpoint = DEFAULT_CHAT_ENDPOINT, footerItems = [],
          * default; Story 4.3 fills it with a voice-record control. The
          * disclaimer sits next to it either way. */}
         <div className="flex items-center gap-2">
-          {inputExtra?.(fillDraft, sending)}
+          {inputExtra?.(fillDraft, sending, getSendCount)}
           <p className="rounded bg-muted/60 px-1.5 py-0.5 text-xs text-muted-foreground">{t('aiDisclaimer')}</p>
         </div>
       </CardFooter>

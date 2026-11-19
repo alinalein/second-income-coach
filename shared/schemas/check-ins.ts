@@ -66,11 +66,12 @@ export type StartStepResponse = z.infer<typeof startStepResponseSchema>;
  * per-step one" — `planCompleted` is the discriminator the caller (route or
  * agent) uses to pick which acknowledgment applies.
  *
- * Story 4.5 (AC3): `chatMessage` mirrors `startStepResponseSchema`'s own
- * field exactly — present only when `planCompleted` is true and the route's
- * own one direct, non-agentic model call produced a completion message that
- * passed moderation/guilt-language checks; absent (not an error) on any
- * model-call failure/flag/timeout, or whenever this wasn't the final step.
+ * Story 4.5 (AC3) + user-requested follow-up: `chatMessage` mirrors
+ * `startStepResponseSchema`'s own field exactly — present whenever the
+ * route's own one direct, non-agentic model call produced a completion
+ * message that passed moderation/guilt-language checks, themed around the
+ * whole plan when `planCompleted` is true or around just this one step
+ * otherwise; absent (not an error) on any model-call failure/flag/timeout.
  */
 export const completeStepResponseSchema = z.object({
   step: planStepResponseSchema,

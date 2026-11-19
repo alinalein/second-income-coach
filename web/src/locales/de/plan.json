@@ -10,6 +10,7 @@
     "noCurrentStep": "Noch kein aktueller Schritt.",
     "nextLabel": "Nächster Schritt",
     "dayLabel": "Tag {{day}}",
+    "stepLabel": "Schritt {{step}}",
     "gapBanner": "Schön, dass du wieder da bist — du musst keine Pause erklären. Wir haben deinen Zeitplan angepasst, leg einfach los, sobald du bereit bist.",
     "completedCard": {
       "title": "Plan abgeschlossen",

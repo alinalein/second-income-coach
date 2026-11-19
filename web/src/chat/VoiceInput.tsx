@@ -13,6 +13,14 @@ export interface VoiceInputProps {
   /** Mirrors `ChatThread`'s own `sending` state — this control is disabled
    * while a turn is already in flight, same as the text input next to it. */
   disabled: boolean;
+  /** Bug fix (user-reported, live): `ChatThread`'s own send counter —
+   * captured when a recording starts, re-checked before every `fillDraft`
+   * call from that recording's own interim/final transcription. If the
+   * user already sent a message (text or an earlier transcript) while this
+   * recording's transcription was still in flight, the count will have
+   * moved on by the time the result arrives, and that stale result is
+   * dropped instead of repopulating an already-sent, now-empty draft. */
+  getSendCount: () => number;
 }
 
 type Status = 'idle' | 'recording' | 'transcribing';
@@ -59,7 +67,7 @@ function isVoiceSupported(): boolean {
  * it never disables or replaces `ChatThread`'s own text input, which this
  * component has no reference to at all.
  */
-export function VoiceInput({ fillDraft, disabled }: VoiceInputProps) {
+export function VoiceInput({ fillDraft, disabled, getSendCount }: VoiceInputProps) {
   const { t } = useTranslation('chat');
   const [supported] = React.useState(isVoiceSupported);
   const [status, setStatus] = React.useState<Status>('idle');
@@ -67,6 +75,10 @@ export function VoiceInput({ fillDraft, disabled }: VoiceInputProps) {
   const mediaRecorderRef = React.useRef<MediaRecorder | null>(null);
   const chunksRef = React.useRef<BlobPart[]>([]);
   const streamRef = React.useRef<MediaStream | null>(null);
+  // Bug fix (user-reported, live): `getSendCount()` as of the moment this
+  // recording started — see `VoiceInputProps.getSendCount`'s own doc
+  // comment.
+  const recordingStartSendCountRef = React.useRef(0);
   // Near-live mode: guards against an interim transcription call overlapping
   // a still-in-flight one (skip this tick, catch up on the next) and
   // against starting a new interim call once `stopRecording` has already
@@ -118,6 +130,7 @@ export function VoiceInput({ fillDraft, disabled }: VoiceInputProps) {
 
   async function startRecording(): Promise<void> {
     setNotice(null);
+    recordingStartSendCountRef.current = getSendCount();
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       if (!mountedRef.current) {
@@ -190,8 +203,11 @@ export function VoiceInput({ fillDraft, disabled }: VoiceInputProps) {
       // `stoppingRef` (not the `status` state) — a plain closure over
       // `status` here would always see whatever it was when this closure
       // was created (this callback is set once per recording, long before
-      // any later re-render), never the fresh value.
-      if (!mountedRef.current || stoppingRef.current) return;
+      // any later re-render), never the fresh value. Bug fix (user-
+      // reported, live): also drop a result for a recording the user has
+      // since sent (or replaced) a message from — see `getSendCount`'s own
+      // doc comment.
+      if (!mountedRef.current || stoppingRef.current || getSendCount() !== recordingStartSendCountRef.current) return;
       fillDraft(result.transcript, result.detectedLanguage);
     } catch {
       // Silently skipped — see comment above.
@@ -206,7 +222,15 @@ export function VoiceInput({ fillDraft, disabled }: VoiceInputProps) {
     try {
       const result = await requestTranscription(blob);
       if (!mountedRef.current) return;
-      fillDraft(result.transcript, result.detectedLanguage);
+      // Bug fix (user-reported, live): this recording's own result arrived
+      // after the user already sent a message (this one included, via an
+      // earlier interim fill) — the draft has already been submitted and
+      // cleared for it, so don't repopulate it with a stale transcript.
+      // `setStatus('idle')` still runs either way — recording is genuinely
+      // done regardless of whether its result is still useful.
+      if (getSendCount() === recordingStartSendCountRef.current) {
+        fillDraft(result.transcript, result.detectedLanguage);
+      }
       setStatus('idle');
     } catch {
       if (!mountedRef.current) return;

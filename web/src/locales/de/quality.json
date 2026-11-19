@@ -1,0 +1,80 @@
+{
+  "title": "Qualität & Entscheidungen",
+  "backToApp": "Zurück zur App",
+  "loading": "Wird geladen…",
+  "error": "Die Daten für diese Seite konnten nicht geladen werden. Bitte versuche es erneut.",
+  "contentLanguageNotice": "Der Bericht und die Entscheidungsinhalte unten sind auf Englisch, unabhängig von deiner Spracheinstellung.",
+  "evaluationResults": {
+    "heading": "Evaluierungsergebnisse",
+    "runDate": "Datum des Testlaufs",
+    "accuracyTarget": "Ziel: {{target}}% Tool-Call-Genauigkeit pro Modell",
+    "accuracyTable": {
+      "model": "Modell",
+      "passed": "Bestanden",
+      "accuracy": "Genauigkeit",
+      "target": "Ziel erreicht"
+    },
+    "guardrails": {
+      "heading": "Schutzmechanismen-Suiten",
+      "allPassedLabel": "100% bestanden",
+      "notAllPassedLabel": "Nicht alle bestanden",
+      "suite": "Suite",
+      "result": "Ergebnis"
+    },
+    "judgeScores": {
+      "heading": "Qualitätsbewertungen der Judges",
+      "judgeModelsLabel": "Judge-Modelle",
+      "model": "Modell",
+      "case": "Fall",
+      "judge": "Judge",
+      "score": "Bewertung",
+      "errorLabel": "Fehler",
+      "yes": "Ja",
+      "no": "Nein"
+    },
+    "mistralFlagRate": {
+      "heading": "Mistral-Jailbreak-Erkennungsrate",
+      "flaggedOf": "{{flagged}} von {{total}} markiert",
+      "pending": "Noch nicht erfasst: {{reason}}"
+    },
+    "cost": {
+      "heading": "Geschätzte Kosten",
+      "model": "Modell",
+      "input": "Input-Tokens",
+      "output": "Output-Tokens",
+      "cost": "Geschätzte Kosten",
+      "total": "Gesamte geschätzte Kosten",
+      "mechanism": "Mechanismus",
+      "unpriced": "Kein Preis hinterlegt"
+    },
+    "limitations": {
+      "heading": "Bekannte Einschränkungen"
+    }
+  },
+  "decisions": {
+    "heading": "Wichtige Entscheidungen",
+    "reason": "Begründung",
+    "tradeoff": "Kompromiss"
+  },
+  "reflection": {
+    "heading": "Reflexion",
+    "promptVsRagVsAgents": "Agent vs. Prompt-Engineering vs. RAG",
+    "knownWeaknesses": {
+      "heading": "Bekannte Schwächen & Verbesserungsvorschläge",
+      "weakness": "Schwäche",
+      "impact": "Auswirkung",
+      "suggestion": "Vorschlag"
+    },
+    "edgeCases": {
+      "heading": "Grenzfälle und mögliche Probleme",
+      "scenario": "Szenario",
+      "whatHappens": "Was passiert",
+      "suggestion": "Vorschlag"
+    },
+    "codeImprovements": {
+      "heading": "Vorschläge zur Codeverbesserung",
+      "suggestion": "Vorschlag",
+      "why": "Begründung"
+    }
+  }
+}

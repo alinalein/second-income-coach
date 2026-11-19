@@ -10,6 +10,7 @@ import {
   buildQueryPlanningPrompt,
   evaluateSourceTrust,
   extractNumbers,
+  findRationaleShapeProblem,
   getIdeasByUserId,
   handleGenerateIdeas,
   looksLikeSearchServiceErrorText,
@@ -358,10 +359,57 @@ describe('truncateAtWordBoundary', () => {
       maxLength: 10,
       expected: 'a'.repeat(10),
     },
+    {
+      name: 'a sentence with a complete leading sentence is cut at that sentence boundary, not a word boundary mid-run-on',
+      text: 'Fits your schedule and budget nicely for a slow start. This extra padding text pushes it well past the cap.',
+      maxLength: 100,
+      expected: 'Fits your schedule and budget nicely for a slow start.',
+    },
+    {
+      name: "review fix: a decimal point (e.g. in \"$3.50\") is never mistaken for a sentence end — falls back to the word-boundary cut instead of chopping mid-number",
+      text: 'Save around $3.50 per item, which adds up fast for a slow, steady side option this month.',
+      maxLength: 20,
+      expected: 'Save around $3.50',
+    },
   ])('$name', ({ text, maxLength, expected }) => {
     const result = truncateAtWordBoundary(text, maxLength);
     expect(result).toBe(expected);
     expect(result.length).toBeLessThanOrEqual(maxLength);
+  });
+});
+
+// Bug fix (user-reported, live): two real generated rationales had a
+// bullet trail off mid-sentence with no terminal punctuation (one into a
+// stray non-Latin character) and a sentence split across two bullets.
+// Maps to epics.md Story 2.2's AC "the LLM's output, when about to be
+// saved, is validated against the shared Zod schema first; a validation
+// failure is never silently saved (AD-4)" — this guard is that validation
+// for the rationale's own shape, feeding the same retry-with-reason path
+// as every other hard failure. Pure-function test — no DB/model needed.
+describe('findRationaleShapeProblem (epics.md Story 2.2 AC: LLM output validated before saving, never silently saved malformed, AD-4)', () => {
+  it.each([
+    {
+      name: 'every bullet ends with terminal punctuation, in the Latin script',
+      rationale: ['Fits the few hours you have free each week.', 'Start by listing your skills on one platform.'],
+      expected: undefined,
+    },
+    {
+      name: 'a bullet ending in a comma (a sentence split across two bullets) is rejected',
+      rationale: ['Your travel and coding interests suit a practical planner, and a small release can show early,', 'useful feedback before it starts to feel repetitive.'],
+      expected: { code: 'rationaleMissingTerminalPunctuation', bullet: 'Your travel and coding interests suit a practical planner, and a small release can show early,' },
+    },
+    {
+      name: 'a bullet with no terminal punctuation at all is rejected',
+      rationale: ['Fits the few hours you have free each week.', 'Visible project results may be a better fit'],
+      expected: { code: 'rationaleMissingTerminalPunctuation', bullet: 'Visible project results may be a better fit' },
+    },
+    {
+      name: 'a bullet containing a character outside the Latin script is rejected',
+      rationale: ['Fits the few hours you have free each week.', 'Ask a few travelers to试 it out for a week.'],
+      expected: { code: 'rationaleForeignScript', bullet: 'Ask a few travelers to试 it out for a week.' },
+    },
+  ])('$name', ({ rationale, expected }) => {
+    expect(findRationaleShapeProblem(rationale)).toEqual(expected);
   });
 });
 
@@ -1095,20 +1143,24 @@ describe('handleGenerateIdeas (I/O matrix: nested LLM output fails Zod)', () => 
 });
 
 // Story 2.2 round 10 (bug fix, user-approved): an over-length rationale
-// bullet is a *correction* (shortened at a word boundary), not a validation
-// failure — round 9's Step 1 diagnosis found this costing a whole attempt
-// in a real run. Distinct from the genuinely-malformed-shape case above
-// (empty title, etc.), which must still fail — this proves the correction
-// doesn't swallow real shape problems, only fixes length.
+// bullet is a *correction* (shortened at the last complete sentence), not a
+// validation failure — round 9's Step 1 diagnosis found this costing a
+// whole attempt in a real run. Distinct from the genuinely-malformed-shape
+// case above (empty title, etc.), which must still fail — this proves the
+// correction doesn't swallow real shape problems, only fixes length.
+// Bug fix (user-reported, live): the fixture's long bullet now has a real
+// leading sentence (ending in a period) within the cap, followed by
+// padding that pushes the whole thing over — proving the truncation keeps
+// that complete sentence rather than cutting mid-sentence (the old fixture
+// had no punctuation anywhere, which the new rationale-shape guard below
+// would now reject and retry, no longer "shortened, not rejected").
 describe('handleGenerateIdeas (round 10: an over-length rationale bullet is shortened, not rejected)', () => {
   it('succeeds on the first attempt with every rationale line within the limit', async () => {
     const userId = await createTestUser();
     try {
       const intakeRow = await upsertIntake(db, userId, intakeArgs());
-      // 25 * 6 + 3 = 153 chars, well over the Story 2.6 AC3 100-char
-      // per-bullet limit (`RATIONALE_LINE_MAX_LENGTH`), with a word boundary
-      // every 6 characters to truncate cleanly against.
-      const longBullet = `${'Alpha '.repeat(25)}end`;
+      const firstSentence = 'Fits your schedule and budget nicely for a slow, low-pressure start this month.';
+      const longBullet = `${firstSentence} This extra padding text exists purely to push the whole bullet safely past the one-hundred character cap for this test.`;
       expect(longBullet.length).toBeGreaterThan(RATIONALE_LINE_MAX_LENGTH);
       const drafts = fiveValidDrafts(intakeRow, 'Idea').map((draft, index) =>
         index === 0 ? { ...draft, rationale: [longBullet, 'Start by listing your skills on one platform.'] } : draft,

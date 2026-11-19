@@ -155,7 +155,7 @@ const START_STEP_ACK_TIMEOUT_MS = 10_000;
 /** Bug fix (user-reported, live): marks a persisted `AIMessage` as this
  * route's own start-of-step acknowledgment — never any other assistant
  * message in the same plan thread (a genuine chat reply is never mistaken
- * for one when `getRecentStartStepAckTexts` below re-reads the thread). */
+ * for one when `getRecentAckTexts` below re-reads the thread). */
 const STEP_START_ACK_KWARG = 'stepStartAck';
 
 /** Bug fix (user-reported, live): "consecutive start messages must not
@@ -264,18 +264,20 @@ export function buildStartStepAckPrompt(
 
 /**
  * Bug fix (user-reported, live): reads this plan thread's own checkpointed
- * history for the last `limit` start-of-step acknowledgments this route
- * itself wrote (tagged via `STEP_START_ACK_KWARG` when persisted below) —
- * never a genuine chat reply, which carries no such tag. Fail-open, same
- * precedent as `detectUserReplyLanguage` (`ideas.ts`): a read error returns
- * an empty list rather than blocking the start itself.
+ * history for the last `limit` acknowledgments this route itself wrote,
+ * tagged with the given `kwarg` (`STEP_START_ACK_KWARG`/
+ * `STEP_COMPLETION_ACK_KWARG` below) — never a genuine chat reply, which
+ * carries no such tag, and never the *other* ack kind, so a step-start and
+ * a step-completion message never dilute each other's no-repeat pool.
+ * Fail-open, same precedent as `detectUserReplyLanguage` (`ideas.ts`): a
+ * read error returns an empty list rather than blocking the action itself.
  */
-async function getRecentStartStepAckTexts(agent: CoachAgent, threadId: string, limit: number): Promise<string[]> {
+async function getRecentAckTexts(agent: CoachAgent, threadId: string, limit: number, kwarg: string): Promise<string[]> {
   try {
     const state = await agent.getState({ configurable: { thread_id: threadId } });
     const messages = (state.values.messages ?? []) as BaseMessage[];
     return messages
-      .filter((message) => message._getType() === 'ai' && message.additional_kwargs?.[STEP_START_ACK_KWARG] === true)
+      .filter((message) => message._getType() === 'ai' && message.additional_kwargs?.[kwarg] === true)
       .slice(-limit)
       .map((message) => message.text)
       .filter((text): text is string => text.length > 0);
@@ -337,11 +339,137 @@ async function buildStartStepAckMessage(
   }
 }
 
+/** User-requested (follow-up to Spec 2.12 AC8/Story 4.5 AC3): marks a
+ * persisted `AIMessage` as this route's own per-step completion
+ * acknowledgment — its own tag, distinct from `STEP_START_ACK_KWARG` and
+ * `PLAN_COMPLETION_ACK_KWARG` below, so `getRecentAckTexts` only ever quotes
+ * back this kind of message as the no-repeat context. */
+const STEP_COMPLETION_ACK_KWARG = 'stepCompletionAck';
+
+/**
+ * User-requested (follow-up to Spec 2.12 AC8): "also send an encouraging
+ * message when the user completes a task, not just when they start one" —
+ * the exact same variety rules/no-repeat quoting as
+ * `buildStartStepAckPrompt` above, themed around finishing one step rather
+ * than starting it. Fires on every non-final step completion
+ * (`buildPlanCompletionAckPrompt` below already owns the plan's own final
+ * step, with its own distinct "whole plan is done" theme).
+ */
+export function buildStepCompletionAckPrompt(
+  language: 'de' | 'en',
+  stepTitle: string,
+  recentMessages: readonly string[],
+  styleHint: string,
+): string {
+  const noRepeatLines =
+    recentMessages.length > 0
+      ? language === 'de'
+        ? [
+            'Deine letzten Abschluss-Bestätigungen in diesem Chat waren:',
+            ...recentMessages.map((message) => `- "${message}"`),
+            'Verwende weder denselben Satzanfang noch dieselbe Formulierung wie diese — jede Bestätigung muss anders klingen.',
+          ]
+        : [
+            'Your last completion acknowledgments in this chat were:',
+            ...recentMessages.map((message) => `- "${message}"`),
+            'Do not reuse their opener or wording — each acknowledgment must sound different from all of these.',
+          ]
+      : [];
+
+  const lines =
+    language === 'de'
+      ? [
+          `Die Person hat gerade den Plan-Schritt "${stepTitle}" abgeschlossen.`,
+          'Schreibe eine kurze, ermutigende und nicht-belehrende Bestätigung auf Deutsch, die diesen Abschluss anerkennt.',
+          'Variiere den Satzanfang jedes Mal — beginne nicht immer gleich (z. B. nicht immer mit "Du hast ... geschafft").',
+          'Variiere die Länge: oft nur ein kurzer Satz, manchmal zwei — nie mehr.',
+          'Keine Floskeln wie "super gemacht", "weiter so" oder "das war ein großer Schritt" ohne eigenen Inhalt dahinter.',
+          'Benenne die konkrete Handlung in einfachen, eigenen Worten statt einer generischen Floskel.',
+          styleHint,
+          ...noRepeatLines,
+          'Erwähne nichts Verpasstes, keinen Rückstand und keinen Druck in Richtung des nächsten Schritts — nur diesen Abschluss selbst.',
+          'Du darfst ein passendes Emoji einbauen (z. B. 😊, 🎉, ✅) — kein Daumen-hoch-Emoji — höchstens eins, gelegentlich zwei, nie mehr, und nie anstelle echter Worte.',
+          'Antworte nur mit der Bestätigung selbst, ohne Anführungszeichen oder zusätzlichen Text.',
+        ]
+      : [
+          `The person just completed the plan step "${stepTitle}".`,
+          'Write a short, encouraging, non-judgmental acknowledgment in English that recognizes this completion.',
+          'Vary the opener every time — never always start the same way (e.g. not always "You\'ve finished...").',
+          'Vary the length: often just one short sentence, sometimes two — never more.',
+          'No stock phrases such as "great job", "keep it up", or "that was a big step" with no real content behind them.',
+          'Name the concrete action in plain words of your own, not a generic stock phrase.',
+          styleHint,
+          ...noRepeatLines,
+          'Never mention anything missed, any backlog, or pressure toward the next step — only this completion itself.',
+          'You may include one fitting emoji (e.g. 😊, 🎉, ✅) — never a thumbs-up emoji — at most one, occasionally two, never more, and never in place of real words.',
+          'Reply with only the acknowledgment itself, no quotes or extra text.',
+        ];
+
+  return lines.join('\n');
+}
+
+/**
+ * User-requested: builds the chat acknowledgment for a successful
+ * `complete_step` on a non-final step, fully fail-open — mirrors
+ * `buildStartStepAckMessage` exactly (AD-11 moderation, AD-12
+ * guilt-language guard, same bounded one-shot timeout): any error, timeout,
+ * or moderation/guilt-language flag returns `undefined` rather than
+ * throwing, so completion itself is never affected by this best-effort
+ * extra.
+ */
+async function buildStepCompletionAckMessage(
+  model: BaseChatModel,
+  classify: ClassifyText,
+  threadId: string,
+  language: 'de' | 'en',
+  stepTitle: string,
+  recentMessages: readonly string[],
+  random: () => number = Math.random,
+): Promise<ChatMessage | undefined> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new Error('complete_step ack: exceeded its budget')), START_STEP_ACK_TIMEOUT_MS);
+
+  try {
+    const styleHint = pickStartStepAckStyleHint(language, random);
+    const response = await model.invoke([new HumanMessage(buildStepCompletionAckPrompt(language, stepTitle, recentMessages, styleHint))], {
+      signal: controller.signal,
+    });
+    const text = (response.text ?? '').trim();
+    if (!text) return undefined;
+
+    // AD-11-equivalent: the same unsafe-output check the agent's own
+    // `afterModel` moderation middleware applies to every reply.
+    const verdict = await evaluateAssistantMessage(text, classify, threadId);
+    if (verdict.action === 'replace') return undefined;
+    // AD-12: the same guilt-language guard CAP-4 replies get — this
+    // acknowledgment must never slip into "you missed/broke a streak"
+    // phrasing, even though nothing prompted it to.
+    if (containsGuiltLanguage(text)) return undefined;
+
+    return chatMessageSchema.parse({
+      id: randomUUID(),
+      role: 'assistant',
+      kind: 'message',
+      content: text,
+      createdAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.warn('[plans] complete_step (non-final) acknowledgment failed/timed out, omitting it:', {
+      threadId,
+      error: (error as Error)?.message,
+    });
+    return undefined;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Story 4.5 (AC3): marks a persisted `AIMessage` as this route's own
  * plan-completion acknowledgment — its own tag, distinct from
- * `STEP_START_ACK_KWARG`, even though nothing currently re-reads it (a plan
- * only completes once, so there's no "recent completion acks" lookup to
- * filter by it the way `getRecentStartStepAckTexts` does for start acks). */
+ * `STEP_START_ACK_KWARG`/`STEP_COMPLETION_ACK_KWARG`, even though nothing
+ * currently re-reads it (a plan only completes once, so there's no "recent
+ * completion acks" lookup to filter by it the way `getRecentAckTexts` does
+ * for the other two ack kinds). */
 const PLAN_COMPLETION_ACK_KWARG = 'planCompletionAck';
 
 /**
@@ -349,11 +477,11 @@ const PLAN_COMPLETION_ACK_KWARG = 'planCompletionAck';
  * `buildStartStepAckPrompt` above (variety rules, no-repeat quoting) —
  * themed around finishing the whole plan instead of starting one step.
  * `recentMessages` reuses this thread's own recent *start*-step
- * acknowledgments (`getRecentStartStepAckTexts`, below) as the "don't repeat
- * this" context — a plan completes at most once, so there's no prior
- * completion message of its own to avoid repeating; quoting the thread's
- * recent tone instead is what AC3's "previous messages passed so it does not
- * repeat" means here.
+ * acknowledgments (`getRecentAckTexts`, below) as the "don't repeat this"
+ * context — a plan completes at most once, so there's no prior completion
+ * message of its own to avoid repeating; quoting the thread's recent tone
+ * instead is what AC3's "previous messages passed so it does not repeat"
+ * means here.
  */
 export function buildPlanCompletionAckPrompt(
   language: 'de' | 'en',
@@ -815,7 +943,7 @@ export function createPlansRouter({ env, db, agent, model, createDraft, activate
       // Bug fix (user-reported, live): this thread's own previous start
       // acknowledgments, quoted back to the model as a no-repeat rule
       // (`buildStartStepAckMessage`'s own doc comment).
-      const recentAckMessages = await getRecentStartStepAckTexts(agent, threadId, START_STEP_ACK_HISTORY_LIMIT);
+      const recentAckMessages = await getRecentAckTexts(agent, threadId, START_STEP_ACK_HISTORY_LIMIT, STEP_START_ACK_KWARG);
       let chatMessage = await buildStartStepAckMessage(model, classify, threadId, replyLanguage, result.step.title, recentAckMessages);
       if (chatMessage) {
         try {
@@ -866,17 +994,21 @@ export function createPlansRouter({ env, db, agent, model, createDraft, activate
 
       const result = await completeStep(db, planId, stepIdParse.data);
 
-      // Story 4.5 (AC3): one direct model call produces the plan's own
-      // completion message, only when this was the final step —
-      // fully fail-open (see `buildPlanCompletionAckMessage`'s own doc
-      // comment), so nothing here can turn a successful completion into an
-      // error response; the fixed `stepActions.planCompletedHint` the UI
-      // already shows regardless is the fallback.
+      // Story 4.5 (AC3) + user-requested follow-up: one direct model call
+      // produces a completion message on every successful `complete_step`
+      // — the plan's own distinct "whole plan is done" message on the
+      // final step, or an encouraging per-step one otherwise — fully
+      // fail-open (see `buildPlanCompletionAckMessage`'s/
+      // `buildStepCompletionAckMessage`'s own doc comments), so nothing
+      // here can turn a successful completion into an error response; the
+      // fixed `stepActions.planCompletedHint` the UI already shows
+      // regardless is the fallback.
+      const threadId = buildPlanThreadId(planId);
+      const replyLanguage = await detectUserReplyLanguage(agent, buildDiscoveryThreadId(userId));
+      const ackKwarg = result.planCompleted ? PLAN_COMPLETION_ACK_KWARG : STEP_COMPLETION_ACK_KWARG;
       let chatMessage: ChatMessage | undefined;
       if (result.planCompleted) {
-        const threadId = buildPlanThreadId(planId);
-        const replyLanguage = await detectUserReplyLanguage(agent, buildDiscoveryThreadId(userId));
-        const recentAckMessages = await getRecentStartStepAckTexts(agent, threadId, START_STEP_ACK_HISTORY_LIMIT);
+        const recentAckMessages = await getRecentAckTexts(agent, threadId, START_STEP_ACK_HISTORY_LIMIT, STEP_START_ACK_KWARG);
         chatMessage = await buildPlanCompletionAckMessage(
           model,
           classify,
@@ -886,16 +1018,24 @@ export function createPlansRouter({ env, db, agent, model, createDraft, activate
           result.step.stepOrder + 1,
           recentAckMessages,
         );
-        if (chatMessage) {
-          try {
-            await agent.updateState(
-              { configurable: { thread_id: threadId } },
-              { messages: [new AIMessage({ id: chatMessage.id, content: chatMessage.content, additional_kwargs: { [PLAN_COMPLETION_ACK_KWARG]: true } })] },
-            );
-          } catch (error) {
-            console.error('[plans] complete_step acknowledgment persistence failed:', { userId, planId, error: (error as Error)?.message });
-            chatMessage = undefined;
-          }
+      } else {
+        // User-requested: "also send an encouraging message when the user
+        // completes a task" — own no-repeat history, distinct from the
+        // start-step ack's, so a completion message never reuses an
+        // earlier completion's opener/wording (same guarantee the start
+        // ack already has).
+        const recentAckMessages = await getRecentAckTexts(agent, threadId, START_STEP_ACK_HISTORY_LIMIT, STEP_COMPLETION_ACK_KWARG);
+        chatMessage = await buildStepCompletionAckMessage(model, classify, threadId, replyLanguage, result.step.title, recentAckMessages);
+      }
+      if (chatMessage) {
+        try {
+          await agent.updateState(
+            { configurable: { thread_id: threadId } },
+            { messages: [new AIMessage({ id: chatMessage.id, content: chatMessage.content, additional_kwargs: { [ackKwarg]: true } })] },
+          );
+        } catch (error) {
+          console.error('[plans] complete_step acknowledgment persistence failed:', { userId, planId, error: (error as Error)?.message });
+          chatMessage = undefined;
         }
       }
 

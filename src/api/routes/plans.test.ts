@@ -792,6 +792,15 @@ async function insertPlanWithCurrentStep(userId: string): Promise<{ planId: stri
   return { planId: plan!.id, stepId: step!.id };
 }
 
+// User-requested follow-up (Spec 2.12 AC8 / Story 4.5 AC3): a non-final
+// step completion needs a `next` row so `completeStep` takes the
+// `planCompleted: false` branch instead of completing the whole plan.
+async function insertPlanWithCurrentAndNextStep(userId: string): Promise<{ planId: string; stepId: string }> {
+  const { planId, stepId } = await insertPlanWithCurrentStep(userId);
+  await db.insert(planSteps).values({ planId, stepOrder: 1, title: 'List a second item', description: ['Take a photo.'], dayOffset: 2, status: 'pending' });
+  return { planId, stepId };
+}
+
 // Spec 2.12 AC8: `start_step` success triggers one direct, non-agentic model
 // call that produces a short chat acknowledgment, appended to the plan
 // thread and included in the response — fully fail-open on any
@@ -966,6 +975,90 @@ describe('createPlansRouter POST /:planId/steps/:stepId/complete (Story 4.5 AC3:
 
       const [plan] = await db.select({ status: plans.status }).from(plans).where(eq(plans.id, planId));
       expect(plan!.status).toBe('completed');
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+});
+
+// User-requested follow-up (Spec 2.12 AC8 / Story 4.5 AC3): "also send an
+// encouraging message when the user completes a task, not just when they
+// start one" — the same one-direct-model-call, fully fail-open pattern as
+// `start_step`'s own acknowledgment, but fired on a *non-final* step
+// completion (the final step keeps its own distinct whole-plan message,
+// covered by the describe block above).
+describe('createPlansRouter POST /:planId/steps/:stepId/complete (user-requested: per-step completion acknowledgment)', () => {
+  it.each([
+    [
+      'model call succeeds',
+      (): BaseChatModel => ({ invoke: vi.fn().mockResolvedValue(new AIMessage('Nice, that one is done.')) }) as unknown as BaseChatModel,
+      true,
+    ],
+    [
+      'model call fails (covers timeout/moderation/guilt-language alike — same fail-open path)',
+      (): BaseChatModel => ({ invoke: vi.fn().mockRejectedValue(new Error('boom')) }) as unknown as BaseChatModel,
+      false,
+    ],
+  ] as const)('%s -> the step still completes either way, chat message present = %s', async (_name, buildModel, expectMessage) => {
+    const userId = await createTestUser();
+    try {
+      const { planId, stepId } = await insertPlanWithCurrentAndNextStep(userId);
+      const updateState = vi.fn().mockResolvedValue(undefined);
+      const agent = fakeAgent({ updateState });
+      const model = buildModel();
+
+      const res = await request(buildTestApp(agent, userId, { model, classify: fakeModeration('pass') }))
+        .post(`/api/plans/${planId}/steps/${stepId}/complete`)
+        .send();
+
+      expect(res.status).toBe(200);
+      expect(res.body.planCompleted).toBe(false);
+      if (expectMessage) {
+        expect(res.body.chatMessage).toMatchObject({ role: 'assistant', kind: 'message', content: 'Nice, that one is done.' });
+        expect(updateState).toHaveBeenCalledWith(
+          { configurable: { thread_id: `plan:${planId}` } },
+          expect.objectContaining({ messages: expect.any(Array) }),
+        );
+      } else {
+        expect(res.body.chatMessage).toBeUndefined();
+        expect(updateState).not.toHaveBeenCalled();
+      }
+
+      const [plan] = await db.select({ status: plans.status }).from(plans).where(eq(plans.id, planId));
+      expect(plan!.status).toBe('active');
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+
+  // Mirrors the start-step no-repeat test above — "not constantly
+  // repeating themselves" requires its own history pool, distinct from
+  // both start acks and the whole-plan completion ack, so a per-step
+  // completion message never reuses an earlier *completion's* opener.
+  it("prompts the model with this thread's own recent step-completion acknowledgments (never start acks) and a no-repeat rule", async () => {
+    const userId = await createTestUser();
+    try {
+      const { planId, stepId } = await insertPlanWithCurrentAndNextStep(userId);
+      const priorMessages = [
+        new AIMessage({ content: 'Step one is wrapped up.', additional_kwargs: { stepCompletionAck: true } }),
+        new AIMessage({ content: "You've started X — that's a meaningful step.", additional_kwargs: { stepStartAck: true } }),
+      ];
+      const getState = vi.fn().mockResolvedValue({ values: { messages: priorMessages } });
+      const updateState = vi.fn().mockResolvedValue(undefined);
+      const agent = fakeAgent({ getState, updateState });
+      const invoke = vi.fn().mockResolvedValue(new AIMessage('Fresh wording this time.'));
+      const model = { invoke } as unknown as BaseChatModel;
+
+      const res = await request(buildTestApp(agent, userId, { model, classify: fakeModeration('pass') }))
+        .post(`/api/plans/${planId}/steps/${stepId}/complete`)
+        .send();
+
+      expect(res.status).toBe(200);
+      const [[invokedMessages]] = invoke.mock.calls as [[{ content: string }[]]];
+      const prompt = invokedMessages[0]!.content;
+      expect(prompt).toContain('Step one is wrapped up.');
+      expect(prompt).not.toContain("You've started X");
+      expect(prompt).toMatch(/do not reuse their opener or wording/i);
     } finally {
       await cleanUp(userId);
     }

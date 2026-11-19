@@ -191,9 +191,20 @@ export function StatusPanel({ planId, ideaTitle, onStepStarted, onPlanCompleted,
             <div>
               {/* Spec 2.12 AC7: the day label sits above the step's own
                * title now (was below the description) — the first thing
-               * read is "which day", then what the step is. */}
+               * read is "which day", then what the step is.
+               * UX fix (user-requested): "Step N" sits on the same row as
+               * the title now, styled identically (one `font-semibold`
+               * line) — was its own small uppercase label stacked between
+               * the day label and the title, which read as a 3rd separate
+               * line instead of one. `stepOrder` is 0-indexed
+               * (`create_plan.ts`: "writes step 0 as current"), so this
+               * shows `stepOrder + 1` for a human-facing "Step 1", "Step
+               * 2", etc. — same "Step N — <text>" shape
+               * `PlanActivationPanel.tsx`'s own `stepLabel` already uses. */}
               <p className="text-xs uppercase tracking-wide text-muted-foreground">{t('statusPanel.dayLabel', { day: step.current.dayOffset })}</p>
-              <p className="font-semibold">{step.current.title}</p>
+              <p className="font-semibold">
+                {t('statusPanel.stepLabel', { step: step.current.stepOrder + 1 })} — {step.current.title}
+              </p>
               {/* UI fix (user-reported): a step's description is a short
                * list of distinct actions (Code Map/create_plan.ts) —
                * rendered as a bullet list, never one prose paragraph.

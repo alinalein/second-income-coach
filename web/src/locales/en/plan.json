@@ -10,6 +10,7 @@
     "noCurrentStep": "No current step yet.",
     "nextLabel": "Next step",
     "dayLabel": "Day {{day}}",
+    "stepLabel": "Step {{step}}",
     "gapBanner": "Good to have you back — no need to explain a gap. We've adjusted your timeline, so pick up whenever you're ready.",
     "completedCard": {
       "title": "Plan completed",

@@ -797,6 +797,10 @@ interface DraftEvaluation {
    * here (not just logged as a boolean) so both the diagnosis log and the
    * scoped retry's prompt can say exactly which token leaked. */
   rawIntakeTokenMatch?: string;
+  /** Bug fix (user-reported, live): the exact bullet that failed the
+   * rationale-shape guard (`findRationaleShapeProblem`), if that's one of
+   * `hardFailures` — `undefined` otherwise. */
+  rationaleShapeProblem?: RationaleShapeProblem;
 }
 
 function evaluateDraft(draft: IdeaDraft, intakeRow: IntakeResponse, searchResultTexts: string[]): DraftEvaluation {
@@ -809,6 +813,21 @@ function evaluateDraft(draft: IdeaDraft, intakeRow: IntakeResponse, searchResult
   // didn't cover.
   const rawIntakeTokenMatch = findRawIntakeTokenMatch(draft.rationale.join('\n'));
   if (rawIntakeTokenMatch) hardFailures.push('rawIntakeTokenLeak');
+  const rationaleShapeProblem = findRationaleShapeProblem(draft.rationale);
+  if (rationaleShapeProblem) {
+    // Temporary live-debug log (not part of any story) — the offending
+    // bullet text itself, so a real failure can be diagnosed from what the
+    // model actually wrote instead of guessed at from the failure code
+    // alone. Same precedent as the `quoteDoesNotSupportRate` debug log
+    // just below.
+    console.error('[generate_ideas] debug: rationaleShapeProblem', {
+      title: draft.title,
+      code: rationaleShapeProblem.code,
+      bullet: rationaleShapeProblem.bullet,
+      fullRationale: draft.rationale,
+    });
+    hardFailures.push(rationaleShapeProblem.code);
+  }
   if (exceedsIntakeLimits(draft, intakeRow)) hardFailures.push('exceedsIntakeLimits');
   if (looksLikeVendorPricingPage(draft)) hardFailures.push('vendorPricingPage');
   if (!quoteMatchesSearchResults(draft.baselineRateQuote, searchResultTexts)) {
@@ -857,6 +876,7 @@ function evaluateDraft(draft: IdeaDraft, intakeRow: IntakeResponse, searchResult
     trust: { ...trust, isUnverified: trust.isUnverified || baselineOccupationMismatch },
     isDemandEvidenceUnverified: demandEvidenceOccupationMismatch,
     rawIntakeTokenMatch,
+    rationaleShapeProblem,
   };
 }
 
@@ -868,12 +888,28 @@ function evaluateDraft(draft: IdeaDraft, intakeRow: IntakeResponse, searchResult
  * for `rawIntakeTokenLeak` specifically; every other code's wording is
  * fixed (there's nothing per-draft to interpolate).
  */
-function describeHardFailureForRetry(code: string, rawIntakeTokenMatch: string | undefined): string {
+function describeHardFailureForRetry(
+  code: string,
+  rawIntakeTokenMatch: string | undefined,
+  rationaleShapeProblem: RationaleShapeProblem | undefined,
+): string {
   switch (code) {
     case 'rawIntakeTokenLeak':
       return (
         `your rationale contained the internal field name/value "${rawIntakeTokenMatch ?? ''}" — describe it in ` +
         'plain, natural words instead, never the raw internal identifier.'
+      );
+    case 'rationaleMissingTerminalPunctuation':
+      return (
+        `one of your rationale bullets ("${rationaleShapeProblem?.bullet ?? ''}") does not end with a period, ` +
+        'exclamation mark, or question mark — write each bullet as one complete, self-contained sentence that ' +
+        'ends with terminal punctuation; never split one sentence across two bullets, and never let a bullet ' +
+        'run past the length limit unfinished — write it shorter instead.'
+      );
+    case 'rationaleForeignScript':
+      return (
+        `one of your rationale bullets ("${rationaleShapeProblem?.bullet ?? ''}") contains a character outside ` +
+        "the reply language's own script — rewrite that bullet using only the reply language's own alphabet."
       );
     case 'exceedsIntakeLimits':
       return (
@@ -1211,7 +1247,12 @@ export function buildIdeaWritingPrompt(
       `markdown bullet markers like "-" or "*" within each one), each at most ~${RATIONALE_LINE_MAX_LENGTH} ` +
       'characters, in plain, natural language for someone who has never seen this form — never the raw field name or its exact ' +
       'stored value (never write things like "weeklyTimeAvailability", "under_5h", "startingBudgetRange", ' +
-      '"failurePattern", or "loses_interest_once_routine"). Item 1: why this idea fits this person specifically ' +
+      '"failurePattern", or "loses_interest_once_routine"). Each bullet must be one complete, self-contained ' +
+      'sentence that ends with a period, exclamation mark, or question mark — if it would run past the ' +
+      `~${RATIONALE_LINE_MAX_LENGTH}-character guideline, shorten the wording so the finished sentence fits; ` +
+      'never stop partway through a sentence just to hit the character count, and never split one sentence ' +
+      'across two bullets. Write only in the reply language specified below — never switch script or language ' +
+      'mid-bullet. Item 1: why this idea fits this person specifically ' +
       '(e.g. "since you only have a few hours a week" or "because starting over completely once put you off ' +
       'before"), referencing the citedIntakeFields reasoning. Item 2: one concrete first step they could take ' +
       'this week. Item 3 (optional — include only when genuinely relevant, don\'t pad): one honest caveat, e.g. ' +
@@ -1314,21 +1355,84 @@ async function defaultSearchWeb(
   return typeof result.content === 'string' ? result.content : JSON.stringify(result.content);
 }
 
+/** A `.` immediately between two digits (e.g. the one in "$3.50") is a
+ * decimal point, never a sentence end — checked against the original,
+ * untruncated `text` (not just the truncated slice), since the digit
+ * after it can sit exactly at the truncation boundary. Review fix: without
+ * this, `truncateAtWordBoundary` could cut a bullet like "Save around
+ * $3.50 per item..." at that decimal point, producing "...$3." — a
+ * mid-number chop that still (wrongly) ends in terminal punctuation. */
+function isDecimalPoint(text: string, index: number): boolean {
+  return text[index] === '.' && /\d/.test(text[index - 1] ?? '') && /\d/.test(text[index + 1] ?? '');
+}
+
 /**
  * Round 10 (bug fix, user-approved): "if a bullet is slightly too long,
- * shorten it deterministically at a word boundary instead of failing the
- * attempt." Cuts at the last space at or before `maxLength`, trimming any
- * trailing whitespace — never mid-word, never adds an ellipsis (the user
- * asked for a shortened bullet, not a visibly truncated one). Falls back to
- * a hard cut only when there's no space to break on at all (a single
- * very-long word), which Zod's own `.max()` still catches as a real shape
- * problem rather than silently accepting.
+ * shorten it deterministically instead of failing the attempt." Bug fix
+ * (user-reported, live): a plain word-boundary cut could still land
+ * mid-sentence (e.g. "...can show early," or "...may be"), with the
+ * rest of that sentence left dangling as the *next* bullet — a word
+ * boundary isn't a sentence boundary. Now prefers the last complete
+ * sentence (cutting at the last `.`/`!`/`?` at or before `maxLength`,
+ * skipping a decimal point) so an over-length bullet loses only its
+ * unfinished trailing sentence, never ends mid-sentence or mid-number.
+ * Falls back to the previous word-boundary cut (never mid-word) only when
+ * no sentence boundary exists in range at all — that result is
+ * deliberately left without terminal punctuation, so
+ * `findRationaleShapeProblem` below rejects it and the existing
+ * retry-with-reason path asks the model for a shorter bullet instead of
+ * this function silently persisting an unfinished sentence.
  */
 export function truncateAtWordBoundary(text: string, maxLength: number): string {
   if (text.length <= maxLength) return text;
   const truncated = text.slice(0, maxLength);
+  let lastSentenceEnd = -1;
+  for (let i = truncated.length - 1; i >= 0; i -= 1) {
+    if (/[.!?]/.test(truncated[i]!) && !isDecimalPoint(text, i)) {
+      lastSentenceEnd = i;
+      break;
+    }
+  }
+  if (lastSentenceEnd > 0) return truncated.slice(0, lastSentenceEnd + 1);
   const lastSpace = truncated.lastIndexOf(' ');
   return (lastSpace > 0 ? truncated.slice(0, lastSpace) : truncated).trimEnd();
+}
+
+/**
+ * Bug fix (user-reported, live): two real generated rationales had a bullet
+ * end mid-sentence with no terminal punctuation (one of them trailing off
+ * into a stray non-Latin character, "...ask a few travelers to试") and a
+ * single sentence split across two bullets at a comma. Maps to epics.md's
+ * idea-quality AC (Story 2.2, "a rationale ... in plain, natural language")
+ * — each bullet must read as one complete, self-contained sentence in the
+ * reply language's own (Latin) script. Both reply languages (`en`/`de`) use
+ * the Latin script, so this is not parameterized per language.
+ */
+const RATIONALE_ALLOWED_CHARACTERS = /^[\p{Script=Latin}\p{Mark}\p{Number}\p{Punctuation}\p{Symbol}\s]*$/u;
+
+function rationaleBulletEndsWithTerminalPunctuation(bullet: string): boolean {
+  return /[.!?]["')]*$/.test(bullet.trim());
+}
+
+function rationaleBulletHasForeignScriptCharacters(bullet: string): boolean {
+  return !RATIONALE_ALLOWED_CHARACTERS.test(bullet);
+}
+
+interface RationaleShapeProblem {
+  code: 'rationaleForeignScript' | 'rationaleMissingTerminalPunctuation';
+  bullet: string;
+}
+
+/** Checks every bullet (not just the first) so the exact offending bullet
+ * can be named back to the model in the retry prompt. */
+export function findRationaleShapeProblem(rationale: readonly string[]): RationaleShapeProblem | undefined {
+  for (const bullet of rationale) {
+    if (rationaleBulletHasForeignScriptCharacters(bullet)) return { code: 'rationaleForeignScript', bullet };
+    if (!rationaleBulletEndsWithTerminalPunctuation(bullet)) {
+      return { code: 'rationaleMissingTerminalPunctuation', bullet };
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -1743,7 +1847,9 @@ export async function handleGenerateIdeas(
             if (evaluation.hardFailures.length === 0) {
               return { draft, evaluation, searchResultTexts, intakeRow };
             }
-            retryReasons = evaluation.hardFailures.map((code) => describeHardFailureForRetry(code, evaluation.rawIntakeTokenMatch));
+            retryReasons = evaluation.hardFailures.map((code) =>
+              describeHardFailureForRetry(code, evaluation.rawIntakeTokenMatch, evaluation.rationaleShapeProblem),
+            );
             slotLastError = new Error(
               `generate_ideas: idea rejected (slot ${slot}, attempt ${attempt + 1}/${MAX_DRAFT_ATTEMPTS}, ` +
                 `hardFailures=${evaluation.hardFailures.join(',')})`,

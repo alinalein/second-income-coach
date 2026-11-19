@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Bookmark, ChevronLeft, ChevronRight, ClipboardList, Lightbulb, Menu, X } from 'lucide-react';
+import { Bookmark, ChevronLeft, ChevronRight, ClipboardList, Lightbulb, Menu, ShieldCheck, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { planListResponseSchema, type PlanListEntry } from '@app/shared';
 import { Button } from '../../components/ui/button';
@@ -14,6 +14,7 @@ import { Badge } from '../../components/ui/badge';
 export type SidebarTarget =
   | { kind: 'ideas' }
   | { kind: 'settings' }
+  | { kind: 'quality' }
   | { kind: 'plan'; ideaId: string; ideaTitle: string }
   | { kind: 'bookmarked'; ideaId: string }
   // UX fix (user-reported): "Bookmarked" is now one button (like "New
@@ -26,6 +27,7 @@ export type SidebarTarget =
 export type SidebarActiveRoute =
   | { kind: 'ideas' }
   | { kind: 'settings' }
+  | { kind: 'quality' }
   | { kind: 'plan'; ideaId: string }
   | { kind: 'bookmarked'; ideaId: string }
   | { kind: 'bookmarkedAll' }
@@ -324,22 +326,39 @@ export function Sidebar({
         <MyPlansList plans={plansList} activeRoute={activeRoute} onSelect={handleSelectPlan} t={t} />
       </div>
 
-      {/* UX fix (user-reported): the dark/light toggle moved into the
-       * Settings screen itself — this "Settings" entry now sits exactly
-       * where that toggle used to be, next to sign-out. */}
-      <div className="mt-auto flex items-center justify-between gap-2 border-t border-border pt-4">
+      {/* Story 7.5: "Quality" sits directly above "Settings" in this same
+       * footer group, own row (full-width, same as the top-nav entries)
+       * since "Settings" shares its row with sign-out. */}
+      <div className="mt-auto flex flex-col gap-2 border-t border-border pt-4">
         <Button
           type="button"
-          variant={activeRoute.kind === 'settings' ? 'accent' : 'ghost'}
+          variant={activeRoute.kind === 'quality' ? 'accent' : 'ghost'}
           size="sm"
-          aria-current={activeRoute.kind === 'settings' ? 'page' : undefined}
-          onClick={() => handleNavigate({ kind: 'settings' })}
+          aria-current={activeRoute.kind === 'quality' ? 'page' : undefined}
+          className="w-full justify-start"
+          onClick={() => handleNavigate({ kind: 'quality' })}
         >
-          {t('profile.settingsLabel')}
+          <ShieldCheck className="h-4 w-4 shrink-0" aria-hidden="true" />
+          {t('profile.qualityLabel')}
         </Button>
-        <Button type="button" variant="outline" size="sm" onClick={onSignedOut}>
-          {tCommon('auth.signOutButton')}
-        </Button>
+
+        {/* UX fix (user-reported): the dark/light toggle moved into the
+         * Settings screen itself — this "Settings" entry now sits exactly
+         * where that toggle used to be, next to sign-out. */}
+        <div className="flex items-center justify-between gap-2">
+          <Button
+            type="button"
+            variant={activeRoute.kind === 'settings' ? 'accent' : 'ghost'}
+            size="sm"
+            aria-current={activeRoute.kind === 'settings' ? 'page' : undefined}
+            onClick={() => handleNavigate({ kind: 'settings' })}
+          >
+            {t('profile.settingsLabel')}
+          </Button>
+          <Button type="button" variant="outline" size="sm" onClick={onSignedOut}>
+            {tCommon('auth.signOutButton')}
+          </Button>
+        </div>
       </div>
     </nav>
   );

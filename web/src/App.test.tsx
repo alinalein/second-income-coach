@@ -476,13 +476,28 @@ describe('computeViewKey (bug fix, live: a plan/bookmarked switch is its own tra
   const PLAN_B: Route = { kind: 'plan', ideaId: 'idea-b', ideaTitle: 'Idea B' };
 
   it('gives two different plans two different keys, so switching between them is its own transition', () => {
-    expect(computeViewKey(true, false, PLAN_A)).not.toBe(computeViewKey(true, false, PLAN_B));
+    expect(computeViewKey(true, true, false, PLAN_A)).not.toBe(computeViewKey(true, true, false, PLAN_B));
   });
 
   it.each([
     ['ideas', { kind: 'ideas' } as Route, { kind: 'ideas' } as Route],
     ['settings', { kind: 'settings' } as Route, { kind: 'settings' } as Route],
   ])('keeps the same key for two renders of the same %s view (never a spurious re-fade)', (_label, routeA, routeB) => {
-    expect(computeViewKey(true, false, routeA)).toBe(computeViewKey(true, false, routeB));
+    expect(computeViewKey(true, true, false, routeA)).toBe(computeViewKey(true, true, false, routeB));
+  });
+});
+
+// Bug fix (user-reported, live): "from login to form, it jumps, not a
+// smooth transition" — `hasIntake` resolving before `uiLanguageReady`
+// used to keep this key unchanged (still showing the loading text, but no
+// longer under the `'loading'` key), so the later swap to the real form
+// never re-triggered `FadeIn`. Both gates must map to the same key.
+describe('computeViewKey (bug fix, live: the loading key covers uiLanguageReady too)', () => {
+  it('stays on the loading key while hasIntake has resolved but uiLanguageReady has not', () => {
+    expect(computeViewKey(false, false, true, { kind: 'ideas' })).toBe(computeViewKey(null, false, true, { kind: 'ideas' }));
+  });
+
+  it('only leaves the loading key once both hasIntake and uiLanguageReady are ready', () => {
+    expect(computeViewKey(false, true, true, { kind: 'ideas' })).not.toBe(computeViewKey(null, false, true, { kind: 'ideas' }));
   });
 });

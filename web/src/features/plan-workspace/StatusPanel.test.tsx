@@ -52,6 +52,7 @@ describe('StatusPanel (AC: only current+next step visible)', () => {
         status: 'pending',
         startedAt: null,
       },
+      completedSteps: [],
       gapDetected: false,
       missedDays: 0,
       checkedInToday: false,
@@ -68,7 +69,9 @@ describe('StatusPanel (AC: only current+next step visible)', () => {
     // 'your plan for <idea>'" — the idea's own title, not a bare generic
     // heading.
     expect(await screen.findByText('Your plan for Resell thrifted clothing')).toBeInTheDocument();
-    expect(screen.getByText('List your first item')).toBeInTheDocument();
+    // UX fix (user-requested): "Step N" and the title share one row now —
+    // same element, same styling.
+    expect(screen.getByText('Step 1 — List your first item')).toBeInTheDocument();
     // UI fix (user-reported): each description action is its own bullet
     // item, not one joined paragraph.
     expect(screen.getByText('Take one photo.')).toBeInTheDocument();
@@ -77,7 +80,7 @@ describe('StatusPanel (AC: only current+next step visible)', () => {
     // Spec 2.12 AC7: the day label sits above the step's own title, not
     // below the description.
     const dayLabel = screen.getByText('Day 0');
-    const title = screen.getByText('List your first item');
+    const title = screen.getByText('Step 1 — List your first item');
     expect(dayLabel.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
     // Spec 2.12 AC7: "Next (locked)" is renamed "Next step".
@@ -104,6 +107,7 @@ describe('StatusPanel (AC: only current+next step visible)', () => {
         status: 'pending',
         startedAt: null,
       },
+      completedSteps: [],
       gapDetected: false,
       missedDays: 0,
       checkedInToday: false,
@@ -121,6 +125,7 @@ describe('StatusPanel (AC: only current+next step visible)', () => {
     const body: CurrentStepResponse = {
       current: fakeStep({ title: 'Last step' }),
       next: null,
+      completedSteps: [],
       gapDetected: false,
       missedDays: 0,
       checkedInToday: false,
@@ -133,7 +138,7 @@ describe('StatusPanel (AC: only current+next step visible)', () => {
 
     render(<StatusPanel planId="plan-1" ideaTitle="Resell thrifted clothing" planStatus="active" />);
 
-    expect(await screen.findByText('Last step')).toBeInTheDocument();
+    expect(await screen.findByText('Step 1 — Last step')).toBeInTheDocument();
     expect(screen.queryByText('Next step')).not.toBeInTheDocument();
   });
 });
@@ -161,7 +166,7 @@ describe('StatusPanel (bug fix, live: only Complete notifies onPlanActivityChang
       1,
     ],
   ] as const)('clicking "%s" calls onPlanActivityChanged %i time(s) once it succeeds', async (buttonLabel, actionPath, actionResponseBody, expectedCalls) => {
-    const body: CurrentStepResponse = { current: fakeStep(), next: null, gapDetected: false, missedDays: 0, checkedInToday: false, completion: null };
+    const body: CurrentStepResponse = { current: fakeStep(), next: null, completedSteps: [], gapDetected: false, missedDays: 0, checkedInToday: false, completion: null };
     const onPlanActivityChanged = vi.fn();
     vi.stubGlobal(
       'fetch',
@@ -197,6 +202,7 @@ describe('StatusPanel (Story 4.5 AC1: completed plan)', () => {
     const body: CurrentStepResponse = {
       current: null,
       next: null,
+      completedSteps: [],
       gapDetected: false,
       missedDays: 0,
       checkedInToday: false,
@@ -219,7 +225,7 @@ describe('StatusPanel (Story 4.5 AC1: completed plan)', () => {
 // the backend rejects it too (`PlanNotActiveError`), this is the UI mirror.
 describe('StatusPanel (AC follow-up: Start/Mark-as-done disabled before the plan is active)', () => {
   it('disables both buttons while planStatus is "draft"', async () => {
-    const body: CurrentStepResponse = { current: fakeStep(), next: null, gapDetected: false, missedDays: 0, checkedInToday: false, completion: null };
+    const body: CurrentStepResponse = { current: fakeStep(), next: null, completedSteps: [], gapDetected: false, missedDays: 0, checkedInToday: false, completion: null };
     vi.stubGlobal('fetch', mockFetch({ '/api/plans/plan-1/current-step': () => new Response(JSON.stringify(body), { status: 200 }) }));
 
     render(<StatusPanel planId="plan-1" ideaTitle="Resell thrifted clothing" planStatus="draft" />);
@@ -244,14 +250,14 @@ describe('StatusPanel (bug fix, live: a transient load failure retries instead o
       vi.fn(() => {
         callCount += 1;
         if (callCount < 3) return Promise.resolve(new Response(null, { status: 502 }));
-        const body: CurrentStepResponse = { current: fakeStep(), next: null, gapDetected: false, missedDays: 0, checkedInToday: false, completion: null };
+        const body: CurrentStepResponse = { current: fakeStep(), next: null, completedSteps: [], gapDetected: false, missedDays: 0, checkedInToday: false, completion: null };
         return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
       }),
     );
 
     render(<StatusPanel planId="plan-1" ideaTitle="Resell thrifted clothing" planStatus="active" />);
 
-    expect(await screen.findByText('Current title', {}, { timeout: 5000 })).toBeInTheDocument();
+    expect(await screen.findByText('Step 1 — Current title', {}, { timeout: 5000 })).toBeInTheDocument();
     expect(screen.queryByText("Couldn't load your current step.")).not.toBeInTheDocument();
     expect(callCount).toBe(3);
   }, 10_000);

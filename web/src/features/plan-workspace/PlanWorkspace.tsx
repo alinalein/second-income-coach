@@ -81,6 +81,35 @@ function WorkspaceSkeleton() {
   );
 }
 
+/**
+ * UX fix (user-requested): "after the user confirms the plan, the plan is
+ * done and this appears — it's not appearing smoothly." The main layout
+ * below (`ProjectionCard`/`StatusPanel`/`ChatThread`) is already fully
+ * mounted and rendered the *whole time* `PlanActivationPanel`'s own
+ * full-screen review dialog is open on top of it (a draft plan always
+ * shows that dialog, Story 3.2/AD-14) — the instant the user confirms,
+ * `plan.status` flips away from `draft` and that dialog unmounts in the
+ * very same render that reveals this layout, which is a hard cut with no
+ * transition at all. Same mount-triggered opacity fade `App.tsx`'s own
+ * `FadeIn` already uses for every other view swap — remounted via `key`
+ * tied to the one-way `draft -> not draft` transition (a plan's status
+ * only ever moves forward, AD-13, so this fires exactly once per plan).
+ */
+function FadeIn({ children }: { children: React.ReactNode }) {
+  const [visible, setVisible] = React.useState(false);
+
+  React.useEffect(() => {
+    const frame = requestAnimationFrame(() => setVisible(true));
+    return () => cancelAnimationFrame(frame);
+  }, []);
+
+  return (
+    <div className={`flex min-h-0 flex-1 flex-col gap-4 sm:flex-row sm:items-stretch transition-opacity duration-300 ${visible ? 'opacity-100' : 'opacity-0'}`}>
+      {children}
+    </div>
+  );
+}
+
 /** Spec 2.12 AC2: `create_plan` is one plain structured-output call (no
  * nested search loop) — a much shorter typical duration than idea
  * generation's own `TYPICAL_GENERATE_DURATION_MS`. The bar fills toward 90%
@@ -447,7 +476,7 @@ export function PlanWorkspace({ ideaId, ideaTitle, onPlanLoaded }: PlanWorkspace
            * (the default — no longer overridden to `items-start`) lets the
            * chat column take this row's own full height; the status column
            * keeps its natural, content-sized height either way. */}
-          <div className="flex min-h-0 flex-1 flex-col gap-4 sm:flex-row sm:items-stretch">
+          <FadeIn key={plan.status === 'draft' ? 'draft' : 'ready'}>
             {/* Spec 2.12 AC6: `sm:self-start` opts this column out of the
              * row's own `items-stretch` — it keeps its natural, content-sized
              * height, while the chat column (no override) stretches to the
@@ -522,10 +551,12 @@ export function PlanWorkspace({ ideaId, ideaTitle, onPlanLoaded }: PlanWorkspace
                 endpoint={`/api/plans/${plan.id}/messages`}
                 footerItems={footerItems}
                 incomingMessage={incomingMessage}
-                inputExtra={(fillDraft, disabled) => <VoiceInput fillDraft={fillDraft} disabled={disabled} />}
+                inputExtra={(fillDraft, disabled, getSendCount) => (
+                  <VoiceInput fillDraft={fillDraft} disabled={disabled} getSendCount={getSendCount} />
+                )}
               />
             </div>
-          </div>
+          </FadeIn>
         </div>
       )}
     </div>

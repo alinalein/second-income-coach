@@ -1,0 +1,56 @@
+[
+  {
+    "id": "AD-1",
+    "title": "Agent with tool-calling, not prompt engineering or RAG",
+    "reason": "An agent was chosen because the system needs deterministic state mutation (intake, idea/plan status, step progression, activation) that a prompt alone can't guarantee, and idea/plan generation needs live market data via web_search rather than a static corpus RAG could retrieve from.",
+    "tradeoff": "One LLM with tool-calling, not a multi-agent/orchestrator setup — one agent's loop covers intake, ideas, plan and check-in end to end without the coordination cost a second layer would add."
+  },
+  {
+    "id": "AD-3",
+    "title": "Three-tier memory split",
+    "reason": "Hard state (current step, plan status, timeline, idea/plan status, failure pattern) lives in dedicated Postgres tables, always re-read fresh; the LangGraph checkpointer/Store is reserved for conversational context only.",
+    "tradeoff": "Nothing authoritative is ever cached in or trusted from the checkpointer — more plumbing per tool, but no risk of acting on stale or fuzzy recalled state."
+  },
+  {
+    "id": "AD-4",
+    "title": "Tool boundary: LLM-backed vs. plain-code vs. MCP",
+    "reason": "No tool that mutates intake/idea/step/check-in/plan/activation state is ever LLM-backed — generation (ideas, plans) and state mutation are split into separate tool kinds so a model's nondeterminism never touches a critical write.",
+    "tradeoff": "generate_ideas/create_plan still perform their own deterministic Postgres write internally rather than handing off to a separate persistence tool, accepted because that write itself stays plain code."
+  },
+  {
+    "id": "AD-14",
+    "title": "activate_plan human-in-the-loop gate",
+    "reason": "activate_plan pauses via LangGraph's interrupt()/Command(resume) before a plan can become active, enforced by a one-active-plan-per-user database constraint applied inside one transaction.",
+    "tradeoff": "Adds a pause the user must explicitly confirm or reject before a plan ever commits — the cost of guaranteeing a human always approves first."
+  },
+  {
+    "id": "AD-11",
+    "title": "Moderation hook placement",
+    "reason": "Mistral Moderation runs at three fixed hook points (beforeModel, wrapToolCall around web_search, afterModel) rather than being decided ad hoc per call site — jailbreak input is rejected, PII is redacted not rejected, unsafe output is replaced.",
+    "tradeoff": "A cached web_search result is always the already-moderated content, so a cache hit never skips moderation — at the cost of moderating every result once up front."
+  },
+  {
+    "id": "AD-12",
+    "title": "Guilt/streak-language guardrail",
+    "reason": "A separate, narrower afterModel check (not a Mistral category) catches guilt/streak-shaming language specifically, since general moderation has no matching category for it.",
+    "tradeoff": "Regeneration is bounded (max 2 attempts) before falling back to a neutral message, trading a perfect rephrasing for a guaranteed exit."
+  },
+  {
+    "id": "AD-20",
+    "title": "Model registry and personality",
+    "reason": "Three user-selectable chat models, all routed through OpenRouter with one key; personality is a prompt layer only and never weakens the guilt-language check or changes the tool boundary.",
+    "tradeoff": "A missing key or failed call falls back to the default model with a neutral notice rather than a hard error, at the cost of a slightly less transparent failure."
+  },
+  {
+    "id": "AD-24",
+    "title": "i18n via react-i18next",
+    "reason": "Every user-facing string ships through react-i18next from the first story onward, in named-translation-key files per namespace — never hardcoded, never English-only pending a later German pass.",
+    "tradeoff": "This page's report/decision content is the one deliberate exception, stated visibly on the page, since it's generated technical documentation rather than UI chrome."
+  },
+  {
+    "id": "AD-27",
+    "title": "Currency as an explicit user setting",
+    "reason": "Currency (EUR or USD, default EUR) is its own user_settings field, never inferred from UI language; money is stored as integer minor units plus an ISO code, never a float.",
+    "tradeoff": "Conversion uses one configured EUR/USD rate with an as-of date rather than a live FX API call, so every converted amount is labeled an estimate rather than exact."
+  }
+]

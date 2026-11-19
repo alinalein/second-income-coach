@@ -286,6 +286,43 @@ describe('createIdeasRouter POST /generate', () => {
     }
   });
 
+  // Bug fix (user-reported, live): `generate_ideas.ts`'s own
+  // `handleGenerateIdeas` deliberately treats a partial batch (a slot
+  // dropped after exhausting its retries — e.g. the rationale-shape guard
+  // rejecting the same bad draft on both attempts) as a *success*, writing
+  // however many ideas did pass. This route's own before/after check used
+  // to require *exactly* `IDEAS_PER_BATCH` new ids and reported a 502 on
+  // anything less — discarding the real, already-persisted ideas and
+  // telling the browser the whole request failed. `seed.angle === 'angle 1'`
+  // (slot 0) always returns a draft with no terminal punctuation here, so
+  // that one slot fails both attempts and is dropped; the other 4 succeed.
+  it('reports success with a partial batch when exactly one slot is dropped after exhausting its retries', async () => {
+    const userId = await createTestUser();
+    try {
+      const intakeRow = await upsertIntake(db, userId, intakeArgs());
+      let goodDraftCount = 0;
+      const writeIdea: NonNullable<IdeasRouterDeps['writeIdea']> = vi.fn().mockImplementation(async (_row, _lang, seed: { angle: string }) => {
+        if (seed.angle === 'angle 1') {
+          return buildValidDraft(intakeRow, { title: 'Bad idea', rationale: ['Fits your schedule and budget nicely for a slow start'] });
+        }
+        goodDraftCount += 1;
+        return buildValidDraft(intakeRow, { title: `Good idea ${goodDraftCount}` });
+      });
+
+      const res = await request(
+        buildTestApp(fakeAgent(), userId, { planQueries: fakePlanQueries(), searchWeb: fakeSearchWeb(), writeIdea }),
+      ).post('/api/ideas/generate');
+
+      expect(res.status).toBe(200);
+      expect(res.body.ideas).toHaveLength(4);
+      expect(res.body.ideas.map((idea: { title: string }) => idea.title)).not.toContain('Bad idea');
+      const rows = await db.select().from(ideas).where(eq(ideas.userId, userId));
+      expect(rows).toHaveLength(4);
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+
   // Bug fix (user-reported): this response replaces the client's entire
   // `ideas` list, so a previously-rejected idea (persisted, never deleted —
   // epics.md's own "kept, not repeated" rule for bookmarked/rejected ideas
