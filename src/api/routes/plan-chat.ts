@@ -169,9 +169,23 @@ export function createPlanChatRouter({ env, db, agent, memoryStore }: PlanChatRo
     });
 
     try {
+      // Story 4.3 (AD-25): present only when this message came from a
+      // confirmed voice transcript (Code Map) — the existing no-hint test's
+      // exact-object `configurable` assertion for a typed message stays
+      // unchanged, since a plain spread of `undefined` adds no key.
+      const voiceDetectedLanguage = parseResult.data.detectedLanguage;
       const stream = await agent.stream(
         { messages: [userMessage] },
-        { configurable: { thread_id: threadId, planId, ideaId, userId }, streamMode: ['custom', 'values'] },
+        {
+          configurable: {
+            thread_id: threadId,
+            planId,
+            ideaId,
+            userId,
+            ...(voiceDetectedLanguage ? { voiceDetectedLanguage } : {}),
+          },
+          streamMode: ['custom', 'values'],
+        },
       );
 
       let lastValuesPayload: { messages?: BaseMessage[]; turnUsage?: TurnUsageWithModel } | undefined;

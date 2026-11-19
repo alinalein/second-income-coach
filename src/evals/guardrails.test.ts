@@ -18,6 +18,12 @@ describe('parseVitestJsonReport', () => {
   it.each([
     ['all passed', '{"numTotalTests":11,"numPassedTests":11,"numFailedTests":0}', { total: 11, passed: 11, failed: 0 }],
     ['some failed', '{"numTotalTests":6,"numPassedTests":4,"numFailedTests":2}', { total: 6, passed: 4, failed: 2 }],
+    // Review Triage Log: a `testNamePattern`-filtered run — the 6
+    // non-matching tests come back `numPendingTests: 6`, never excluded
+    // from `numTotalTests` by vitest itself; `total` must subtract them so
+    // a scoped suite entry reports "1 total, 1 passed," not "7 total, 1
+    // passed."
+    ['testNamePattern-filtered run (pending tests excluded from total)', '{"numTotalTests":7,"numPassedTests":1,"numFailedTests":0,"numPendingTests":6}', { total: 1, passed: 1, failed: 0 }],
   ])('%s', (_label, raw, expected) => {
     expect(parseVitestJsonReport(raw)).toEqual(expected);
   });

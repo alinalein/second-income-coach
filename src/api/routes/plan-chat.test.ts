@@ -242,6 +242,41 @@ describe('createPlanChatRouter (bug fix: create_plan tool context missing on thi
   });
 });
 
+// Story 4.3 (AD-25): "the detected language from that call ... is passed
+// downstream so the agent's reply uses that same language" — a voice-
+// confirmed message carries `detectedLanguage`, forwarded into
+// `configurable.voiceDetectedLanguage` for `src/agent/index.ts`'s own
+// system-prompt hint to read. The test above already proves the no-hint
+// (typed-message) case keeps the exact-object shape unchanged.
+describe('createPlanChatRouter (Story 4.3, AD-25: voice-detected language forwarding)', () => {
+  it('POST /:planId/messages forwards detectedLanguage into configurable.voiceDetectedLanguage when present', async () => {
+    const userId = await createTestUser();
+    try {
+      const ideaId = await insertIdea(userId);
+      const [plan] = await db
+        .insert(plans)
+        .values({ ideaId, userId, status: 'draft', threadId: `plan:${randomUUID()}` })
+        .returning();
+
+      const agent = fakeAgent({ stream: vi.fn().mockResolvedValue([['values', { messages: [new AIMessage('Klar.')] }]]) });
+
+      const res = await request(buildTestApp(agent, userId))
+        .post(`/api/plans/${plan!.id}/messages`)
+        .send({ content: 'Hallo', detectedLanguage: 'de' });
+
+      expect(res.status).toBe(200);
+      expect(agent.stream).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          configurable: { thread_id: `plan:${plan!.id}`, planId: plan!.id, ideaId, userId, voiceDetectedLanguage: 'de' },
+        }),
+      );
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+});
+
 // Bug fix (user-reported): a plan-chat reply showed the thumbs footer item
 // but no cost line at all — not even a token count. Root cause: production
 // (`src/api/index.ts`) passes a shared, pre-built `model` into every

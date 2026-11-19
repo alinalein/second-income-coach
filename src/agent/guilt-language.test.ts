@@ -98,3 +98,27 @@ describe('createGuiltLanguageMiddleware (AD-12: bounded regeneration + neutral f
     expect(result).toBeUndefined();
   });
 });
+
+// Story 6.1 AC ("Given each of the 3 personalities (CAP-7) / the guilt/
+// streak-language guardrail test runs / it is run once per personality, not
+// just the default one"). AD-20: "Personality ... is a prompt layer only -
+// it never changes the tool boundary or bypasses any constraint" - personality
+// has no parameter on `createGuiltLanguageMiddleware`/`containsGuiltLanguage`
+// at all, so the guardrail must catch and replace guilt language the same
+// way regardless of which personality's own tone produced the flagged reply.
+describe('createGuiltLanguageMiddleware (Story 6.1 AC: once per personality, not just the default)', () => {
+  it.each([
+    ['formal', 'You failed to complete your check-in as scheduled.'],
+    ['friendly', "Aw, you broke your streak — that's a bummer, but let's bounce back!"],
+    ['terse', 'Streak broken. You missed it.'],
+  ] as const)('falls back to the neutral message for a flagged reply in the "%s" personality\'s tone', async (_personality, flaggedText) => {
+    const invoke = vi.fn().mockResolvedValue(new AIMessage(flaggedText));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- see above.
+    const middleware = createGuiltLanguageMiddleware({ model: { invoke }, maxRegenerations: 1 }) as any;
+
+    const aiMessage = new AIMessage({ id: 'ai-1', content: flaggedText });
+    const result = await middleware.afterModel(state([new HumanMessage('hi'), aiMessage]), { configurable: {} });
+
+    expect((result as { messages: AIMessage[] }).messages[0]!.text).toBe(NEUTRAL_CHECKIN_FALLBACK_EN);
+  });
+});

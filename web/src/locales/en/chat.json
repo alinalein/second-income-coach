@@ -5,6 +5,7 @@
   "placeholder": "Type a message…",
   "messageAriaLabel": "Message",
   "sendButton": "Send",
+  "aiDisclaimer": "This is an AI and can make mistakes.",
   "error": {
     "modelFailure": "Something went wrong on our end and I couldn't generate a response. Please try again in a moment."
   },
@@ -34,5 +35,14 @@
     "cancel": "Cancel",
     "submit": "Save",
     "error": "Couldn't save your feedback. Please try again."
+  },
+  "voice": {
+    "micLabel": "Record a voice message",
+    "stopLabel": "Stop recording",
+    "recording": "Recording…",
+    "transcribing": "Transcribing…",
+    "permissionDenied": "Microphone access was denied. You can still type your message.",
+    "unsupported": "Voice input isn't available in this browser. You can still type your message.",
+    "transcriptionFailed": "Voice transcription didn't work. You can still type your message."
   }
 }

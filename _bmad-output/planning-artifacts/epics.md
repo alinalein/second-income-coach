@@ -841,30 +841,24 @@ So that I never see a button flicker, a second wait or an abrupt text swap.
 ### Story 2.13: Chat Scroll Behaviour
 
 As a user,
-I want a long chat to scroll the way Claude's does,
-So that I can read the whole answer to my question without scrolling by hand.
+I want a chat to scroll in the plain, predictable way,
+So that the view never jumps while I read.
+
+**Scheduling:** amended 2026-11-18 after repeated user testing: the pin-the-message-to-the-top behaviour is removed (it kept jumping); the plain behaviour below replaces it.
 
 **Acceptance Criteria:**
 
-**Given** a chat (discovery or plan thread) whose messages still fit comfortably in the visible area (the content is less than about 70% of the visible height before the new message)
-**When** the user sends a message
-**Then** the chat behaves normally: the new message and the reply are appended and the view only follows the newest content as needed; the user's message is NOT pushed to the top
+**Given** a chat (discovery or plan thread)
+**When** the user sends a message or a reply arrives
+**Then** the user's message is never pinned to the top and there is no bottom spacer; the view follows the newest content only while the user is already at (or near) the bottom, and it is never moved when the user has scrolled up to read earlier messages
 
-**Given** a chat (discovery or plan thread) that is almost full (the new message plus room for its reply would no longer fit without scrolling)
-**When** the user sends a message
-**Then** the view scrolls so the user's new message sits at the top of the visible area and the assistant's reply appears below it, fully visible as it arrives, with spare room after it (a bottom spacer of about one viewport so the reply is never cut off by the input)
+**Given** the user sends a message
+**When** it is appended
+**Then** the view scrolls to the bottom so the new message and the incoming reply are visible; no animated jump to a computed position (reduced-motion: instant)
 
-**Given** the assistant's reply is longer than the visible area
-**When** it arrives
-**Then** the user's message stays at the top, the start of the reply is what the user sees first, and the user scrolls down to read the rest; the view never jumps to the end of the reply on its own
-
-**Given** the user has scrolled up manually to read earlier messages
-**When** a reply arrives
-**Then** the view is not moved against their will
-
-**Given** reduced-motion settings
-**When** the scroll happens
-**Then** it is instant instead of animated; the chat input is never covered and keeps working as before (Story 1.3/5.3)
+**Given** the chat input
+**When** the thread scrolls
+**Then** the input is never covered and keeps working as before (Story 1.3/5.3)
 
 ### Story 2.6: Faster Idea Generation (optional)
 
@@ -1154,7 +1148,7 @@ So that I stay in control of what gets recorded.
 
 **Given** the voice recorder and transcript-review UI
 **When** built
-**Then** they are an input mode registered into the chat input extension point from Story 3.1, in their own component - the workspace layout and the text input are not edited by this story
+**Then** the recorder is an input mode registered into the chat input extension point from Story 3.1, in its own component; amended after user testing: there is no review popup, the transcript is placed into the existing message box (via the extension point's draft-setter, a minimal addition to the chat input) where the user reviews and edits it, then sends it with the normal Send button; the recording state is unmistakable (the mic button changes to a clearly labelled Stop state with a visible running timer and a pulsing indicator, respecting reduced motion); the workspace layout is not edited
 
 **Given** this story introduces the voice transcription credential (`gpt-transcribe`)
 **When** it is built
@@ -1186,7 +1180,7 @@ So that checking in feels tangibly worth it.
 
 **Given** the projection card
 **When** shown for a plan with a next step
-**Then** it always shows the line "at this pace · unlocks: <the specific unlocked opportunity>" (DE equivalent) under the estimate; it is a required part of the card and is never removed as a duplicate of the status column's next-step region (only omitted when there is no next step, i.e. on the last step or a completed plan)
+**Then** it always shows a line "at this pace · next step brings you to ~<amount>" (DE equivalent) under the estimate: the amount is the deterministic projection with the next step counted as completed (same money helper and estimate rules); it never repeats the next step's title or description (the status column already shows them); only omitted when there is no next step (last step, draft or completed plan)
 
 **Given** the projection card
 **When** built

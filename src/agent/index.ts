@@ -82,6 +82,30 @@ export function buildSystemPrompt(
   return `${base}\n\nThe user gave this feedback on earlier replies. Treat each as a standing instruction:\n${memorySection}`;
 }
 
+/** Story 4.3 (AD-25): folded into the system prompt's `extra` section only
+ * when a turn's `configurable.voiceDetectedLanguage` is set (Code Map) —
+ * the transcript text itself usually already signals its language, but a
+ * short/ambiguous edited transcript may not; this gives the model the
+ * stronger signal `gpt-transcribe`'s own language hint (AD-26) already
+ * resolved, on top of (never instead of) `REPLY_LANGUAGE_INSTRUCTION`'s
+ * general "match the user's most recent message" rule. */
+const VOICE_LANGUAGE_HINT_DE = 'The user just sent this message by voice; gpt-transcribe detected it as German.';
+const VOICE_LANGUAGE_HINT_EN = 'The user just sent this message by voice; gpt-transcribe detected it as English.';
+
+/**
+ * Pure helper (Code Map) — `extra` is whatever this agent instance's own
+ * `extraSystemInstruction` already resolved to (or `undefined`);
+ * `voiceDetectedLanguage` is `runtime.configurable?.voiceDetectedLanguage`,
+ * read by the `systemPrompt` callback below. Any value other than the two
+ * recognized language codes (including `undefined`, the no-voice case) is a
+ * no-op — `extra` passes through unchanged.
+ */
+export function appendVoiceLanguageHint(extra: string | undefined, voiceDetectedLanguage: unknown): string | undefined {
+  const hint = voiceDetectedLanguage === 'de' ? VOICE_LANGUAGE_HINT_DE : voiceDetectedLanguage === 'en' ? VOICE_LANGUAGE_HINT_EN : undefined;
+  if (!hint) return extra;
+  return extra ? `${extra} ${hint}` : hint;
+}
+
 /**
  * Design Notes: "Thread id shape: `discovery:${userId}`, not bare `userId` —
  * reserves the `plan:${planId}` naming Epic 3 introduces per AD-18."
@@ -359,7 +383,11 @@ export function createCoachAgent({
   // no-memory path as a `userId`/human-text miss below.
   const systemPrompt = dynamicSystemPromptMiddleware<{ personality?: string; planCompleted?: boolean }>(async (state, runtime) => {
     const personality = resolvePersonality(runtime.context?.personality);
-    const extra = withPlanCompletedNote(extraSystemInstruction, runtime.context?.planCompleted);
+    // Story 4.3 (AD-25): voice language hint, then the 4.5 plan-completed note.
+    const extra = withPlanCompletedNote(
+      appendVoiceLanguageHint(extraSystemInstruction, runtime.configurable?.voiceDetectedLanguage),
+      runtime.context?.planCompleted,
+    );
     if (!memoryStore) return buildSystemPrompt(personality, [], extra);
 
     // Hardening: the Boundary ("retrieval failure never blocks a turn")

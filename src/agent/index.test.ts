@@ -4,7 +4,7 @@ import { tool } from 'langchain';
 import { fakeModel } from '@langchain/core/testing';
 import { AIMessage, HumanMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph-checkpoint';
-import { buildSystemPrompt, createCoachAgent } from './index.js';
+import { appendVoiceLanguageHint, buildSystemPrompt, createCoachAgent } from './index.js';
 import { PERSONALITY_PROMPTS, DEFAULT_PERSONALITY, type Personality } from './personality.js';
 import { JAILBREAK_REJECTION_MESSAGE, UNSAFE_RESPONSE_FALLBACK_MESSAGE } from './moderation.js';
 import type { CreateCoachAgentDeps } from './index.js';
@@ -102,6 +102,27 @@ describe('buildSystemPrompt (AC: personality tone + reply-language in one prompt
   it('defaults to the friendly tone when called with no argument', () => {
     expect(buildSystemPrompt()).toBe(buildSystemPrompt(DEFAULT_PERSONALITY));
     expect(DEFAULT_PERSONALITY).toBe('friendly');
+  });
+});
+
+// Story 4.3 (AD-25): the voice-detected language is folded into the
+// system prompt's `extra` section only when it's one of the two recognized
+// codes — any other value (including the no-voice `undefined` case) is a
+// no-op, leaving `extra` byte-identical to before this story.
+describe('appendVoiceLanguageHint (AD-25: voice-detected language folded into the system prompt)', () => {
+  it.each([
+    ['de', 'German'],
+    ['en', 'English'],
+  ] as const)('appends a %s hint naming it as "%s" after the existing extra instruction', (code, languageName) => {
+    const result = appendVoiceLanguageHint('existing instruction', code);
+
+    expect(result).toMatch(/^existing instruction /);
+    expect(result).toContain(languageName);
+  });
+
+  it.each([undefined, 'fr', ''])('leaves extra unchanged for a non-voice value (%s)', (value) => {
+    expect(appendVoiceLanguageHint('existing instruction', value)).toBe('existing instruction');
+    expect(appendVoiceLanguageHint(undefined, value)).toBeUndefined();
   });
 });
 
