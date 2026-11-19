@@ -74,15 +74,31 @@ export const IDEAS_MODEL_NODE_RETRY_POLICY: RetryPolicy = {
 };
 
 /**
- * Story 3.1 (AD-4/AD-7): `create_plan`'s own outer-node timeout. Unlike
- * `generate_ideas`, `create_plan` makes no nested-agent/`web_search` calls —
- * it's a single, direct `chatModel.withStructuredOutput(...)` invocation
- * (Design Notes: "a single direct structured-output call is simpler and
- * inherently satisfies 'one attempt, no loop'") — so it stays at the
- * standard chat/intake budget rather than `IDEAS_MODEL_NODE_TIMEOUT_MS`'s
- * search-inflated one.
+ * Story 3.1 (AD-4/AD-7): `create_plan`'s own outer-node timeout — also
+ * applied to `activate_plan.ts`'s `'review'` node (same call shape: a
+ * single, direct `chatModel.withStructuredOutput(...)` invocation, used
+ * there for "Not quite — regenerate" with the user's own feedback folded
+ * into the prompt) and to the plan-chat agent's own node (`src/api/
+ * index.ts`) — a higher ceiling never hurts an ordinary fast reply, it
+ * only matters for the slow tail.
+ *
+ * Bug fix (user-reported, live): raised 30s -> 60s — confirmed live via
+ * the server's own log line ("Node 'review' exceeded its run timeout of
+ * 30000ms (elapsed: 30062ms)") that a real "regenerate with feedback" call
+ * landed right at this ceiling and failed outright (`PLAN_MODEL_NODE_
+ * RETRY_POLICY`'s `maxAttempts: 1`, unchanged — no whole-turn retry, by
+ * explicit earlier decision); the same feedback regenerated successfully
+ * on the user's very next attempt, consistent with this being real,
+ * occasional latency variance landing just past a too-tight budget, not a
+ * systemic failure. A regenerate's prompt (original draft + feedback +
+ * instructions) is heavier than a bare first-time `create_plan` call, the
+ * same category of recalibration `IDEAS_MODEL_NODE_TIMEOUT_MS`'s own doc
+ * comment already describes for idea generation after it got measurably
+ * heavier. Unlike that constant's own series of live-measured raises, this
+ * one has only the single data point above — 60s is a generous margin
+ * past it, not a second measurement.
  */
-export const PLAN_MODEL_NODE_TIMEOUT_MS = 30_000;
+export const PLAN_MODEL_NODE_TIMEOUT_MS = 60_000;
 
 /**
  * Story 3.1 (Boundary: "one attempt, no whole-turn retry ... mirroring

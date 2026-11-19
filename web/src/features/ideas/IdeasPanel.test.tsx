@@ -274,7 +274,7 @@ describe('IdeasPanel (round 13: a failed regenerate shows the generate-failure m
     // while `generating`, so `getByRole('status')` still only matches here,
     // not before the click.
     const statusRegion = screen.getByRole('status');
-    expect(statusRegion).toHaveTextContent('Generating your ideas…');
+    expect(statusRegion).toHaveTextContent('Generating side income ideas…');
     expect(statusRegion).toHaveTextContent('This can take up to a minute.');
     expect(within(statusRegion).getByRole('progressbar')).toBeInTheDocument();
 
@@ -843,6 +843,44 @@ describe('IdeasPanel (status actions disable panel-wide while a request is in fl
     expect(bookmarkButtonB).not.toBeDisabled();
 
     resolveStatusFetch(new Response(null, { status: 204 }));
+  });
+});
+
+// Bug fix (user-reported, live, two rounds): "the card [whose space the
+// floating Details panel opens over] is supposed to disappear" — only the
+// one idea card directly below the open one (same grid column, one row
+// down) fades out (`aria-hidden`/`inert`) while it's open, and comes back
+// once it's closed again. The first version faded every *other* card
+// instead, which was explicitly rejected live: "now all cards around it
+// disappear, not only the card below." `window.matchMedia` defaults to
+// "matches: true" for every query in this test env (`src/test/setup.ts`),
+// so `useIdeaGridColumnCount` resolves to 3 columns here — idea 1 opens,
+// idea 4 (index 3, directly below it) must fade; ideas 2/3 (its own row)
+// must not.
+describe('IdeasPanel (bug fix, live: opening one card\'s Details fades out only the card directly below it)', () => {
+  it('fades out exactly the card below the open one, leaves same-row siblings alone, and restores it once closed', async () => {
+    const ideas: IdeaResponse[] = [1, 2, 3, 4].map((n) => ({ ...fakeIdea(), id: `idea-${n}`, title: `Idea ${n}` }));
+    vi.stubGlobal(
+      'fetch',
+      mockFetch({
+        ...INTAKE_NULL_RESPONSE,
+        '/api/ideas': () => new Response(JSON.stringify({ ideas, currency: 'EUR' }), { status: 200 }),
+      }),
+    );
+
+    render(<IdeasPanel />);
+    await screen.findByText('Idea 1');
+    const getCard = async (title: string) => (await screen.findByText(title)).closest('[class*="rounded-xl"]')!;
+    const [card1, card2, card3, card4] = await Promise.all(['Idea 1', 'Idea 2', 'Idea 3', 'Idea 4'].map(getCard));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Details – Idea 1' }));
+    expect(card4).toHaveAttribute('aria-hidden', 'true');
+    expect(card2).not.toHaveAttribute('aria-hidden');
+    expect(card3).not.toHaveAttribute('aria-hidden');
+    expect(card1).not.toHaveAttribute('aria-hidden');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Details – Idea 1' }));
+    expect(card4).not.toHaveAttribute('aria-hidden');
   });
 });
 

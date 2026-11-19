@@ -14,5 +14,11 @@
     "switchToDarkLabel": "Zu dunklem Modus wechseln",
     "light": "Hell",
     "dark": "Dunkel"
+  },
+  "language": {
+    "switchToEnglishLabel": "Switch to English",
+    "switchToGermanLabel": "Auf Deutsch umschalten",
+    "english": "EN",
+    "german": "DE"
   }
 }

@@ -54,7 +54,7 @@
     "startButton": "Plan prüfen",
     "loading": "Dein Plan wird zur Prüfung geladen…",
     "loadFailed": "Die Prüfung konnte nicht geladen werden. Bitte versuche es erneut.",
-    "reviewTitle": "Prüfe deinen Plan",
+    "reviewTitle": "Prüfe deinen Plan für {{ideaTitle}}",
     "stepLabel": "Schritt {{index}}",
     "dayLabel": "Tag {{day}}",
     "confirmButton": "Bestätigen & aktivieren",

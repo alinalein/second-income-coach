@@ -62,7 +62,7 @@ describe('PlanActivationPanel (bug fix: modify/reject must re-POST /activate, ne
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    render(<PlanActivationPanel planId="plan-1" onActivated={() => undefined} />);
+    render(<PlanActivationPanel planId="plan-1" ideaTitle="Resell thrifted clothing" onActivated={() => undefined} />);
 
     // Bug fix (user-reported, live): the review now starts automatically
     // on mount (nothing pending yet) — no "Review plan" click needed first.
@@ -105,7 +105,7 @@ describe('PlanActivationPanel (Spec 2.12 AC4: review-needing phases render insid
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    render(<PlanActivationPanel planId="plan-1" onActivated={() => undefined} />);
+    render(<PlanActivationPanel planId="plan-1" ideaTitle="Resell thrifted clothing" onActivated={() => undefined} />);
 
     // Bug fix (user-reported, live): the review now starts automatically
     // on mount — no "Review plan" click needed first.
@@ -138,7 +138,7 @@ describe('PlanActivationPanel (bug fix, live: review starts automatically, no in
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    render(<PlanActivationPanel planId="plan-1" onActivated={() => undefined} />);
+    render(<PlanActivationPanel planId="plan-1" ideaTitle="Resell thrifted clothing" onActivated={() => undefined} />);
 
     expect(await screen.findByRole('dialog')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Review plan' })).not.toBeInTheDocument();

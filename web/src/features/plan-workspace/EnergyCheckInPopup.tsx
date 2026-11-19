@@ -93,7 +93,15 @@ export function EnergyCheckInPopup({ planId, onCheckInRecorded }: EnergyCheckInP
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent>
+      {/* Bug fix (user-reported, live): "the X is far from the check-in
+       * card" — the library's default size (`'sm'`, 28rem/448px) is wider
+       * than this popup's own short content (a title + 3 small buttons),
+       * so the close X (positioned relative to the *box*, not the
+       * content) sat at the box's true right edge, with a lot of visibly
+       * empty page background between it and the actual text/buttons.
+       * `w-fit` shrinks the box down to its content's real width instead,
+       * same `popup-glass-strong` look as the other short popups. */}
+      <DialogContent className="popup-glass-strong w-fit">
         <DialogHeader>
           <DialogTitle>{t('checkIn.title')}</DialogTitle>
         </DialogHeader>

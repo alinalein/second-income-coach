@@ -10,6 +10,16 @@ export interface ProjectionCardProps {
    * unchanged — only a `'completed'` plan relabels the card as the result
    * of the finished plan. */
   planStatus?: PlanStatus;
+  /** Bug fix (user-reported, live): bump this to silently refetch in the
+   * background instead of remounting via a `key` change (the previous
+   * mechanism, `PlanWorkspace.tsx`'s own `projectionRefreshKey`) — a
+   * remount reset `data` to `null` first, which dropped the card back to
+   * its plain "Loading…" text and then snapped to the new numbers: a
+   * visible jump right after "Mark as done" already updated the step
+   * above it instantly. This refetches without ever clearing the
+   * last-loaded data, so the old amount stays on screen until the new one
+   * is ready to replace it outright. */
+  refreshToken?: number;
 }
 
 /** Bug fix (user-reported, live): same precedent as `StatusPanel.tsx`'s own
@@ -67,7 +77,7 @@ function AmountLine({
  * formats it via the one shared `shared/money.ts` helper (AD-27) — never a
  * second money implementation.
  */
-export function ProjectionCard({ planId, planStatus }: ProjectionCardProps) {
+export function ProjectionCard({ planId, planStatus, refreshToken }: ProjectionCardProps) {
   const { t, i18n } = useTranslation('plan');
   const [data, setData] = React.useState<ProjectionResponse | null>(null);
   const [failed, setFailed] = React.useState(false);
@@ -126,6 +136,26 @@ export function ProjectionCard({ planId, planStatus }: ProjectionCardProps) {
     loadProjection();
     return () => cancelLoadRef.current();
   }, [loadProjection]);
+
+  // Bug fix (user-reported, live): a silent background refetch — never
+  // clears `data`/`failed` first, so the card keeps showing whatever it
+  // last loaded for the whole duration of this request, swapping straight
+  // to the new numbers once it resolves. Skips its own first run (the
+  // mount effect above already covers the initial load for this exact
+  // `refreshToken` value) — only a later *change* means "something
+  // happened, refresh in the background."
+  const isFirstRefreshRef = React.useRef(true);
+  React.useEffect(() => {
+    if (isFirstRefreshRef.current) {
+      isFirstRefreshRef.current = false;
+      return;
+    }
+    loadProjection();
+    // `loadProjection` is `planId`-scoped and already covered by the mount
+    // effect above; this effect must fire only on a genuine `refreshToken`
+    // bump, never a `planId` change re-creating `loadProjection` too.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshToken]);
 
   const handleRetry = React.useCallback(() => {
     setFailed(false);

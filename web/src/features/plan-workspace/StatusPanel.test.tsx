@@ -138,24 +138,29 @@ describe('StatusPanel (AC: only current+next step visible)', () => {
   });
 });
 
-// Bug fix (user-reported, live), item 2: "the projection card refetches ...
-// after Start this step [or] Mark as done" — `StatusPanel` is the one
-// surface that owns those two actions (via `StepActions`); this confirms it
-// notifies `onPlanActivityChanged` (in addition to its own refetch) once
-// either one actually succeeds.
-describe('StatusPanel (AC follow-up: Start/Complete notify onPlanActivityChanged)', () => {
+// Bug fix (user-reported, live), item 2 (amended, later round): "the
+// projection card refetches ... after Mark as done" — only a real
+// `complete()` changes the completed-step count the projection is computed
+// from, so only that action notifies `onPlanActivityChanged` (in addition
+// to this panel's own refetch). `start()` used to notify it too (the
+// original AC's own wording), which visibly flickered/remounted
+// `ProjectionCard` for an action that never changes anything it shows —
+// confirmed live, this is the bug-fix amendment, not the original AC.
+describe('StatusPanel (bug fix, live: only Complete notifies onPlanActivityChanged, never Start)', () => {
   it.each([
     [
       'Start this step',
       '/api/plans/plan-1/steps/step-1/start',
       JSON.stringify({ step: { ...fakeStep(), startedAt: new Date().toISOString() } }),
+      0,
     ],
     [
       'Mark as done',
       '/api/plans/plan-1/steps/step-1/complete',
       JSON.stringify({ step: { ...fakeStep(), status: 'completed' }, planCompleted: false }),
+      1,
     ],
-  ] as const)('clicking "%s" calls onPlanActivityChanged once it succeeds', async (buttonLabel, actionPath, actionResponseBody) => {
+  ] as const)('clicking "%s" calls onPlanActivityChanged %i time(s) once it succeeds', async (buttonLabel, actionPath, actionResponseBody, expectedCalls) => {
     const body: CurrentStepResponse = { current: fakeStep(), next: null, gapDetected: false, missedDays: 0, checkedInToday: false, completion: null };
     const onPlanActivityChanged = vi.fn();
     vi.stubGlobal(
@@ -168,9 +173,17 @@ describe('StatusPanel (AC follow-up: Start/Complete notify onPlanActivityChanged
 
     render(<StatusPanel planId="plan-1" ideaTitle="Resell thrifted clothing" planStatus="active" onPlanActivityChanged={onPlanActivityChanged} />);
 
-    fireEvent.click(await screen.findByRole('button', { name: buttonLabel }));
+    const button = await screen.findByRole('button', { name: buttonLabel });
+    fireEvent.click(button);
 
-    await waitFor(() => expect(onPlanActivityChanged).toHaveBeenCalledTimes(1));
+    // `phase` returning to idle (the button re-enabling) only happens after
+    // every synchronous statement in the action's own `.then()` callback has
+    // run — including the `onStepChanged`/`onStepCompleted` calls the
+    // assertion below cares about — so waiting on it rules out a race
+    // without depending on the mock's own (unrelated to this fix) refetch
+    // response shape.
+    await waitFor(() => expect(button).not.toBeDisabled());
+    expect(onPlanActivityChanged).toHaveBeenCalledTimes(expectedCalls);
   });
 });
 

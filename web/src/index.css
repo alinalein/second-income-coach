@@ -5,6 +5,42 @@
    documented pattern for swapping `prefers-color-scheme` for a manual class. */
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* Bug fix (user-reported, live): a smooth accordion-style transition for
+   `IdeaCard`'s own "Details" disclosure panel (`IdeasPanel.tsx`) — the
+   native `hidden` attribute toggle itself is completely unchanged (its own
+   tests rely on it directly, and this stylesheet isn't even loaded in that
+   test environment — no component test file imports `index.css` — so
+   nothing there is affected either way). Progressive enhancement only:
+   `@starting-style`/`allow-discrete` let a browser that supports them
+   (Chrome 117+) transition *through* the hidden<->shown `display` change
+   instead of snapping; anything older just keeps today's instant toggle.
+   `interpolate-size: allow-keywords` is what lets `height: auto` itself
+   participate in a transition at all — without it, only a literal
+   pixel-to-pixel height change can ever animate. */
+:root {
+  interpolate-size: allow-keywords;
+}
+.details-panel {
+  overflow: hidden;
+  height: auto;
+  opacity: 1;
+  transition:
+    height 0.25s ease-in-out,
+    opacity 0.2s ease-in-out,
+    display 0.25s allow-discrete;
+}
+.details-panel[hidden] {
+  display: block;
+  height: 0;
+  opacity: 0;
+}
+@starting-style {
+  .details-panel:not([hidden]) {
+    height: 0;
+    opacity: 0;
+  }
+}
+
 /*
  * Pinned design tokens (spec-1-1 / stack.md) — exact values, verified
  * contrast-wise independently of this library's own OKLCH primitives.
@@ -142,6 +178,21 @@
        layout-preview.html's body background exactly (both themes). */
     background: radial-gradient(circle at 20% 10%, var(--page-a), var(--page-b) 70%);
     min-height: 100vh;
+  }
+}
+
+/* User-reported, live: `ConfettiBurst` (components/ui/confetti-burst.tsx)
+   — each piece starts centered on the viewport, flies out to its own
+   per-piece `--dx`/`--dy`/`--rotate` (randomized in JS, passed through as
+   inline custom properties), fading out as it goes. */
+@keyframes confetti-fall {
+  0% {
+    transform: translate(-50%, -50%) rotate(0deg);
+    opacity: 1;
+  }
+  100% {
+    transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy))) rotate(var(--rotate));
+    opacity: 0;
   }
 }
 

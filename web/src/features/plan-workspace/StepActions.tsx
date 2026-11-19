@@ -13,6 +13,15 @@ export interface StepActionsProps {
    * server's own chat acknowledgment — separate from `onStepChanged` so
    * `complete()` (which never produces one) can't accidentally trigger it. */
   onStepStarted?: (message: ChatMessage) => void;
+  /** Bug fix (user-reported, live): fires once, only on a successful
+   * `complete()` — never `start()`, which never changes the completed-step
+   * count the projection is actually computed from. `StatusPanel.tsx` used
+   * to fire its projection-refresh callback from `onStepChanged` itself
+   * (shared by both actions), so clicking "Start this step" remounted
+   * `ProjectionCard` (its `key` bumps on refresh) for no reason — a visible
+   * flicker/jump in the untouched card below with nothing in it to
+   * actually update. */
+  onStepCompleted?: () => void;
   /** Bug fix (user-reported, live): fires once, only when `complete()`
    * succeeds on the plan's final step (`planCompleted`) — the parent needs
    * this (not just `onStepChanged`) to flip its own cached plan status to
@@ -71,7 +80,7 @@ type Phase = 'idle' | 'busy' | 'failed';
  * `phase === 'busy'` still disables both buttons during the in-flight
  * request (prevents a double-submit), just without changing either label.
  */
-export function StepActions({ planId, step, onStepChanged, onStepStarted, onPlanCompleted, disabled = false }: StepActionsProps) {
+export function StepActions({ planId, step, onStepChanged, onStepStarted, onStepCompleted, onPlanCompleted, disabled = false }: StepActionsProps) {
   const { t } = useTranslation('plan');
   const [phase, setPhase] = React.useState<Phase>('idle');
   const [planCompleted, setPlanCompleted] = React.useState(false);
@@ -133,6 +142,7 @@ export function StepActions({ planId, step, onStepChanged, onStepStarted, onPlan
         setPhase('idle');
         if (parsed.data.planCompleted) onPlanCompleted?.(parsed.data.chatMessage);
         onStepChanged();
+        onStepCompleted?.();
       })
       .catch(() => setPhase('failed'));
   }

@@ -17,6 +17,10 @@ import { stripLeadingBulletMarker } from '../../lib/utils';
 
 export interface PlanActivationPanelProps {
   planId: string;
+  /** UI fix (user-reported): interpolated into `activation.reviewTitle` —
+   * same already-known title `StatusPanel.tsx`'s own card uses, so "Review
+   * your plan" names which plan without a second fetch. */
+  ideaTitle: string;
   /** Lets `PlanWorkspace` swap its own `plan` state to the now-`active` row
    * once confirmed, which hides this panel on the next render (it only
    * renders for a `draft` plan). */
@@ -52,9 +56,19 @@ type Phase = 'idle' | 'loading' | 'reviewing' | 'editing' | 'rejecting' | 'busy'
  * `PlanWorkspace.tsx` only adds the one conditional render call for a
  * `draft` plan; this file owns all of the activation flow's own layout.
  */
-export function PlanActivationPanel({ planId, onActivated }: PlanActivationPanelProps) {
+export function PlanActivationPanel({ planId, ideaTitle, onActivated }: PlanActivationPanelProps) {
   const { t } = useTranslation('plan');
-  const [phase, setPhase] = React.useState<Phase>('idle');
+  // Bug fix (user-reported, live): starts at `'loading'`, not `'idle'` — the
+  // mount effect below always flips it to `'loading'` anyway (synchronously
+  // within the same effect, before any fetch), but that flip only happens
+  // *after* the first paint. Starting at `'idle'` meant that first paint
+  // briefly showed the small inline "reopen" card (the eventual idle state,
+  // reached only via an explicit later close) instead of this file's own
+  // loading `Dialog` — one more jarring mode-switch in the "setting up your
+  // plan" -> "review your plan" hand-off (`PlanWorkspace.tsx`'s own loading
+  // modal was already gone by this point, having nothing left to blend
+  // into).
+  const [phase, setPhase] = React.useState<Phase>('loading');
   const [review, setReview] = React.useState<PlanActivationReview | null>(null);
   const [editableSteps, setEditableSteps] = React.useState<EditableStep[]>([]);
   const [editError, setEditError] = React.useState(false);
@@ -300,13 +314,23 @@ export function PlanActivationPanel({ planId, onActivated }: PlanActivationPanel
   }
 
   if (phase === 'loading' || (phase === 'busy' && !review)) {
+    // Bug fix (user-reported, live): a backdropped `Dialog`, not a plain
+    // inline `Card` — the previous inline card meant the page visibly
+    // dropped out of "Setting up your plan…"'s full-screen blocking modal
+    // (`PlanWorkspace.tsx`) into ordinary page layout for however long this
+    // fetch/generate call takes, then popped straight into the "Review
+    // your plan" modal — two jarring mode switches. Staying in one
+    // continuous backdropped-modal state the whole time (same
+    // `popup-glass-strong` look) reads as one smooth hand-off instead.
     return (
-      <Card>
-        <CardContent className="flex items-center gap-2 p-6 text-sm" aria-live="polite" role="status">
-          <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-          {t('activation.loading')}
-        </CardContent>
-      </Card>
+      <Dialog open onOpenChange={() => undefined}>
+        <DialogContent showCloseButton={false} className="popup-glass-strong flex flex-col items-center gap-3 text-center">
+          <div className="flex items-center gap-2 text-sm" aria-live="polite" role="status">
+            <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+            {t('activation.loading')}
+          </div>
+        </DialogContent>
+      </Dialog>
     );
   }
 
@@ -452,7 +476,7 @@ export function PlanActivationPanel({ planId, onActivated }: PlanActivationPanel
         ) : phase === 'failed' ? (
           <>
             <DialogHeader>
-              <DialogTitle>{t('activation.reviewTitle')}</DialogTitle>
+              <DialogTitle>{t('activation.reviewTitle', { ideaTitle })}</DialogTitle>
             </DialogHeader>
             <p role="alert" className="text-sm text-muted-foreground">
               {t('activation.failed')}
@@ -467,7 +491,7 @@ export function PlanActivationPanel({ planId, onActivated }: PlanActivationPanel
           // phase === 'reviewing' | 'busy' (with a review already loaded)
           <>
             <DialogHeader>
-              <DialogTitle>{t('activation.reviewTitle')}</DialogTitle>
+              <DialogTitle>{t('activation.reviewTitle', { ideaTitle })}</DialogTitle>
               <DialogDescription>{t('activation.hint')}</DialogDescription>
             </DialogHeader>
             <div className="flex flex-col gap-4 text-sm">

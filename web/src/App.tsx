@@ -75,6 +75,35 @@ function useAuthError(): boolean {
   return hasError;
 }
 
+/**
+ * User-requested, live: "on the start page [sign-in], I want to be able to
+ * pick EN/DE too, next to the dark/light toggle — only on the start page."
+ * Scoped to this file's own unauthenticated branch only — the signed-in
+ * app already has a real language setting (`SettingsPage.tsx`'s own
+ * `uiLanguage`, persisted server-side via `user_settings`); this is a
+ * separate, local-only, pre-login convenience, same binary
+ * click-to-flip shape as `ThemeToggle` right next to it. Nothing here
+ * persists anywhere — there's no signed-in user yet to persist it for; a
+ * returning signed-in user's own saved language still applies as soon as
+ * `useAppliedUiLanguage` resolves it, same as before.
+ */
+function SignInLanguageToggle() {
+  const { t, i18n } = useTranslation('common');
+  const isGerman = i18n.language === 'de';
+
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      aria-label={isGerman ? t('language.switchToEnglishLabel') : t('language.switchToGermanLabel')}
+      onClick={() => void i18n.changeLanguage(isGerman ? 'en' : 'de')}
+    >
+      {isGerman ? t('language.english') : t('language.german')}
+    </Button>
+  );
+}
+
 function SignInCard({ showError }: { showError: boolean }) {
   const { t } = useTranslation('common');
 
@@ -344,8 +373,24 @@ export function App() {
   const [ideasCurrencyKey, setIdeasCurrencyKey] = React.useState(0);
   // Story 2.8 AC1: set only on a true first-ever intake submit (`hasIntake`
   // was `false` right before this session's save) — never on a returning
-  // user whose intake already existed before this session, and never again
-  // once set (there is no later path back to `false`).
+  // user whose intake already existed before this session.
+  // Bug fix (user-reported, live): must be a true one-shot — the flag used
+  // to stay `true` for the rest of the session (the old comment here even
+  // said so), and `IdeasPanel`'s own auto-generate effect reads it live,
+  // not just at mount (`autoGenerate` is one of that effect's own
+  // dependencies, gated separately on `initialLoadSettled`) — so clicking
+  // "Bookmarked" or "New ideas" in the sidebar *after* already working on a
+  // plan remounted `IdeasPanel` fresh with that stale `true` still in
+  // place, re-firing the whole intake-review + generate sequence on a view
+  // that should have just shown the existing bookmarked/suggested ideas.
+  // Reset it inside `navigate()` below instead of a separate effect: an
+  // effect-based reset raced the child's own async effect (it could flip
+  // the prop back to `false` before `initialLoadSettled` even became
+  // true, silently skipping the *intended* auto-generate on the very save
+  // that's supposed to trigger it) — `navigate()` only ever fires for a
+  // later, *different* user action, batched atomically with the route
+  // change that would unmount/remount `IdeasPanel` anyway, so there's
+  // nothing left in flight to race.
   const [autoGenerateIdeas, setAutoGenerateIdeas] = React.useState(false);
   // Story 2.9: the active view/plan, driven by the URL (survives a reload).
   const [route, setRoute] = useRoute();
@@ -368,6 +413,11 @@ export function App() {
       // call here is itself a sidebar/card navigation choosing somewhere
       // else to go, so it always leaves intake-review mode too.
       setShowIntakeForm(false);
+      // Bug fix (user-reported, live): see `autoGenerateIdeas`'s own doc
+      // comment above — every real navigation consumes this one-shot flag,
+      // so a *later* visit to 'ideas'/'bookmarkedAll' never re-reads a
+      // stale `true`.
+      setAutoGenerateIdeas(false);
       setRoute(next);
     },
     [setRoute],
@@ -386,7 +436,10 @@ export function App() {
         <header className="border-b border-border">
           <div className="mx-auto flex max-w-3xl items-center justify-between px-6 py-4">
             <span className="text-sm font-semibold tracking-tight">{t('app.title')}</span>
-            <ThemeToggle />
+            <div className="flex items-center gap-2">
+              <SignInLanguageToggle />
+              <ThemeToggle />
+            </div>
           </div>
         </header>
         <main className="mx-auto flex max-w-3xl flex-col gap-6 px-6 py-10">

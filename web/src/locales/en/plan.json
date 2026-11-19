@@ -54,7 +54,7 @@
     "startButton": "Review plan",
     "loading": "Loading your plan for review…",
     "loadFailed": "Couldn't load the review. Please try again.",
-    "reviewTitle": "Review your plan",
+    "reviewTitle": "Review your plan for {{ideaTitle}}",
     "stepLabel": "Step {{index}}",
     "dayLabel": "Day {{day}}",
     "confirmButton": "Confirm & activate",

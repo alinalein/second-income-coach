@@ -10,6 +10,7 @@ import { StatusPanel } from './StatusPanel';
 import { PlanActivationPanel } from './PlanActivationPanel';
 import { ProjectionCard } from './ProjectionCard';
 import { EnergyCheckInPopup } from './EnergyCheckInPopup';
+import { ConfettiBurst } from '../../components/ui/confetti-burst';
 
 /**
  * Spec 2.12 AC2: the same time-based determinate-bar shape as
@@ -300,6 +301,10 @@ export function PlanWorkspace({ ideaId, ideaTitle, onPlanLoaded }: PlanWorkspace
   // under new row ids) without `StatusPanel` ever having refetched since
   // its initial mount.
   const [statusRefreshKey, setStatusRefreshKey] = React.useState(0);
+  // Bug fix (user-reported, live): "the text from the AI alone isn't
+  // enough" — a one-shot `ConfettiBurst` overlay alongside the completion
+  // chat message, not instead of it.
+  const [showConfetti, setShowConfetti] = React.useState(false);
 
   // Bug fix (user-reported, live): completing the plan's final step left
   // this component's own cached `plan.status` at `active` until a full
@@ -321,6 +326,7 @@ export function PlanWorkspace({ ideaId, ideaTitle, onPlanLoaded }: PlanWorkspace
       return updated;
     });
     if (message) setIncomingMessage(message);
+    setShowConfetti(true);
   }, []);
 
   return (
@@ -336,27 +342,29 @@ export function PlanWorkspace({ ideaId, ideaTitle, onPlanLoaded }: PlanWorkspace
           {t('loadFailed')}
         </p>
       ) : !plan ? (
-        // Bug fix (user-reported, live): the skeleton renders immediately
-        // (not delayed) — a plan switch that resolves within
-        // `LOADING_MODAL_DELAY_MS` (the common case, re-fetching an
-        // already-existing plan) never shows the *modal* below at all
-        // (which used to flash on every switch regardless of how fast it
-        // actually resolved), but a brief skeleton frame either way reads
-        // as normal loading, not a jarring pop-in.
-        <>
-          <WorkspaceSkeleton />
-          {showLoadingModal ? (
-            // Spec 2.12 AC2: the same determinate-bar/stage-text pattern as
-            // idea generation (`IdeasPanel.tsx`) replaces the old
-            // indeterminate spinner — visible from first paint, jumps to
-            // 100% the instant the request settles, right before the plan
-            // itself replaces this view. User-reported follow-up: now a
-            // centered, backdropped modal (same `shadcn-glass-ui` Dialog
-            // pattern as `PlanActivationPanel`'s review) instead of inline
-            // page content, so the rest of the page is blocked while the
-            // plan is being created — same as that dialog. No close
-            // affordance: there is nothing safe to cancel back to
-            // mid-creation.
+        // Bug fix (user-reported, live, round 2): the skeleton now waits on
+        // `showLoadingModal` too, same as the modal below (both or
+        // neither — never the skeleton alone) — the previous round's own
+        // reasoning ("a brief skeleton frame either way reads as normal
+        // loading") was wrong in practice: its vivid `var(--blob)` fill
+        // (needed for the modal's own backdrop-blur to have something to
+        // soften) read as a jarring flash/jump on a fast switch between
+        // two already-loaded plans, exactly the case this delay exists to
+        // avoid in the first place.
+        showLoadingModal ? (
+          <>
+            <WorkspaceSkeleton />
+            {/* Spec 2.12 AC2: the same determinate-bar/stage-text pattern as
+             * idea generation (`IdeasPanel.tsx`) replaces the old
+             * indeterminate spinner — visible from first paint, jumps to
+             * 100% the instant the request settles, right before the plan
+             * itself replaces this view. User-reported follow-up: now a
+             * centered, backdropped modal (same `shadcn-glass-ui` Dialog
+             * pattern as `PlanActivationPanel`'s review) instead of inline
+             * page content, so the rest of the page is blocked while the
+             * plan is being created — same as that dialog. No close
+             * affordance: there is nothing safe to cancel back to
+             * mid-creation. */}
             <Dialog open onOpenChange={() => undefined}>
               {/* `popup-glass-strong` (`index.css`, user-reported, live,
                * round 3 — see its own doc comment there for why this is a
@@ -381,8 +389,8 @@ export function PlanWorkspace({ ideaId, ideaTitle, onPlanLoaded }: PlanWorkspace
                 </div>
               </DialogContent>
             </Dialog>
-          ) : null}
-        </>
+          </>
+        ) : null
       ) : (
         <div className="flex flex-col gap-4 sm:h-full sm:min-h-0">
           {/* Story 3.2 (AD-14): the draft review/confirm/modify/reject panel
@@ -391,6 +399,7 @@ export function PlanWorkspace({ ideaId, ideaTitle, onPlanLoaded }: PlanWorkspace
           {plan.status === 'draft' ? (
             <PlanActivationPanel
               planId={plan.id}
+              ideaTitle={ideaTitle}
               onActivated={(activatedPlan) => {
                 setPlan(activatedPlan);
                 // Bug fix (user-reported, live): "I asked the AI to change
@@ -418,8 +427,19 @@ export function PlanWorkspace({ ideaId, ideaTitle, onPlanLoaded }: PlanWorkspace
            * Radix dialog portals itself regardless of where it sits in this
            * tree, so its position here doesn't affect layout.
            * Story 4.5 (AC1): never shown for a completed plan — there is
-           * nothing left to check in about. */}
-          {plan.status !== 'completed' ? <EnergyCheckInPopup planId={plan.id} onCheckInRecorded={refreshProjection} /> : null}
+           * nothing left to check in about.
+           * Bug fix (user-reported, live): never for a `draft` plan either
+           * — `PlanActivationPanel`'s own review `Dialog` is still open at
+           * that point (a draft always needs review before it's active),
+           * so this popup's own `Dialog` could end up mounting *underneath
+           * an already-open one*. Two overlapping Radix dialogs is a
+           * plausible source of the broken close-button position reported
+           * live (its own scroll-lock/portal bookkeeping isn't designed
+           * for a second dialog opening mid-flight) — and semantically, a
+           * plan the user hasn't even confirmed yet has no "today" to ask
+           * about anyway. */}
+          {plan.status === 'active' ? <EnergyCheckInPopup planId={plan.id} onCheckInRecorded={refreshProjection} /> : null}
+          {showConfetti ? <ConfettiBurst onDone={() => setShowConfetti(false)} /> : null}
           {/* 2.9 AC: layout-preview.html's own layout — status column beside
            * the chat, side by side, on a desktop width; only a narrow
            * screen stacks the status panel above the chat as a compact
@@ -433,6 +453,28 @@ export function PlanWorkspace({ ideaId, ideaTitle, onPlanLoaded }: PlanWorkspace
              * height, while the chat column (no override) stretches to the
              * row's full height. */}
             <div className="flex flex-col gap-4 sm:w-64 sm:shrink-0 sm:self-start">
+              {/* Bug fix (user-reported, live): `ProjectionCard` now sits
+               * above `StatusPanel` (was the reverse) — with
+               * `StatusPanel`'s own current-step card now last in this
+               * column again (no fixed height, see that file's own doc
+               * comment), its height changing between steps only ever
+               * grows/shrinks the empty space *below* it, never jostles
+               * anything else in the column the way it did sitting above
+               * `ProjectionCard`.
+               *
+               * Code Map: "projection card extension point (a slot in the
+               * sidebar/header) ... renders nothing until 4.4". Story 4.4
+               * fills it here — this file's own layout is otherwise
+               * unchanged.
+               *
+               * Bug fix (user-reported, live): `refreshToken` (a plain
+               * prop `ProjectionCard` itself refetches on, never clearing
+               * its own last-loaded data first), not a `key` remount — a
+               * remount dropped the card back to "Loading…" and then
+               * snapped to the new numbers, a visible jump right after
+               * "Mark as done" already updated the step above it
+               * instantly. */}
+              <ProjectionCard planId={plan.id} planStatus={plan.status} refreshToken={projectionRefreshKey} />
               {/* Bug fix (user-reported, live): `key` forces a fresh mount/
                * fetch on plan activation (`statusRefreshKey`, bumped only
                * from `onActivated` above, never on every ordinary step
@@ -442,17 +484,19 @@ export function PlanWorkspace({ ideaId, ideaTitle, onPlanLoaded }: PlanWorkspace
                * rows, same `plan.id`) left this showing the *original*
                * draft's steps straight through confirmation.
                *
-               * Bug fix (found while fixing the above): a bare number
-               * here collided with `ProjectionCard`'s own bare-number
-               * `key` below — `statusRefreshKey` and `projectionRefreshKey`
-               * both start at 0 and both get bumped together by
-               * `onActivated`, so the two (different-typed!) sibling
-               * elements ended up sharing the literal key `1`. React's
-               * sibling key-matching doesn't exempt same-key-different-type
-               * elements — it genuinely duplicated `StatusPanel` on screen
-               * (confirmed live: "two children with the same key" warning,
-               * both the old and new instance visible at once). Each gets
-               * its own namespaced string now. */}
+               * Bug fix (found while fixing the above): a bare number here
+               * used to collide with `ProjectionCard`'s own bare-number
+               * `key` (since removed — that card now refetches via a plain
+               * `refreshToken` prop instead, never a remount) — both
+               * started at 0 and both got bumped together by `onActivated`,
+               * so the two (different-typed!) sibling elements ended up
+               * sharing the literal key `1`. React's sibling key-matching
+               * doesn't exempt same-key-different-type elements — it
+               * genuinely duplicated `StatusPanel` on screen (confirmed
+               * live: "two children with the same key" warning, both the
+               * old and new instance visible at once). Still namespaced
+               * (`status-${...}`) as a result, even with nothing left to
+               * collide with. */}
               <StatusPanel
                 key={`status-${statusRefreshKey}`}
                 planId={plan.id}
@@ -462,13 +506,6 @@ export function PlanWorkspace({ ideaId, ideaTitle, onPlanLoaded }: PlanWorkspace
                 onPlanCompleted={handlePlanCompleted}
                 onPlanActivityChanged={refreshProjection}
               />
-              {/* Code Map: "projection card extension point (a slot in the
-               * sidebar/header) ... renders nothing until 4.4". Story 4.4
-               * fills it here — this file's own layout is otherwise
-               * unchanged. `key` forces a fresh mount/fetch on the shared
-               * refresh signal above (item 2) — no internal change to
-               * `ProjectionCard` itself needed. */}
-              <ProjectionCard key={`projection-${projectionRefreshKey}`} planId={plan.id} planStatus={plan.status} />
             </div>
             <div className="flex min-h-0 flex-1 flex-col">
               {/* Story 5.2/5.3: `MessageCost` + `MessageFeedback` registered

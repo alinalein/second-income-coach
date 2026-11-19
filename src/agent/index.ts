@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { eq } from 'drizzle-orm';
+import { and, eq, gte } from 'drizzle-orm';
 import { createAgent, dynamicSystemPromptMiddleware } from 'langchain';
 import { Annotation, END, MessagesAnnotation, START, StateGraph } from '@langchain/langgraph';
 import type { RetryPolicy } from '@langchain/langgraph';
@@ -22,8 +22,8 @@ import { sumTurnUsage, type TurnUsage } from './turn-cost.js';
 import { recallMemories, type MemorySearchStore } from './memory.js';
 import { createSubmitIntakeTool } from '../tools/plain/submit_intake.js';
 import { createGenerateIdeasTool } from '../tools/llm/generate_ideas.js';
-import { derivePlanIdFromThreadId } from '../tools/plain/get_current_step.js';
-import { plans } from '../db/schema/index.js';
+import { derivePlanIdFromThreadId, startOfUtcDay } from '../tools/plain/get_current_step.js';
+import { plans, checkIns } from '../db/schema/index.js';
 
 // Story 5.1 moved these to `./personality.js` (now backed by the shared
 // `personalitySchema` enum, AD-16) — re-exported so existing importers of
@@ -197,11 +197,14 @@ export function resolveUserId(configurable: Record<string, unknown> | undefined)
  * hands to the inner `createAgent` as middleware context (AD-20: personality
  * for `buildSystemPrompt`, `modelId` for `createModelSelectionMiddleware`).
  * Story 4.5 (AC4): `planCompleted` is resolved the same per-turn way — from
- * `plans.status`, keyed off the thread id, whenever this is a plan thread. */
+ * `plans.status`, keyed off the thread id, whenever this is a plan thread.
+ * Bug fix (user-reported, live): `checkedInEnergyToday` the same way again —
+ * today's `checkIns.energy` (if any), keyed off the user id. */
 const agentContextSchema = z.object({
   personality: z.string().optional(),
   modelId: z.string().optional(),
   planCompleted: z.boolean().optional(),
+  checkedInEnergyToday: z.string().optional(),
 });
 
 /**
@@ -221,6 +224,25 @@ const PLAN_COMPLETED_SYSTEM_NOTE =
 function withPlanCompletedNote(extraSystemInstruction: string | undefined, planCompleted: boolean | undefined): string | undefined {
   if (!planCompleted) return extraSystemInstruction;
   return [extraSystemInstruction, PLAN_COMPLETED_SYSTEM_NOTE].filter(Boolean).join(' ');
+}
+
+/**
+ * Bug fix (user-reported, live): "I already clicked High on today's
+ * check-in pop-up, then started chatting and the model asked me how I'm
+ * feeling today again." `record_check_in`'s own tool description tells the
+ * model to "ask a brief question about their energy or status" as part of
+ * its own reasoning — with no awareness of the pop-up's *separate* write
+ * (`POST /api/plans/:planId/check-in`), it had no way to know that already
+ * happened today. Same precedent as `PLAN_COMPLETED_SYSTEM_NOTE` just
+ * above: a plain system note, not a new tool/schema change.
+ */
+function withCheckedInNote(extraSystemInstruction: string | undefined, checkedInEnergyToday: string | undefined): string | undefined {
+  if (!checkedInEnergyToday) return extraSystemInstruction;
+  const note =
+    `The user already checked in today (energy: ${checkedInEnergyToday}) via the app's own check-in pop-up. ` +
+    'Never ask how they are feeling/their energy today again, and never call record_check_in again today — ' +
+    'treat today as already checked in.';
+  return [extraSystemInstruction, note].filter(Boolean).join(' ');
 }
 
 /**
@@ -381,34 +403,40 @@ export function createCoachAgent({
   // Boundary: "Retrieval failure never blocks a turn" — `recallMemories`
   // itself never throws, and no `memoryStore` at all is just as safe a
   // no-memory path as a `userId`/human-text miss below.
-  const systemPrompt = dynamicSystemPromptMiddleware<{ personality?: string; planCompleted?: boolean }>(async (state, runtime) => {
-    const personality = resolvePersonality(runtime.context?.personality);
-    // Story 4.3 (AD-25): voice language hint, then the 4.5 plan-completed note.
-    const extra = withPlanCompletedNote(
-      appendVoiceLanguageHint(extraSystemInstruction, runtime.configurable?.voiceDetectedLanguage),
-      runtime.context?.planCompleted,
-    );
-    if (!memoryStore) return buildSystemPrompt(personality, [], extra);
+  const systemPrompt = dynamicSystemPromptMiddleware<{ personality?: string; planCompleted?: boolean; checkedInEnergyToday?: string }>(
+    async (state, runtime) => {
+      const personality = resolvePersonality(runtime.context?.personality);
+      // Story 4.3 (AD-25): voice language hint, then the 4.5 plan-completed
+      // note, then the checked-in-today note (bug fix, user-reported, live).
+      const extra = withCheckedInNote(
+        withPlanCompletedNote(
+          appendVoiceLanguageHint(extraSystemInstruction, runtime.configurable?.voiceDetectedLanguage),
+          runtime.context?.planCompleted,
+        ),
+        runtime.context?.checkedInEnergyToday,
+      );
+      if (!memoryStore) return buildSystemPrompt(personality, [], extra);
 
-    // Hardening: the Boundary ("retrieval failure never blocks a turn")
-    // previously only covered `recallMemories`'s own internals. Wrapping
-    // the whole lookup closes any other path here (e.g. an unexpected
-    // `resolveUserId`/`lastMessageOfType` edge case) too — a model call
-    // this middleware feeds must never fail because memory lookup did.
-    try {
-      const userId = resolveUserId(runtime.configurable);
-      const lastHuman = lastMessageOfType(state.messages, 'human');
-      if (!userId || !lastHuman?.text) return buildSystemPrompt(personality, [], extra);
+      // Hardening: the Boundary ("retrieval failure never blocks a turn")
+      // previously only covered `recallMemories`'s own internals. Wrapping
+      // the whole lookup closes any other path here (e.g. an unexpected
+      // `resolveUserId`/`lastMessageOfType` edge case) too — a model call
+      // this middleware feeds must never fail because memory lookup did.
+      try {
+        const userId = resolveUserId(runtime.configurable);
+        const lastHuman = lastMessageOfType(state.messages, 'human');
+        if (!userId || !lastHuman?.text) return buildSystemPrompt(personality, [], extra);
 
-      const memories = await recallMemories(memoryStore, userId, lastHuman.text);
-      return buildSystemPrompt(personality, memories, extra);
-    } catch (error) {
-      console.error('[agent] memory-augmented system prompt failed, falling back to the base prompt:', {
-        error: (error as Error)?.message,
-      });
-      return buildSystemPrompt(personality, [], extra);
-    }
-  });
+        const memories = await recallMemories(memoryStore, userId, lastHuman.text);
+        return buildSystemPrompt(personality, memories, extra);
+      } catch (error) {
+        console.error('[agent] memory-augmented system prompt failed, falling back to the base prompt:', {
+          error: (error as Error)?.message,
+        });
+        return buildSystemPrompt(personality, [], extra);
+      }
+    },
+  );
   const forceToolChoice = createForceToolChoiceMiddleware();
   // Story 4.2 (AD-12): CAP-4-scoped only — `includeGuiltLanguageCheck` is
   // `true` only for `plansAgent` (`src/api/index.ts`).
@@ -459,6 +487,25 @@ export function createCoachAgent({
       }
     }
 
+    // Bug fix (user-reported, live): resolved the same fail-open way again
+    // — today's check-in energy (if any), keyed off the user id, never the
+    // plan id (same precedent as `getCheckInStatus`'s own "no planId filter
+    // at all, by design": a check-in recorded against *any* of the user's
+    // plans today counts for every plan/thread).
+    let checkedInEnergyToday: string | undefined;
+    if (db && userId) {
+      try {
+        const [checkIn] = await db
+          .select({ energy: checkIns.energy })
+          .from(checkIns)
+          .where(and(eq(checkIns.userId, userId), gte(checkIns.createdAt, startOfUtcDay(new Date()))))
+          .limit(1);
+        checkedInEnergyToday = checkIn?.energy;
+      } catch (error) {
+        console.error('[agent] check-in-status lookup failed, defaulting to not-checked-in:', { userId, error: (error as Error)?.message });
+      }
+    }
+
     // `runtime` (a `LangGraphRunnableConfig`, which extends `RunnableConfig`)
     // carries `configurable` (incl. `thread_id`) alongside the callback/
     // tracing fields `reactAgent.invoke` expects; forwarding it as-is keeps
@@ -467,7 +514,7 @@ export function createCoachAgent({
     // middlewares above to read.
     const result = await reactAgent.invoke(
       { messages: state.messages },
-      { ...runtime, context: { personality: settings?.personality, modelId: settings?.model ?? undefined, planCompleted } },
+      { ...runtime, context: { personality: settings?.personality, modelId: settings?.model ?? undefined, planCompleted, checkedInEnergyToday } },
     );
 
     // Story 5.2 (AD-21): "sums every model call made during that turn's full

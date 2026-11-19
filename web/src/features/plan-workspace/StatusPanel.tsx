@@ -161,6 +161,14 @@ export function StatusPanel({ planId, ideaTitle, onStepStarted, onPlanCompleted,
       <CardHeader>
         <CardTitle>{t('statusPanel.title', { ideaTitle })}</CardTitle>
       </CardHeader>
+      {/* Bug fix (user-reported, live): back to a plain auto-height card,
+       * no fixed height/scroll (two earlier rounds tried a `min-height`,
+       * then a hard `h-[26rem]` — the latter made a longer step
+       * internally scrollable, which wasn't wanted either). This card
+       * moved to the *last* slot in its column (`PlanWorkspace.tsx`), so
+       * its height changing between steps now only grows/shrinks empty
+       * space below it instead of jostling `ProjectionCard` — the actual
+       * problem a fixed height was trying to solve. */}
       <CardContent className="flex flex-col gap-3 text-sm">
         {showGapBanner ? (
           <p className="text-muted-foreground" role="status">
@@ -207,10 +215,14 @@ export function StatusPanel({ planId, ideaTitle, onStepStarted, onPlanCompleted,
               planId={planId}
               step={step.current}
               disabled={planStatus !== 'active'}
-              onStepChanged={() => {
-                loadCurrentStep();
-                onPlanActivityChanged?.();
-              }}
+              onStepChanged={loadCurrentStep}
+              // Bug fix (user-reported, live): only a real `complete()`
+              // changes the completed-step count the projection is
+              // computed from — wiring this from the shared `onStepChanged`
+              // instead used to also refresh (and visibly flicker) the
+              // projection card on a plain `start()`, which never changes
+              // anything it shows.
+              onStepCompleted={onPlanActivityChanged}
               onStepStarted={onStepStarted}
               onPlanCompleted={onPlanCompleted}
             />

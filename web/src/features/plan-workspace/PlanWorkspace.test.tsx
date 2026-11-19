@@ -304,11 +304,13 @@ describe('PlanWorkspace (bug fix, live: a fast plan switch never flashes the loa
     render(<PlanWorkspace ideaId="idea-1" ideaTitle="Resell thrifted clothing" />);
 
     expect(await screen.findByText('Your plan for Resell thrifted clothing')).toBeInTheDocument();
-    // Scoped to the loading modal specifically (never present at all once
-    // the real content has rendered) — a bare `progressbar` role query
-    // would also match `ProjectionCard`'s own (unrelated) progress-bar
-    // fill once its data loads, which has nothing to do with this fix.
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    // Scoped to *this* loading modal by its own accessible name, not a bare
+    // `queryByRole('dialog')` — `fakePlan()`'s default `status: 'draft'`
+    // means `PlanActivationPanel`'s own (separate, legitimately-shown)
+    // "Loading your plan for review…" dialog is on screen at this point
+    // too, by design (bug fix, live, later round: it now starts in its own
+    // loading phase immediately, never a flash of the plain idle card).
+    expect(screen.queryByRole('dialog', { name: 'Setting up your plan…' })).not.toBeInTheDocument();
     expect(screen.queryByText('Setting up your plan…')).not.toBeInTheDocument();
   });
 });

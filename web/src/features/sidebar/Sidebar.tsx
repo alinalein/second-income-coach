@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { ChevronLeft, ChevronRight, Menu, X } from 'lucide-react';
+import { Bookmark, ChevronLeft, ChevronRight, ClipboardList, Lightbulb, Menu, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { planListResponseSchema, type PlanListEntry } from '@app/shared';
 import { Button } from '../../components/ui/button';
@@ -286,6 +286,7 @@ export function Sidebar({
           className="w-full justify-start"
           onClick={handleReviewIntakeClick}
         >
+          <ClipboardList className="h-4 w-4 shrink-0" aria-hidden="true" />
           {tIntake('revisitLink')}
         </Button>
 
@@ -301,6 +302,7 @@ export function Sidebar({
           className="w-full justify-start"
           onClick={() => handleNavigate({ kind: 'bookmarkedAll' })}
         >
+          <Bookmark className="h-4 w-4 shrink-0" aria-hidden="true" />
           {t('bookmarked.heading')}
         </Button>
 
@@ -312,6 +314,7 @@ export function Sidebar({
           className="w-full justify-start"
           onClick={() => handleNavigate({ kind: 'ideas' })}
         >
+          <Lightbulb className="h-4 w-4 shrink-0" aria-hidden="true" />
           {t('newIdeasLabel')}
         </Button>
       </div>

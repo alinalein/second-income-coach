@@ -236,8 +236,9 @@ export function buildStartStepAckPrompt(
           'Erwähne nichts Verpasstes, keine Verzögerung und keine frühere Pause — nur diesen Start selbst.',
           // User-reported (live): "add some emojis to messages after the
           // user clicks start" — one, occasionally two, never more; never a
-          // substitute for the actual words.
-          'Du darfst ein passendes Emoji einbauen (z. B. 👍, 💪, ✅) — höchstens eins, gelegentlich zwei, nie mehr, und nie anstelle echter Worte.',
+          // substitute for the actual words. User-reported follow-up: no
+          // thumbs-up — a smiley or confetti-style emoji instead.
+          'Du darfst ein passendes Emoji einbauen (z. B. 😊, 🎉, 💪) — kein Daumen-hoch-Emoji — höchstens eins, gelegentlich zwei, nie mehr, und nie anstelle echter Worte.',
           'Antworte nur mit der Bestätigung selbst, ohne Anführungszeichen oder zusätzlichen Text.',
         ]
       : [
@@ -252,8 +253,9 @@ export function buildStartStepAckPrompt(
           'Never mention anything missed, any delay, or a past pause — only this start itself.',
           // User-reported (live): "add some emojis to messages after the
           // user clicks start" — one, occasionally two, never more; never a
-          // substitute for the actual words.
-          'You may include one fitting emoji (e.g. 👍, 💪, ✅) — at most one, occasionally two, never more, and never in place of real words.',
+          // substitute for the actual words. User-reported follow-up: no
+          // thumbs-up — a smiley or confetti-style emoji instead.
+          'You may include one fitting emoji (e.g. 😊, 🎉, 💪) — never a thumbs-up emoji — at most one, occasionally two, never more, and never in place of real words.',
           'Reply with only the acknowledgment itself, no quotes or extra text.',
         ];
 

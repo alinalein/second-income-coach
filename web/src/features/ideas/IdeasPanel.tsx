@@ -244,6 +244,38 @@ function translationKey(ideaId: string, language: string): string {
   return `${ideaId}:${language}`;
 }
 
+/** Bug fix (user-reported, live): the grid's own `sm:grid-cols-2
+ * lg:grid-cols-3` breakpoints, tracked in JS — needed to find exactly
+ * which *one* card sits directly below the open one (so only that one
+ * card fades, not the whole grid: fading every other card was tried and
+ * rejected live, "but now all cards around it disappear, not only the
+ * card below"). Same `matchMedia` pattern as `Sidebar.tsx`'s own
+ * `useIsDesktop` — these are Tailwind's un-overridden default breakpoints
+ * (confirmed: no `--breakpoint-*` override in `index.css`'s `@theme`). */
+function useIdeaGridColumnCount(): 1 | 2 | 3 {
+  const computeColumnCount = React.useCallback((): 1 | 2 | 3 => {
+    if (window.matchMedia('(min-width: 1024px)').matches) return 3;
+    if (window.matchMedia('(min-width: 640px)').matches) return 2;
+    return 1;
+  }, []);
+  const [columnCount, setColumnCount] = React.useState<1 | 2 | 3>(computeColumnCount);
+
+  React.useEffect(() => {
+    const mqSm = window.matchMedia('(min-width: 640px)');
+    const mqLg = window.matchMedia('(min-width: 1024px)');
+    const update = () => setColumnCount(computeColumnCount());
+    update();
+    mqSm.addEventListener('change', update);
+    mqLg.addEventListener('change', update);
+    return () => {
+      mqSm.removeEventListener('change', update);
+      mqLg.removeEventListener('change', update);
+    };
+  }, [computeColumnCount]);
+
+  return columnCount;
+}
+
 /**
  * Story 2.2 follow-up fix round 2, fix 1: a time-based *determinate* bar —
  * originally measured against real `generate_ideas` runs landing at ~23.5s
@@ -459,35 +491,39 @@ function Citation({ citation }: { citation: string }) {
  * `.idea-card`/`.idea-actions` glass tokens/structure.
  *
  * Full subgrid, all 5 direct children (header, rationale, facts,
- * disclosure, actions — user-reported round 3: "Zeit pro Woche"/weekly-time,
- * the facts block's first row, must start at the same height on every card
- * in a row, or the row looks messy): `Card` spans exactly 5 rows of the
- * outer grid (`row-span-5`) and declares those as `subgrid`, so each of its
- * 5 direct children sizes against the *same* shared track every sibling
- * card in that row uses — every card has exactly these same 5 children
- * (the conditional monthly-potential row and the disclosure panel's content
- * are nested *inside* the facts/disclosure children, not additional
- * top-level children), so the span always matches the real child count.
- * That matters: an EARLIER version of this fix spanned only 2 of the 5 rows
- * (header+rationale) to avoid matching the facts/disclosure height too —
- * but a subgrid item with *more* children than its span gets extra
- * implicit rows the parent grid never reserves space for, so those rows
- * render past the item's formal area and can visually overlap the next
- * row of cards. Spanning the true number of children avoids that
- * entirely. The accepted tradeoff: a card whose facts/disclosure content is
- * shorter than a row-sibling's gets matched to that sibling's height, which
- * can leave blank space at the bottom of its own facts or disclosure block
- * (flex-col packs content at the top) — bounded to those two spots, not the
- * unpredictable "gaps between random blocks" round 1 fixed (which was
- * caused by inconsistent per-block padding, now a uniform `gap-4`/`gap-2`
- * regardless of this subgrid). The actions row needs no special handling
- * for a flush bottom edge — it's the *last* shared track, and with every
- * card's preceding 4 tracks matched, every card's actions row lands at an
- * identical height with no `mt-auto` margin trick required.
+ * disclosure, actions — round 3: "Zeit pro Woche"/weekly-time, the facts
+ * block's first row, must start at the same height on every card in a
+ * row, or the row looks messy): `Card` spans exactly 5 rows of the outer
+ * grid (`row-span-5`) and declares those as `subgrid`, so each of its 5
+ * direct children sizes against the *same* shared track every sibling
+ * card in that row uses. Every card has exactly these same 5 children —
+ * the conditional monthly-potential row and the disclosure panel's own
+ * content are nested *inside* the facts/disclosure children, not
+ * additional top-level ones — so the span always matches the real child
+ * count (a *smaller* span than the real child count was tried and
+ * rejected once already: a subgrid item with more children than its span
+ * gets extra implicit rows the parent grid never reserves space for, so
+ * those rows render past the item's own formal area and can visually
+ * overlap the next row of cards).
  *
- * `citedIntakeFields` (round 2, fix 3) renders as small translated labels
- * — never the raw field id — so the reader can see which answers shaped
- * the idea without the rationale prose having to spell them out.
+ * Bug fix (user-reported, live, two follow-up rounds): opening *one*
+ * card's "Details" panel used to stretch every other card in that row to
+ * match its new height too (subgrid tracks are always shared/matched
+ * across every card spanning them, including the disclosure track) — a
+ * dramatic, very visible jump for neighbors the user never touched. Fully
+ * dropping subgrid (`items-start` instead of `items-stretch`, tried in the
+ * round right before this one) traded that bug for a different one the
+ * user also rejected: closed cards in the same row no longer aligned at
+ * all, which "looked messy" live. Explicitly approved fix for both at
+ * once: the expandable panel itself (not the whole disclosure block) is
+ * `absolute`, not a normal flow child (see that element's own doc
+ * comment) — its height now never feeds into the shared disclosure
+ * track's size at all, open or closed, so every card's disclosure track
+ * stays exactly as tall as its own always-visible toggle row (consistent
+ * across a row, restoring the round 3 alignment) while the actual panel
+ * floats below the card's own bottom edge instead of growing it in place
+ * (so opening one card never affects any sibling's height, satisfying the
+ * most recent ask too).
  *
  * `citedIntakeFields` (round 2, fix 3) renders as small translated labels
  * — never the raw field id — so the reader can see which answers shaped
@@ -503,6 +539,9 @@ function IdeaCard({
   onRequestSelect,
   pending,
   translating,
+  detailsOpen,
+  onToggleDetails,
+  fadeOut,
 }: {
   idea: IdeaWithPlanResponse;
   /** Story 2.7: the cached translation for this idea into the current UI
@@ -526,6 +565,22 @@ function IdeaCard({
    * actually calls `onSetStatus`-equivalent logic (`postIdeaStatus`). */
   onRequestSelect: (idea: IdeaWithPlanResponse) => void;
   pending: boolean;
+  /** Bug fix (user-reported, live): lifted up to `IdeasPanel` (was this
+   * component's own local `useState`) — only one card's details can be
+   * open across the whole grid at a time now, so every *other* card can
+   * know to fade out while it's open (`fadeOut` below), which a purely
+   * local state could never express. */
+  detailsOpen: boolean;
+  onToggleDetails: () => void;
+  /** Bug fix (user-reported, live, two rounds): "the card [whose space the
+   * floating details panel opens over] is supposed to disappear" — true
+   * for exactly the one card directly below the open one (same grid
+   * column, one row down — `IdeasPanel`'s own `ideaIdDirectlyBelowOpen`),
+   * never any other card. The first version faded every *other* card in
+   * the whole grid instead (simpler — no grid-position math needed), but
+   * that was explicitly rejected live: "now all cards around it
+   * disappear, not only the card below." */
+  fadeOut: boolean;
 }) {
   const { t } = useTranslation('ideas');
   // Story 2.7: only the 4 fields a translation ever covers are overridden —
@@ -575,7 +630,8 @@ function IdeaCard({
   // else on the card (badges/title, rationale, facts, actions) stays always
   // visible. `detailsPanelId` links the toggle button to its panel via
   // `aria-controls`, same pattern a native disclosure widget uses.
-  const [detailsOpen, setDetailsOpen] = React.useState(false);
+  // `detailsOpen`/`onToggleDetails` are props now (see this component's own
+  // doc comment above) — this component no longer owns that state locally.
   const detailsPanelId = React.useId();
   // Story 2.6 AC5 (was: "User-requested follow-up (compact citation
   // line): fetched once per card" — now fetched once for the whole panel
@@ -586,7 +642,23 @@ function IdeaCard({
   const baselineRegion = foreignSourceRegion(idea.baselineRateCitation, viewerCountry);
 
   return (
-    <Card className="grid grid-cols-1 row-span-5 gap-4 p-4 [grid-template-rows:subgrid]">
+    // Bug fix (user-reported, live): the floating `details-panel` below was
+    // invisible whenever a *later* card (same row or the next one) sat
+    // where it opened into — a grid item with `position` other than
+    // `static` always forms its own stacking context (a CSS grid/flexbox-
+    // specific rule, unlike a plain block element), so the panel's own
+    // `z-20` was trapped *inside* this card's local context, unable to
+    // out-rank a sibling grid item at all regardless of that number — grid
+    // items with no explicit `z-index` paint in DOM order, and a later
+    // sibling always wins. Raising the whole card's own `z-index` (not
+    // just the panel's) only while its own details are open lets its
+    // entire subtree, panel included, paint above every sibling; closing
+    // drops it back to the default stacking order.
+    <Card
+      aria-hidden={fadeOut || undefined}
+      inert={fadeOut || undefined}
+      className={`relative grid grid-cols-1 row-span-5 gap-4 p-4 [grid-template-rows:subgrid] transition-opacity duration-200 ${detailsOpen ? 'z-30' : ''} ${fadeOut ? 'pointer-events-none opacity-0' : ''}`}
+    >
       {/* Block: status badge (Story 2.3 AC2, only once the idea has left
        * `suggested`) + idea type inline, title below with normal
        * line-height — layout fix: these no longer stack vertically. */}
@@ -725,7 +797,7 @@ function IdeaCard({
             aria-label={t('card.detailsToggleAriaLabel', { title: displayIdea.title })}
             aria-expanded={detailsOpen}
             aria-controls={detailsPanelId}
-            onClick={() => setDetailsOpen((open) => !open)}
+            onClick={onToggleDetails}
           >
             {t('card.detailsToggle')}
             <ChevronDown
@@ -746,7 +818,29 @@ function IdeaCard({
          * the panel's sections (demand/growth, cited-fields summary +
          * chips, citation line) than the original `gap-2` — `gap-4` was
          * tried and was too much. */}
-        <div id={detailsPanelId} hidden={!detailsOpen} className="flex flex-col gap-3">
+        {/* Bug fix (user-reported, live): `details-panel` (`index.css`) adds
+         * a smooth open/close transition — purely additive CSS, the
+         * `hidden` toggle mechanism itself (and every test around it) is
+         * unchanged.
+         *
+         * Bug fix (user-reported, live, follow-up): `absolute` (positioned
+         * against `Card`'s own `relative` above), not a normal flow child
+         * — explicitly approved tradeoff: closed cards in a row need to
+         * stay the same height (this disclosure block is one of `Card`'s 5
+         * subgridded tracks — see its own doc comment), which is only
+         * possible if the open/closed panel's own height never feeds into
+         * that shared track at all. `absolute` does exactly that; the
+         * panel now floats below the card's own bottom edge — over
+         * whatever's underneath it on the page — instead of pushing the
+         * card taller in place. `inset-x-4` matches `Card`'s own `p-4`, so
+         * the panel's edges line up with the rest of the card's content;
+         * solid `bg-card`/`border`/`shadow-lg` since it's no longer
+         * visually "inside" the card's own background. */}
+        <div
+          id={detailsPanelId}
+          hidden={!detailsOpen}
+          className="details-panel absolute inset-x-4 top-full z-20 mt-2 flex flex-col gap-3 rounded-lg border border-border bg-card p-4 shadow-lg"
+        >
           {/* User-requested follow-up: demand evidence + growth path lead
            * the panel, ahead of the cited-fields chips and the baseline-
            * rate citation line below. */}
@@ -903,6 +997,20 @@ export function IdeasPanel({
   // `null` means closed. Panel-level (not per-card) since only one dialog
   // can be open at a time.
   const [confirmIdea, setConfirmIdea] = React.useState<IdeaWithPlanResponse | null>(null);
+  // Bug fix (user-reported, live): which idea's "Details" panel is open —
+  // lifted up from `IdeaCard`'s own former local state, same reasoning as
+  // `confirmIdea` above (only one open at a time, panel-level so every
+  // *other* card can fade out while it's open — see `IdeaCard`'s own
+  // `fadeOut` prop doc comment).
+  const [openDetailsIdeaId, setOpenDetailsIdeaId] = React.useState<string | null>(null);
+  // Bug fix (user-reported, live): true while `handleConfirmSelect`'s own
+  // `postIdeaStatus` call is in flight — the dialog used to close the
+  // instant the button was clicked (`setConfirmIdea(null)` ran
+  // *synchronously*, before awaiting anything), so the user briefly saw
+  // the bare ideas grid again for however long that request took, before
+  // the plan route's own loading dialog appeared — a visible flash/jump in
+  // between two otherwise-continuous backdropped states.
+  const [confirmBusy, setConfirmBusy] = React.useState(false);
   // Story 2.3 (user-reported bug fix): `pendingIdeaIds` disables only the
   // card(s) a given action actually touches (the target, plus any siblings
   // a `selected` sweep demotes) while that request is in flight — not every
@@ -1183,20 +1291,36 @@ export function IdeasPanel({
   }, []);
 
   /**
-   * Story 2.8 AC3/AC4: confirming closes the dialog, then runs the same
-   * `postIdeaStatus('selected')` the status endpoint always used — on
-   * success, navigates straight to `PlanWorkspace` (which lazily creates
-   * the draft plan on mount and has its own loading/error UI — Design
-   * Notes). On failure, `postIdeaStatus` already reverted the optimistic
-   * change and raised `statusUpdateFailed`; nothing further happens here,
-   * so there is no navigation (I/O matrix: "Select -> Confirm" error row).
+   * Story 2.8 AC3/AC4: runs the same `postIdeaStatus('selected')` the
+   * status endpoint always used — on success, navigates straight to
+   * `PlanWorkspace` (which lazily creates the draft plan on mount and has
+   * its own loading/error UI — Design Notes). On failure, `postIdeaStatus`
+   * already reverted the optimistic change and raised `statusUpdateFailed`;
+   * nothing further happens here, so there is no navigation (I/O matrix:
+   * "Select -> Confirm" error row).
+   *
+   * Bug fix (user-reported, live): the dialog stays open (with its own
+   * busy/disabled state below) for the duration of this call instead of
+   * closing immediately — closing right away used to reveal the bare
+   * ideas grid for however long `postIdeaStatus` took, before the plan
+   * route's own loading dialog appeared. On success there's nothing left
+   * to reset: `onViewPlan` navigates away, unmounting this whole panel in
+   * the same tick. Only the failure path needs to close it (back to the
+   * grid, now showing `statusUpdateFailed`'s own banner).
    */
   const handleConfirmSelect = React.useCallback(async () => {
     const idea = confirmIdea;
     if (!idea) return;
-    setConfirmIdea(null);
+    setConfirmBusy(true);
     const succeeded = await postIdeaStatus(idea.id, 'selected');
-    if (succeeded && isMountedRef.current) onViewPlan?.(idea.id, idea.title);
+    if (succeeded && isMountedRef.current) {
+      onViewPlan?.(idea.id, idea.title);
+      return;
+    }
+    if (isMountedRef.current) {
+      setConfirmBusy(false);
+      setConfirmIdea(null);
+    }
   }, [confirmIdea, postIdeaStatus, onViewPlan]);
 
   const handleGenerate = React.useCallback((options: { auto?: boolean } = {}) => {
@@ -1383,6 +1507,30 @@ export function IdeasPanel({
   // action (it replaces the `suggested` batch) — the "Bookmarked" views
   // (`onlyBookmarked`/`onlyIdeaId`) never show it.
   const isNewIdeasView = !onlyIdeaId && !onlyBookmarked;
+  // Bug fix (user-reported, live): guards against a stale
+  // `openDetailsIdeaId` — if that exact idea left `visibleIdeas`
+  // (Select/Reject remove it from this grid entirely) while its panel was
+  // open, every *remaining* card would otherwise read `fadeOut: true`
+  // forever (its own id never matches anything left), a permanent dead
+  // end with no way to un-fade them.
+  const safeOpenDetailsIdeaId = visibleIdeas.some((idea) => idea.id === openDetailsIdeaId) ? openDetailsIdeaId : null;
+  // Bug fix (user-reported, live, follow-up): fading *every* other card
+  // (this function's own previous version) was wrong — only the one card
+  // the floating panel actually opens over (directly below, in the same
+  // grid column) should fade; every other card must stay exactly as it
+  // was. `gridColumnCount` (tracked live, Tailwind's own `sm:`/`lg:`
+  // breakpoints) turns "the card below" into a plain index offset into
+  // `visibleIdeas`, since this grid has no gaps/blanks — row-major order,
+  // `columnCount` apart is always the same column, one row down. `null`
+  // whenever nothing's open, or the open card is already in the grid's
+  // last row (nothing below it to cover).
+  const gridColumnCount = useIdeaGridColumnCount();
+  const ideaIdDirectlyBelowOpen = React.useMemo(() => {
+    if (!safeOpenDetailsIdeaId) return null;
+    const openIndex = visibleIdeas.findIndex((idea) => idea.id === safeOpenDetailsIdeaId);
+    const belowIndex = openIndex + gridColumnCount;
+    return openIndex >= 0 && belowIndex < visibleIdeas.length ? visibleIdeas[belowIndex]!.id : null;
+  }, [safeOpenDetailsIdeaId, visibleIdeas, gridColumnCount]);
 
   return (
     <>
@@ -1480,6 +1628,9 @@ export function IdeasPanel({
                     // (those are genuinely changing too). An unrelated card's
                     // own action is unaffected.
                     pending={pendingIdeaIds.has(idea.id)}
+                    detailsOpen={safeOpenDetailsIdeaId === idea.id}
+                    onToggleDetails={() => setOpenDetailsIdeaId((prev) => (prev === idea.id ? null : idea.id))}
+                    fadeOut={ideaIdDirectlyBelowOpen === idea.id}
                   />
                 );
               })}
@@ -1583,7 +1734,16 @@ export function IdeasPanel({
       {/* Story 2.8 AC3: panel-level (rendered once, not per-card) — driven by
        * `confirmIdea`. Confirming demotes nothing until the status write
        * actually succeeds; canceling changes nothing at all. */}
-      <Dialog open={confirmIdea !== null} onOpenChange={(open: boolean) => { if (!open) setConfirmIdea(null); }}>
+      <Dialog
+        open={confirmIdea !== null}
+        onOpenChange={(open: boolean) => {
+          // Bug fix (user-reported, live): never while `confirmBusy` — same
+          // in-flight-mutation guard `PlanActivationPanel`'s own review
+          // dialog uses, so an X/Escape/backdrop close can't abandon the
+          // request this dialog is still waiting on.
+          if (!open && !confirmBusy) setConfirmIdea(null);
+        }}
+      >
         {/* `popup-glass-strong` (`index.css`, user-reported, live, round 3)
          * — see the "Generating…" dialog above's own doc comment. */}
         <DialogContent className="popup-glass-strong">
@@ -1592,10 +1752,11 @@ export function IdeasPanel({
             <DialogDescription>{t('confirmSelect.description')}</DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setConfirmIdea(null)}>
+            <Button type="button" variant="outline" disabled={confirmBusy} onClick={() => setConfirmIdea(null)}>
               {t('confirmSelect.cancel')}
             </Button>
-            <Button type="button" onClick={() => void handleConfirmSelect()}>
+            <Button type="button" disabled={confirmBusy} onClick={() => void handleConfirmSelect()}>
+              {confirmBusy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : null}
               {t('confirmSelect.confirm')}
             </Button>
           </DialogFooter>

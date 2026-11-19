@@ -201,3 +201,35 @@ describe('ProjectionCard (bug fix, live: a transient load failure retries instea
     expect(screen.queryByText('~€71.00')).not.toBeInTheDocument();
   }, 10_000);
 });
+
+// Bug fix (user-reported, live): "Mark as done" refreshing the projection
+// used to remount this card (a `key` change in `PlanWorkspace.tsx`), which
+// reset `data` to `null` first — a visible drop to the plain "Loading…"
+// text, then a jump to the new number. `refreshToken` refetches in the
+// background instead: the old amount must stay on screen the whole time a
+// later request is in flight, only swapping once it actually resolves.
+describe('ProjectionCard (bug fix, live: refreshToken refetches without a loading flash)', () => {
+  it('keeps the old estimate on screen while a refreshToken-triggered refetch is in flight', async () => {
+    let resolveSecondFetch!: (value: Response) => void;
+    const secondFetch = new Promise<Response>((resolve) => {
+      resolveSecondFetch = resolve;
+    });
+    const fetchMock = vi.fn(() => Promise.resolve(new Response(JSON.stringify(fakeProjection(null)), { status: 200 })));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { rerender } = render(<ProjectionCard planId="plan-1" refreshToken={0} />);
+    expect(await screen.findByText('~€71.00')).toBeInTheDocument();
+
+    fetchMock.mockImplementationOnce(() => secondFetch);
+    rerender(<ProjectionCard planId="plan-1" refreshToken={1} />);
+
+    // The second request is in flight — still the old amount, never
+    // "Loading…".
+    expect(screen.getByText('~€71.00')).toBeInTheDocument();
+    expect(screen.queryByText('Loading…')).not.toBeInTheDocument();
+
+    resolveSecondFetch(new Response(JSON.stringify(fakeProjection(null, { estimate: { amountMinorUnits: 9900, currencyCode: 'EUR' } })), { status: 200 }));
+
+    expect(await screen.findByText('~€99.00')).toBeInTheDocument();
+  });
+});

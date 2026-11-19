@@ -304,6 +304,47 @@ describe('createCoachAgent (hook integration: Story 4.5 AC4 — completed-plan s
 });
 
 /**
+ * Bug fix (user-reported, live): "I already clicked High on today's
+ * check-in pop-up, then the model asked how I'm feeling again." End-to-end
+ * via the `db` the outer node reads `checkIns` from, same precedent as the
+ * plan-completed note test above.
+ */
+describe('createCoachAgent (bug fix, live: checked-in-today system note)', () => {
+  it.each([
+    ['already checked in today', 'high', true],
+    ['not checked in today', undefined, false],
+  ] as const)('%s: the system prompt includes the checked-in note = %s', async (_label, energy, shouldInclude) => {
+    const model = fakeModel().respond(new AIMessage('Sure, happy to help!'));
+    const dbWithCheckIn = {
+      select: () => ({
+        from: () => ({ where: () => ({ limit: () => Promise.resolve(energy ? [{ energy }] : []) }) }),
+      }),
+    } as unknown as CreateCoachAgentDeps['db'];
+    const agent = createCoachAgent({
+      env: { OPENROUTER_API_KEY: 'test-key', MISTRAL_API_KEY: 'test-key', IDEAS_PER_BATCH: 2, DAILY_SEARCH_BUDGET: 500 },
+      checkpointer: new MemorySaver(),
+      db: dbWithCheckIn,
+      webSearchTool: {} as never,
+      model,
+      classify: async () => ({}),
+    });
+
+    await agent.invoke(
+      { messages: [new HumanMessage('How should I start?')] },
+      { configurable: { thread_id: 'discovery:user-1', userId: 'user-1' } },
+    );
+
+    const [call] = model.calls;
+    const systemMessage = call?.messages.find((message) => message._getType() === 'system');
+    if (shouldInclude) {
+      expect(systemMessage?.text).toContain('already checked in today');
+    } else {
+      expect(systemMessage?.text).not.toContain('already checked in today');
+    }
+  });
+});
+
+/**
  * Story 5.3b (AD-2) I/O matrix: "Later turn, same topic -> system prompt
  * includes the stored memory" / "Later turn, different user -> no memory
  * surfaced (no cross-user leak)". `search` is faked to return a result only
