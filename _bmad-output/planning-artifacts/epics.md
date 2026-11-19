@@ -1667,3 +1667,35 @@ So that I can see this evidence directly, generated from what already exists, wi
 **Given** Story 7.4's traceability table
 **When** this story completes
 **Then** it adds this page as evidence for the Documentation/reflection grading criterion, alongside the README and rationale doc (an addition to 7.4's existing table, not a rewrite of it)
+
+### Story 7.6: Final Code Quality Pass
+
+As the maintainer,
+I want one behaviour-neutral cleanup pass over the finished codebase,
+So that the code is consistent, free of leftovers and easy to read before handoff.
+
+**Acceptance Criteria:**
+
+**Given** this story runs
+**When** it starts
+**Then** it is the last build story: all other stories are done and merged, the feature freeze holds, and no new behaviour, UI change, migration or dependency is introduced
+
+**Given** the whole repo (shared, src, web)
+**When** audited
+**Then** it reports and removes dead code, unused exports/files/i18n keys, commented-out code, stray `console.log`/debug output and stale TODOs - but before deleting anything it checks epics.md and the spine for the name; anything an AC, UX-DR or AD names stays and is reported to the user instead (CLAUDE.md "Requirements stay in place")
+
+**Given** duplicated logic or oversized files/functions
+**When** found
+**Then** they are consolidated or split only where it is a clear, low-risk win (same helper written twice, a file mixing unrelated concerns); no speculative abstractions, no renames of public API/route/env names
+
+**Given** naming, comments and error messages
+**When** reviewed
+**Then** they are consistent (one term per concept, English comments, no references to removed code), and stale story-process comments that no longer help a reader are trimmed, never the AC/AD references that map tests
+
+**Given** the cleanup
+**When** done
+**Then** `npm run typecheck`, `npm run lint` and the full `npm test` pass with the same or fewer tests (each removed test justified), and a manual click-through of intake -> ideas -> plan -> check-in -> projection still works; `npm run eval` is not re-run unless agent/prompt code was touched
+
+**Given** the story's report
+**When** written
+**Then** it lists what was removed or changed by category, what was left alone on purpose (and why), anything found that needs its own story, and the tokens used
