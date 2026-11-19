@@ -25,7 +25,7 @@ Idea-generation quizzes already solve half of this. None pair tailored ideas wit
 | CAP-8 | Token count + estimated cost shown under every response |
 | CAP-9 | Thumbs up/down feedback, never gating the chat |
 | CAP-10 | Bilingual (German/English) chat, matched per message to whatever language the user used |
-| CAP-11 | A public, unauthenticated "Quality & Decisions" page: eval results, key architecture decisions, and a reflection — all generated from source, never hand-copied |
+| CAP-11 | A signed-in "Quality & Decisions" page (`/quality`, linked in the sidebar footer): eval results, key architecture decisions, and a reflection — all generated from source, never hand-copied |
 
 Full detail: [`_bmad-output/specs/spec-second-income-coach/SPEC.md`](_bmad-output/specs/spec-second-income-coach/SPEC.md).
 
