@@ -66,6 +66,22 @@ describe('buildReport', () => {
     expect(report.guardrails.allBuiltSuitesPassed).toBe(false);
   });
 
+  it('Fix (2026-11-19): surfaces each quality row\'s actual judge score, including an errored judge call as a visible row', () => {
+    const report = buildReport(sampleTrajectoryResults, passingGuardrails);
+    expect(report.qualityResults).toContainEqual(
+      expect.objectContaining({ modelId: 'openai/gpt-6-luna', caseId: 'quality-ambiguous-intake-en', judgeId: 'google/gemini-3.8-flash', score: 0.9 }),
+    );
+    expect(report.qualityResults).toContainEqual(
+      expect.objectContaining({
+        modelId: 'google/gemini-3.8-flash',
+        caseId: 'quality-generate-ideas-phrasing-en',
+        judgeId: 'google/gemini-3.8-flash',
+        score: null,
+        error: 'judge call failed: 429 rate limited',
+      }),
+    );
+  });
+
   it('AC 6.3-3: estimates run cost from the registry price list and flags the unpriced eval-only model as a limitation', () => {
     const report = buildReport(sampleTrajectoryResults, passingGuardrails);
     const sonnet = report.cost.perModel.find((entry) => entry.modelId === 'anthropic/claude-sonnet-5.5');

@@ -80,6 +80,16 @@ export function renderMarkdown(report: ReportData): string {
   }
   lines.push('');
 
+  lines.push('## Quality (LLM-as-judge) scores');
+  lines.push('');
+  lines.push('| Model | Case | Judge | Score | Comment / error |');
+  lines.push('|---|---|---|---|---|');
+  for (const entry of report.qualityResults) {
+    const scoreCell = entry.error !== undefined ? '⚠️ error' : String(entry.score);
+    lines.push(`| ${entry.modelId} | ${entry.caseId} | ${entry.judgeId} | ${scoreCell} | ${entry.error ?? entry.comment ?? ''} |`);
+  }
+  lines.push('');
+
   lines.push('## Estimated run cost');
   lines.push('');
   lines.push(`Mechanism: ${report.cost.mechanism} (see Known limitations).`);
@@ -137,6 +147,13 @@ export function renderHtml(report: ReportData): string {
     .map((judgeId) => `<tr><td>${escape(judgeId)}</td><td>${escape((report.judgeScoredModels[judgeId] ?? []).join(', ') || '(none this run)')}</td></tr>`)
     .join('\n');
 
+  const qualityRows = report.qualityResults
+    .map((entry) => {
+      const scoreCell = entry.error !== undefined ? '⚠️ error' : escape(String(entry.score));
+      return `<tr><td>${escape(entry.modelId)}</td><td>${escape(entry.caseId)}</td><td>${escape(entry.judgeId)}</td><td>${scoreCell}</td><td>${escape(entry.error ?? entry.comment ?? '')}</td></tr>`;
+    })
+    .join('\n');
+
   const costRows = report.cost.perModel
     .map(
       (entry) =>
@@ -187,6 +204,11 @@ ${pendingItems}
 ${judgeRows}
 </table>
 
+<h2>Quality (LLM-as-judge) scores</h2>
+<table><tr><th>Model</th><th>Case</th><th>Judge</th><th>Score</th><th>Comment / error</th></tr>
+${qualityRows}
+</table>
+
 <h2>Estimated run cost</h2>
 <p>Mechanism: ${escape(report.cost.mechanism)} (see Known limitations).</p>
 <table><tr><th>Model</th><th>Input tokens</th><th>Output tokens</th><th>$/1M in</th><th>$/1M out</th><th>Estimated cost</th><th>Data</th></tr>
@@ -222,6 +244,7 @@ export function renderJsonSummary(report: ReportData): object {
       judgeModelIds: report.judgeModelIds,
       judgeScoredModels: report.judgeScoredModels,
       registryOverlap: report.judgeRegistryOverlap,
+      qualityResults: report.qualityResults,
     },
     safety: {
       suites: report.guardrails.suites,

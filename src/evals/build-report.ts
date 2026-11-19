@@ -37,6 +37,25 @@ export interface TrajectoryResults {
   modelCallUsages?: ModelCallUsageRow[];
 }
 
+/**
+ * Fix (2026-11-19): a quality case's judge score never made it past
+ * `judgeScoredModels` (which only records *whether* a judge scored a model,
+ * not what it scored) — the actual `score`/`comment`/`error` per
+ * (model, case, judge) row was computed in `trajectory.eval.ts` and written
+ * to `trajectory-results.json`, but `buildReport` never read it back out.
+ * One row per quality `ResultRow`, verbatim — including a row whose judge
+ * call itself failed (`error` set, `score: null`), so a judge timeout/error
+ * is a visible recorded row here, never a silently dropped one.
+ */
+export interface QualityResultRow {
+  modelId: string;
+  caseId: string;
+  judgeId: string;
+  score: boolean | number | null;
+  comment?: string;
+  error?: string;
+}
+
 export interface Limitation {
   id: string;
   summary: string;
@@ -50,6 +69,7 @@ export interface ReportData {
   judgeModelIds: readonly string[];
   judgeScoredModels: Record<string, string[]>;
   judgeRegistryOverlap: { judgeId: string; alsoRegistryEntry: boolean }[];
+  qualityResults: QualityResultRow[];
   guardrails: {
     suites: GuardrailSuiteResult[];
     allBuiltSuitesPassed: boolean;
@@ -75,6 +95,12 @@ function judgeScoredModels(rows: readonly ResultRow[]): Record<string, string[]>
     byJudge.set(row.judgeId, models);
   }
   return Object.fromEntries(Array.from(byJudge.entries()).map(([judgeId, models]) => [judgeId, Array.from(models).sort()]));
+}
+
+function qualityResults(rows: readonly ResultRow[]): QualityResultRow[] {
+  return rows
+    .filter((row): row is ResultRow & { judgeId: string } => row.caseType === 'quality' && row.judgeId !== undefined)
+    .map((row) => ({ modelId: row.modelId, caseId: row.caseId, judgeId: row.judgeId, score: row.score, comment: row.comment, error: row.error }));
 }
 
 /**
@@ -138,6 +164,7 @@ export function buildReport(trajectoryResults: TrajectoryResults, guardrailResul
     judgeModelIds: JUDGE_MODEL_IDS,
     judgeScoredModels: judgeScoredModels(trajectoryResults.rows),
     judgeRegistryOverlap,
+    qualityResults: qualityResults(trajectoryResults.rows),
     guardrails: {
       suites: guardrailResults,
       // `.every()` on an empty array is vacuously true — an empty

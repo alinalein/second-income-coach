@@ -49,6 +49,12 @@ describe.each([
     expect(output).toContain(report.cost.totalEstimatedCostUsd.toFixed(4));
   });
 
+  it('Fix (2026-11-19): shows each quality case\'s per-judge score, including a judge-call error row', () => {
+    expect(output).toContain('quality-ambiguous-intake-en');
+    expect(output).toContain('0.9');
+    expect(output).toContain('judge call failed: 429 rate limited');
+  });
+
   it('AD-21: discloses the unpriced eval-only model as having no registered price, never a guessed number', () => {
     // Verification-gap: the data layer (`ReportData.cost.perModel[...].estimatedCostUsd === null`)
     // was already checked elsewhere, but nothing asserted the *rendered*
@@ -67,6 +73,7 @@ describe('renderJsonSummary', () => {
       perModelAccuracy: sampleTrajectoryResults.perModelAccuracy,
     });
     expect(summary.judges).toBeDefined();
+    expect((summary.judges as Record<string, unknown>).qualityResults).toEqual(report.qualityResults);
     expect(summary.safety).toBeDefined();
     expect(summary.cost).toBeDefined();
     expect(summary.limitations).toBeDefined();
