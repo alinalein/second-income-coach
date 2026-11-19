@@ -16,6 +16,7 @@ import { createJudgeModels } from './judges.js';
 import { sumUsage } from './usage.js';
 import { EVAL_MODEL_IDS, JUDGE_MODEL_IDS, TRAJECTORY_ACCURACY_TARGET, type JudgeModelId } from './constants.js';
 import type { ModelCallUsageRow } from './cost.js';
+import { runMistralJailbreakFlagRate, type MistralJailbreakFlagRateResult } from './mistral-jailbreak-flag-rate.js';
 
 /**
  * Story 6.2 (AC1): the committed, versioned fixture shape every file under
@@ -139,6 +140,11 @@ interface ResultRow {
 }
 
 const resultRows: ResultRow[] = [];
+
+/** AD-23's non-gating metric — populated by the dedicated `it` below, which
+ * runs regardless of the deterministic/quality matrix above (real network
+ * call, but never affects this suite's own pass/fail). */
+let mistralJailbreakFlagRateResult: MistralJailbreakFlagRateResult | undefined;
 
 /** Story 6.3 (AC: cost "against the actual calls the eval run itself
  * made"): one entry per real model call this run makes — pushed only on
@@ -344,6 +350,15 @@ describe('trajectory eval suite (Story 6.2, AD-23)', () => {
     }
   }
 
+  // AD-23: real call against the actual Mistral classifier (the one
+  // network call in this suite not gated behind an evaluated model) — never
+  // asserted on beyond "didn't throw" (the function itself never throws;
+  // see its own doc comment), since a flag miss or a failed call is itself
+  // a valid, recorded, non-gating outcome, not a test failure.
+  it('AD-23: records Mistral Moderation\'s own jailbreak-flag rate on the 4 direct-injection inputs (non-gating)', async () => {
+    mistralJailbreakFlagRateResult = await runMistralJailbreakFlagRate(process.env.MISTRAL_API_KEY);
+  });
+
   // Runs last (Vitest executes `it`s within one `describe` in declaration
   // order): writes the one results file only once every case/model/judge
   // combination above has already pushed its row — an interrupted run
@@ -378,6 +393,7 @@ describe('trajectory eval suite (Story 6.2, AD-23)', () => {
           perModelAccuracy: aggregatePerModelAccuracy(resultRows),
           rows: resultRows,
           modelCallUsages,
+          mistralJailbreakFlagRate: mistralJailbreakFlagRateResult,
         },
         null,
         2,

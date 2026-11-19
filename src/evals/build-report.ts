@@ -1,6 +1,7 @@
 import { computeModelCosts, totalEstimatedCostUsd, type ModelCallUsageRow, type ModelCostSummary } from './cost.js';
 import { PENDING_GUARDRAIL_CATEGORIES, type GuardrailSuiteResult, type PendingGuardrailCategory } from './guardrails.js';
-import { JUDGE_MODEL_IDS } from './constants.js';
+import { EVAL_MODEL_IDS, JUDGE_MODEL_IDS } from './constants.js';
+import type { MistralJailbreakFlagRateResult, MistralJailbreakFlagRateRow } from './mistral-jailbreak-flag-rate.js';
 
 /** The shape `trajectory.eval.ts` (Story 6.2, extended by Story 6.3 with
  * `modelCallUsages`) writes to `src/evals/results/trajectory-results.json`.
@@ -35,6 +36,29 @@ export interface TrajectoryResults {
   perModelAccuracy: ModelAccuracy[];
   rows: ResultRow[];
   modelCallUsages?: ModelCallUsageRow[];
+  /** AD-23's non-gating metric (Stories 6.2/6.3 follow-up). Optional for
+   * backward compatibility with a `trajectory-results.json` written before
+   * this field existed — `buildReport` below renders that absence the same
+   * as a live run's own "Pending/error", never as a silent 0. */
+  mistralJailbreakFlagRate?: MistralJailbreakFlagRateResult;
+}
+
+/** The report's own rendering of AD-23's non-gating metric — `'pending'`
+ * covers both "the step errored" and "this results file predates the step",
+ * deliberately collapsed into the same "Pending/error" wording rather than
+ * distinguished, since neither case has a real number to show. */
+export type MistralJailbreakFlagRateSection =
+  | { status: 'ok'; total: number; flaggedCount: number; rows: MistralJailbreakFlagRateRow[] }
+  | { status: 'pending'; reason: string };
+
+function toMistralJailbreakFlagRateSection(raw: MistralJailbreakFlagRateResult | undefined): MistralJailbreakFlagRateSection {
+  if (raw === undefined) {
+    return { status: 'pending', reason: 'not recorded in this run (trajectory-results.json predates this metric, or the step did not run)' };
+  }
+  if (raw.status === 'error') {
+    return { status: 'pending', reason: raw.reason };
+  }
+  return raw;
 }
 
 /**
@@ -75,6 +99,7 @@ export interface ReportData {
     allBuiltSuitesPassed: boolean;
     pending: readonly PendingGuardrailCategory[];
   };
+  mistralJailbreakFlagRate: MistralJailbreakFlagRateSection;
   cost: {
     perModel: ModelCostSummary[];
     totalEstimatedCostUsd: number;
@@ -110,6 +135,41 @@ function qualityResults(rows: readonly ResultRow[]): QualityResultRow[] {
  * results of Stories 6.1 (guardrails) and 6.2 (trajectory), never runs
  * either itself.
  */
+export interface RunCompletenessResult {
+  complete: boolean;
+  reason?: string;
+}
+
+/**
+ * "Never publish from a partial run" rule (Stories 6.2/6.3 follow-up): a
+ * `-t`-filtered `npm run eval` writes a `trajectory-results.json` with
+ * fewer rows than a real full run (missing model(s), a filtered-down
+ * deterministic case count, or the AD-23 step skipped entirely) —
+ * `generate-report.ts` checks this before writing the committed
+ * `src/evals/published/eval-results.json`, never after.
+ */
+export function assessRunCompleteness(trajectoryResults: TrajectoryResults): RunCompletenessResult {
+  const modelIds = trajectoryResults.perModelAccuracy.map((entry) => entry.modelId);
+  const missingModels = EVAL_MODEL_IDS.filter((id) => !modelIds.includes(id));
+  if (missingModels.length > 0) {
+    return { complete: false, reason: `missing model(s) in perModelAccuracy: ${missingModels.join(', ')} (looks like a partial, -t-filtered run)` };
+  }
+
+  const caseCounts = new Set(trajectoryResults.perModelAccuracy.map((entry) => entry.deterministicCaseCount));
+  if (caseCounts.has(0) || caseCounts.size > 1) {
+    return {
+      complete: false,
+      reason: `deterministicCaseCount is zero or inconsistent across models (${[...caseCounts].join(', ')}) (looks like a partial, -t-filtered run)`,
+    };
+  }
+
+  if (trajectoryResults.mistralJailbreakFlagRate === undefined) {
+    return { complete: false, reason: 'mistralJailbreakFlagRate (AD-23) is missing from the results file (looks like a partial, -t-filtered run)' };
+  }
+
+  return { complete: true };
+}
+
 export function buildReport(trajectoryResults: TrajectoryResults, guardrailResults: GuardrailSuiteResult[]): ReportData {
   const modelIds = trajectoryResults.perModelAccuracy.map((entry) => entry.modelId);
   const judgeRegistryOverlap = JUDGE_MODEL_IDS.map((judgeId) => ({ judgeId, alsoRegistryEntry: modelIds.includes(judgeId) }));
@@ -172,6 +232,7 @@ export function buildReport(trajectoryResults: TrajectoryResults, guardrailResul
       allBuiltSuitesPassed: guardrailResults.length > 0 && guardrailResults.every((suite) => suite.allPassed),
       pending: PENDING_GUARDRAIL_CATEGORIES,
     },
+    mistralJailbreakFlagRate: toMistralJailbreakFlagRateSection(trajectoryResults.mistralJailbreakFlagRate),
     cost: {
       perModel: cost,
       totalEstimatedCostUsd: totalEstimatedCostUsd(cost),

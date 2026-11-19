@@ -32,15 +32,40 @@ describe('buildReport', () => {
     expect(report.guardrails.allBuiltSuitesPassed).toBe(false);
   });
 
-  it('AC 6.3-3: pending guardrail categories always appear, never silently dropped', () => {
+  it('AC 6.3-3: pending guardrail categories, never silently dropped when present', () => {
     const report = buildReport(sampleTrajectoryResults, passingGuardrails);
-    expect(report.guardrails.pending.length).toBeGreaterThan(0);
     // Story 6.1: `hitl-bypass`/`guilt-streak-language` were removed from
     // `PENDING_GUARDRAIL_CATEGORIES` once CAP-4/Epic 3 shipped their own
-    // guardrail suites (`guardrails.ts`) — only `mistral-flag-rate` (still
-    // blocked on a live Mistral run) remains.
-    expect(report.guardrails.pending.map((category) => category.id)).toContain('mistral-flag-rate');
+    // guardrail suites (`guardrails.ts`); `mistral-flag-rate` was removed
+    // (Stories 6.2/6.3 follow-up) once `trajectory.eval.ts` started actually
+    // running it — nothing is left in this static list any more.
+    expect(report.guardrails.pending).toEqual([]);
     expect(report.guardrails.pending.map((category) => category.id)).not.toContain('hitl-bypass');
+  });
+
+  // AD-23: the fixture predates this metric (no `mistralJailbreakFlagRate`
+  // key) — must render as "pending", never a faked 0/4.
+  it('AD-23: a trajectory-results.json without mistralJailbreakFlagRate renders as pending, never a faked count', () => {
+    const report = buildReport(sampleTrajectoryResults, passingGuardrails);
+    expect(report.mistralJailbreakFlagRate.status).toBe('pending');
+  });
+
+  it('AD-23: a recorded live run carries the real flagged count and rows through unchanged', () => {
+    const report = buildReport(
+      { ...sampleTrajectoryResults, mistralJailbreakFlagRate: { status: 'ok', total: 4, flaggedCount: 3, rows: [{ label: 'ignore/disregard instructions', flagged: true, jailbreakingScore: 0.92 }] } },
+      passingGuardrails,
+    );
+    expect(report.mistralJailbreakFlagRate).toEqual({ status: 'ok', total: 4, flaggedCount: 3, rows: [{ label: 'ignore/disregard instructions', flagged: true, jailbreakingScore: 0.92 }] });
+  });
+
+  // "never from a partial run" rule's sibling case for this report: a failed
+  // live call must render as pending/error, never as a silent 0 flagged.
+  it('AD-23: a recorded classifier failure renders as pending with the real reason, never a faked count', () => {
+    const report = buildReport(
+      { ...sampleTrajectoryResults, mistralJailbreakFlagRate: { status: 'error', reason: 'MISTRAL_API_KEY is not set', rows: [] } },
+      passingGuardrails,
+    );
+    expect(report.mistralJailbreakFlagRate).toEqual({ status: 'pending', reason: 'MISTRAL_API_KEY is not set' });
   });
 
   it('AC 6.3-3: judge/registry overlap is disclosed for google/gemini-3.8-flash, not for the judge-only deepseek model', () => {

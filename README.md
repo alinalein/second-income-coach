@@ -219,7 +219,7 @@ Other commands:
 | `npm test` | Vitest for every workspace |
 | `npm run db:up` / `npm run db:down` | Start/stop the local Postgres container |
 | `npm run eval` | Full eval suite on demand (real model + judge calls over OpenRouter, never part of `npm test`); needs `OPENROUTER_API_KEY` in `.env` |
-| `npm run eval:report` | Builds the quality report from the last `npm run eval` results (run `eval` first) |
+| `npm run eval:report` | Builds the quality report from the last `npm run eval` results (run `eval` first); also refreshes `src/evals/published/eval-results.json` (committed — Story 7.5 reads it) when the run was complete, never from a partial/`-t` run |
 
 The frontend defaults to light mode; the dark-mode toggle (top-right) persists the choice in `localStorage` across reloads. Teal accent tokens and contrast ratios are pinned in `stack.md` and wired in `web/src/index.css`.
 

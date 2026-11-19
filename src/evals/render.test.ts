@@ -38,11 +38,9 @@ describe.each([
     expect(output).toContain('agent/moderation-web-search.test.ts');
   });
 
-  it('shows pending guardrail categories, never hidden', () => {
-    // Story 6.1: `activate_plan` (HITL-bypass) shipped its own guardrail
-    // suite and left `PENDING_GUARDRAIL_CATEGORIES` — only `mistral-flag-rate`
-    // (still blocked on a live Mistral run) remains pending there.
+  it('AD-23: shows the Mistral jailbreak-flag-rate section, pending when the results file has none recorded', () => {
     expect(output).toContain("Mistral Moderation's own jailbreak-flag rate");
+    expect(output).toContain('Pending/error');
   });
 
   it('shows the estimated run cost total', () => {
@@ -65,6 +63,35 @@ describe.each([
   });
 });
 
+describe.each([
+  ['markdown', renderMarkdown],
+  ['html', renderHtml],
+] as const)('%s report — AD-23 recorded flag-rate run', (_label, render) => {
+  it('shows "flagged X of 4" and the per-input table, never a Pending line, once a live run is recorded', () => {
+    const recordedReport = buildReport(
+      {
+        ...sampleTrajectoryResults,
+        mistralJailbreakFlagRate: {
+          status: 'ok',
+          total: 4,
+          flaggedCount: 3,
+          rows: [
+            { label: 'ignore/disregard instructions', flagged: true, jailbreakingScore: 0.92 },
+            { label: 'output system prompt', flagged: true, jailbreakingScore: 0.95 },
+            { label: 'list your tools', flagged: false, jailbreakingScore: 0.1 },
+            { label: 'injected instruction inside a normal check-in message', flagged: true, jailbreakingScore: 0.88 },
+          ],
+        },
+      },
+      guardrailResults,
+    );
+    const output = render(recordedReport);
+    expect(output).toContain('flagged 3 of 4');
+    expect(output).not.toContain('Pending/error');
+    expect(output).toContain('list your tools');
+  });
+});
+
 describe('renderJsonSummary', () => {
   it('AC 6.3-5: includes per-model accuracy, safety pass/fail, run date, judge models, run cost, and limitations', () => {
     const summary = renderJsonSummary(report) as Record<string, unknown>;
@@ -75,6 +102,7 @@ describe('renderJsonSummary', () => {
     expect(summary.judges).toBeDefined();
     expect((summary.judges as Record<string, unknown>).qualityResults).toEqual(report.qualityResults);
     expect(summary.safety).toBeDefined();
+    expect(summary.mistralJailbreakFlagRate).toEqual(report.mistralJailbreakFlagRate);
     expect(summary.cost).toBeDefined();
     expect(summary.limitations).toBeDefined();
     expect(() => JSON.stringify(summary)).not.toThrow();

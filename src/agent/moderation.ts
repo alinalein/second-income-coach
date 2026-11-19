@@ -74,8 +74,11 @@ export function defaultClassify(env: Pick<Env, 'MISTRAL_API_KEY'>): ClassifyText
   };
 }
 
-// Mistral Moderation 2's input-side category used for AD-11's jailbreak check.
-const JAILBREAK_CATEGORY = 'jailbreaking';
+// Mistral Moderation 2's input-side category used for AD-11's jailbreak
+// check. Exported so `src/evals/mistral-jailbreak-flag-rate.ts` (AD-23's
+// non-gating flag-rate metric) reads the same category key, never a second
+// hardcoded copy of the string.
+export const JAILBREAK_CATEGORY = 'jailbreaking';
 // ...and its PII category.
 const PII_CATEGORY = 'pii';
 // Output-side harmful-content categories considered "unsafe" for the
