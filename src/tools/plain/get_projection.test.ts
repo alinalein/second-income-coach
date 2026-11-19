@@ -215,4 +215,50 @@ describe('getProjection (AC: uses the persisted baseline rate, never re-fetched)
       await cleanUp(userId);
     }
   });
+
+  // Bug fix (user-reported, live): "the value the next step unlocks,
+  // computed deterministically with the same computeProjection but with the
+  // next step counted as completed." Same `computeProjection`
+  // determinism guarantee as above, specifically for `nextStepEstimate`.
+  it('computes nextStepEstimate deterministically — the same plan state always produces the same value', async () => {
+    const { userId, ideaId } = await createTestUserAndIdea();
+    try {
+      const planId = await createActivePlan(userId, ideaId);
+
+      const first = await getProjection(db, planId);
+      const second = await getProjection(db, planId);
+
+      expect(first.nextStepEstimate).toEqual(second.nextStepEstimate);
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+
+  it('nextStepEstimate differs from the current estimate when there is a next step', async () => {
+    const { userId, ideaId } = await createTestUserAndIdea();
+    try {
+      const planId = await createActivePlan(userId, ideaId);
+
+      const result = await getProjection(db, planId);
+
+      expect(result.nextStepEstimate).not.toBeNull();
+      expect(result.nextStepEstimate!.amountMinorUnits).not.toBe(result.estimate.amountMinorUnits);
+      expect(result.nextStepEstimate!.currencyCode).toBe(result.estimate.currencyCode);
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+
+  it('omits nextStepEstimate (null) when the plan\'s current step is its last', async () => {
+    const { userId, ideaId } = await createTestUserAndIdea();
+    try {
+      const planId = await createActivePlan(userId, ideaId, [{ title: 'Only step', description: ['Do it.'], dayOffset: 0 }]);
+
+      const result = await getProjection(db, planId);
+
+      expect(result.nextStepEstimate).toBeNull();
+    } finally {
+      await cleanUp(userId);
+    }
+  });
 });

@@ -96,9 +96,10 @@ export function computeProjection(inputs: ProjectionInputs): { estimate: Money; 
  * this, same precedent as `recordCheckIn`'s own `PlanNotFoundError`-free
  * callers; a missing plan/idea row here is defensive-only.
  *
- * `unlockedOpportunity` reuses `getCurrentStep`'s own `next` field (AD-4:
- * "`get_current_step` is the sole path ... capped to current+next" — this
- * never adds a second steps-reading path that could expose more).
+ * `unlockedOpportunity`/`nextStepEstimate` both reuse `getCurrentStep`'s own
+ * `next` field (AD-4: "`get_current_step` is the sole path ... capped to
+ * current+next" — this never adds a second steps-reading path that could
+ * expose more).
  */
 export async function getProjection(db: Db, planId: string): Promise<ProjectionData> {
   const [row] = await db
@@ -128,19 +129,29 @@ export async function getProjection(db: Db, planId: string): Promise<ProjectionD
   const completedSteps = stepRows.filter((step) => step.status === 'completed').length;
   const daysSincePlanStart = Math.max(1, Math.floor((Date.now() - row.planCreatedAt.getTime()) / ONE_DAY_MS));
 
-  const { estimate, progressRatio } = computeProjection({
+  // Bug fix (user-reported, live): shared base inputs for both calls below —
+  // `nextStepEstimate` is deliberately the exact same `computeProjection`,
+  // the exact same inputs, with only `completedSteps` bumped by one (the
+  // pending next step counted as done) — "at this pace," nothing else about
+  // the user's own consistency/pace changes.
+  const projectionInputsBase = {
     baselineRateLow: { amountMinorUnits: row.baselineRateLowAmountMinorUnits, currencyCode: row.baselineRateCurrency as Money['currencyCode'] },
     rateUnit: row.rateUnit as RateUnit,
     weeklyTimeCommitment: row.weeklyTimeCommitment as WeeklyTimeAvailability,
     totalSteps,
-    completedSteps,
     checkInCount: checkInRows.length,
     daysSincePlanStart,
-  });
+  };
+
+  const { estimate, progressRatio } = computeProjection({ ...projectionInputsBase, completedSteps });
+  const nextStepEstimate = currentStep.next
+    ? computeProjection({ ...projectionInputsBase, completedSteps: completedSteps + 1 }).estimate
+    : null;
 
   return {
     estimate,
     progressRatio,
+    nextStepEstimate,
     unlockedOpportunity: currentStep.next ? { title: currentStep.next.title, description: currentStep.next.description } : null,
   };
 }

@@ -227,6 +227,46 @@ body::before {
   backdrop-filter: blur(16px) saturate(150%);
 }
 
+/* Bug fix (user-reported, live, round 3): a stronger "glass" override for
+   `shadcn-glass-ui`'s popup `Dialog`/`ModalGlass` than its own default —
+   found live to read as too weak even over real, detailed content.
+   Rounds 1-2 of this fix (raising `--blur-lg` to 36px, `color-mix()`-based
+   opacity) both failed to look any different live — on reflection, that's
+   because *more* blur is the wrong direction entirely: blur smears
+   whatever's behind into a flat, desaturated wash, which reads as "more
+   opaque/foggy," not "more glass" — the visible color/shape bleeding
+   through (not the blur amount) is what actually reads as glass.
+   `--glass-bg`/`--glass-bg-strong` + `blur(14-16px) saturate(150%)`
+   (`:root`/`.dark` above, `glass-panel`/`glass-chrome` below) is this
+   app's own ALREADY-PROVEN glass recipe (spec-1-6/UX-DR3, confirmed
+   correct against the design reference) — reused here verbatim instead of
+   inventing new values a third time. `saturate(150%)` is the ingredient
+   missing from rounds 1-2: it keeps blurred color vivid instead of
+   washed-out pale. Set via `backdrop-filter`/`-webkit-backdrop-filter`
+   directly with `!important` (not a `--blur-lg` custom-property override):
+   `DialogContent`'s own inline `style` object always wins over a plain
+   CSS property on the same selector regardless of specificity — only
+   `!important` beats an inline style. `--modal-border` reuses
+   `--glass-border`, completing the same proven recipe. Named distinctly
+   from `glass`/`glass-panel`/`glass-chrome` (see that doc comment above
+   re: `shadcn-glass-ui/styles.css`'s own unlayered `.glass{}` colliding
+   with same-named utilities) — `popup-glass-strong` (`--glass-bg`, 0.68)
+   for the 3 short popups (confirm/generating/setting-up-plan),
+   `popup-glass-dense` (`--glass-bg-strong`, 0.72) for the
+   information-dense "Review your plan" dialog. */
+.popup-glass-strong {
+  --modal-bg: var(--glass-bg);
+  --modal-border: var(--glass-border);
+  backdrop-filter: blur(16px) saturate(150%) !important;
+  -webkit-backdrop-filter: blur(16px) saturate(150%) !important;
+}
+.popup-glass-dense {
+  --modal-bg: var(--glass-bg-strong);
+  --modal-border: var(--glass-border);
+  backdrop-filter: blur(16px) saturate(150%) !important;
+  -webkit-backdrop-filter: blur(16px) saturate(150%) !important;
+}
+
 header {
   @apply glass-chrome shadow-[var(--shadow)];
 }

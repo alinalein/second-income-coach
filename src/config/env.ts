@@ -32,7 +32,13 @@ const envSchema = z.object({
     ),
   CORS_ORIGIN: z.string().min(1).default('http://localhost:5173'),
   RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
-  RATE_LIMIT_MAX: z.coerce.number().int().positive().default(100),
+  // Bug fix (user-reported, live): 100 tripped during normal navigation — a
+  // dev session doubles every mount-effect fetch (React StrictMode) and a
+  // single screen (ideas + intake + translations + viewer-country, etc.)
+  // already fires several GETs on its own. 600 keeps this general tier as an
+  // abuse backstop (the cost-bearing routes stay on `createStrictRateLimiter`,
+  // unchanged) without tripping on legitimate use.
+  RATE_LIMIT_MAX: z.coerce.number().int().positive().default(600),
   BODY_LIMIT: z
     .string()
     .min(1)

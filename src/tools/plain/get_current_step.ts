@@ -66,17 +66,33 @@ export interface GapFlags {
 
 const NO_GAP: GapFlags = { gapDetected: false, missedDays: 0, checkedInToday: false };
 
-export function pickCurrentAndNext(rows: readonly PlanStepRow[], gap: GapFlags = NO_GAP): CurrentStepResponse {
+/**
+ * Story 4.5 (AC1): `completedAt` is the plan's own `updatedAt` — set once,
+ * the moment `complete_step` transitions the plan to `completed`
+ * (`complete_step.ts`), never touched again afterward (every other route
+ * that could otherwise update a plan row rejects a non-`active` plan via
+ * `assertPlanActive` first) — so it's a stable completion timestamp, not
+ * re-derived here. `null` means "not completed" — `completion` below is
+ * `null` either way.
+ */
+export function pickCurrentAndNext(
+  rows: readonly PlanStepRow[],
+  gap: GapFlags = NO_GAP,
+  completedAt: Date | null = null,
+): CurrentStepResponse {
   const ordered = [...rows].sort((a, b) => a.stepOrder - b.stepOrder);
   const currentIndex = ordered.findIndex((row) => row.status === 'current');
+  const completion = completedAt
+    ? { completedAt: completedAt.toISOString(), completedSteps: ordered.filter((row) => row.status === 'completed').length }
+    : null;
 
   if (currentIndex === -1) {
-    return currentStepResponseSchema.parse({ current: null, next: null, ...gap });
+    return currentStepResponseSchema.parse({ current: null, next: null, ...gap, completion });
   }
 
   const current = toStepResponse(ordered[currentIndex]!);
   const nextRow = ordered[currentIndex + 1];
-  return currentStepResponseSchema.parse({ current, next: nextRow ? toStepResponse(nextRow) : null, ...gap });
+  return currentStepResponseSchema.parse({ current, next: nextRow ? toStepResponse(nextRow) : null, ...gap, completion });
 }
 
 /**
@@ -95,7 +111,11 @@ export function pickCurrentAndNext(rows: readonly PlanStepRow[], gap: GapFlags =
  * `missedDays` comes back 0 until a real new gap opens).
  */
 export async function getCurrentStep(db: Db, planId: string): Promise<CurrentStepResponse> {
-  const [plan] = await db.select({ createdAt: plans.createdAt, timelineAnchorAt: plans.timelineAnchorAt }).from(plans).where(eq(plans.id, planId)).limit(1);
+  const [plan] = await db
+    .select({ createdAt: plans.createdAt, timelineAnchorAt: plans.timelineAnchorAt, status: plans.status, updatedAt: plans.updatedAt })
+    .from(plans)
+    .where(eq(plans.id, planId))
+    .limit(1);
   const anchor = plan ? (plan.timelineAnchorAt ?? plan.createdAt) : undefined;
   const missedDays = anchor ? computeMissedDays(anchor, new Date()) : 0;
 
@@ -118,7 +138,11 @@ export async function getCurrentStep(db: Db, planId: string): Promise<CurrentSte
       .limit(1),
   ]);
 
-  return pickCurrentAndNext(rows, { gapDetected: missedDays > 0, missedDays, checkedInToday: Boolean(todaysCheckIn) });
+  return pickCurrentAndNext(
+    rows,
+    { gapDetected: missedDays > 0, missedDays, checkedInToday: Boolean(todaysCheckIn) },
+    plan?.status === 'completed' ? plan.updatedAt : null,
+  );
 }
 
 const PLAN_THREAD_PREFIX = 'plan:';

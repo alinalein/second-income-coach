@@ -164,13 +164,68 @@ function revertOptimisticIdeaStatus(
  * are decorative (`aria-hidden`), but the wrapper itself is `role="status"`
  * + `aria-live="polite"` with a visually-hidden (`sr-only`) `t('loading')`
  * text, so a screen-reader user still gets the same announcement the old
- * plain-text line gave them. */
-function IdeasSkeleton({ loadingLabel }: { loadingLabel: string }) {
+ * plain-text line gave them.
+ *
+ * Bug fix (user-reported, live): `decorative` (default false) drops that
+ * own `role="status"`/`aria-live`/`sr-only` text entirely — used when this
+ * renders purely to give the "Generating…" dialog's own backdrop-blur real
+ * boxes to soften (first-ever auto-generate, nothing else behind it). The
+ * Dialog already has its own `role="status"` announcing the real stage
+ * text, and two live `status` regions on screen at once is both redundant
+ * and breaks `getByRole('status')` uniqueness.
+ *
+ * Bug fix (user-reported, live, round 2): `decorative` boxes are outlined
+ * (`border border-border`), not filled — a crisp edge is what the dialog's
+ * own `backdrop-filter: blur()` visibly softens (the actual "glass" cue); a
+ * flat `var(--blob)` fill across a 256px box read as one large saturated
+ * rectangle instead, and its `animate-pulse` was distracting ("too much
+ * animation in the background"). Two small, individually blurred circles
+ * (`filter: blur(60px)` on themselves, `overflow-hidden` on the grid
+ * wrapper so they can never grow past it) give the color/contrast instead —
+ * `index.css`'s own page-level blob decoration's exact recipe, soft/diffuse
+ * by construction. `bg-muted` (kept, unchanged, for the non-`decorative`
+ * real loading case) was separately found live to be nearly invisible
+ * against this page's own background — `index.css`'s own blob decoration
+ * exists for exactly this reason (`--muted`/`--page-a`/`--page-b` are all
+ * near-identical pale tones) — but that's not relevant here, since
+ * `decorative` boxes don't rely on their own fill color for contrast. */
+function IdeasSkeleton({ loadingLabel, decorative = false }: { loadingLabel: string; decorative?: boolean }) {
   return (
-    <div role="status" aria-live="polite" className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-      <span className="sr-only">{loadingLabel}</span>
+    <div
+      role={decorative ? undefined : 'status'}
+      aria-live={decorative ? undefined : 'polite'}
+      aria-hidden={decorative || undefined}
+      className={`relative grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 ${decorative ? 'overflow-hidden' : ''}`}
+    >
+      {decorative ? null : <span className="sr-only">{loadingLabel}</span>}
+      {decorative ? (
+        <>
+          <div
+            aria-hidden="true"
+            className="absolute rounded-full"
+            style={{ width: 200, height: 200, top: -30, left: 40, background: 'var(--blob)', opacity: 'var(--blob-opacity)', filter: 'blur(60px)' }}
+          />
+          <div
+            aria-hidden="true"
+            className="absolute rounded-full"
+            style={{
+              width: 200,
+              height: 200,
+              bottom: -30,
+              right: 60,
+              background: 'var(--blob)',
+              opacity: 'var(--blob-opacity)',
+              filter: 'blur(60px)',
+            }}
+          />
+        </>
+      ) : null}
       {[0, 1, 2].map((index) => (
-        <div key={index} aria-hidden="true" className="h-64 animate-pulse rounded-lg bg-muted" />
+        <div
+          key={index}
+          aria-hidden="true"
+          className={`relative h-64 rounded-lg ${decorative ? 'border border-border' : 'animate-pulse bg-muted'}`}
+        />
       ))}
     </div>
   );
@@ -1343,6 +1398,18 @@ export function IdeasPanel({
           {/* Fix1: a fixed-height neutral skeleton, never the "no ideas yet"
            * text, while the first `GET /api/ideas` is pending. */}
           {phase === 'loading' ? <IdeasSkeleton loadingLabel={t('loading')} /> : null}
+          {/* Bug fix (user-reported, live): also shown, `decorative` (no
+           * duplicate `role="status"` — the "Generating…" dialog below
+           * already has its own), during the very first-ever auto-generate
+           * (`generating && visibleIdeas.length === 0`) — a *regenerate*
+           * already has the real grid mounted behind that dialog
+           * (`visibleIdeas` isn't phase-gated), which gives its
+           * backdrop-blur real boxes to soften; the first-ever generate has
+           * nothing at all behind it otherwise, so that same blur reads as
+           * flat, not glass. */}
+          {generating && visibleIdeas.length === 0 ? (
+            <IdeasSkeleton loadingLabel={generatingStatusLabel} decorative />
+          ) : null}
           {/* Round 13 (user-requested): which message shows now depends on
            * which request actually failed, never on `ideas.length` — the old
            * logic showed "couldn't load" for a failed *regenerate* whenever
@@ -1456,39 +1523,70 @@ export function IdeasPanel({
               {generating ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : null}
               {generating ? t('generatingButton') : ideas.length > 0 ? t('generateNewButton') : t('generateButton')}
             </Button>
-            <div className="flex flex-1 flex-col gap-2">
-              {/* Story 2.11 (AC5/AC6): a plain limit notice, never worded
-               * like an error. */}
-              {generateBlocked ? (
-                <Badge variant="muted" role="status" className="whitespace-normal text-left">
-                  {generateLimit?.reason === 'shared_budget'
-                    ? t('limit.sharedBudgetExhausted')
-                    : t('limit.userLimitReached', { limit: generateLimit?.limit, resetTime: generateLimitResetTime })}
-                </Badge>
-              ) : null}
-              {/* Story 2.2 follow-up fix 2: an indeterminate (no percentage) progress
-               * indicator while POST /api/ideas/generate is pending — a live region
-               * so assistive tech announces the status/hint text as it appears,
-               * not just on first render. */}
-              <div
-                className={`flex flex-1 flex-col gap-2 transition-opacity duration-200 ${generating ? 'opacity-100' : 'opacity-0'}`}
-                aria-live="polite"
-                role={generating ? 'status' : undefined}
-                aria-hidden={!generating}
-              >
+            {/* Story 2.11 (AC5/AC6): a plain limit notice, never worded like
+             * an error — stays inline here, independent of the generating
+             * state below. */}
+            {generateBlocked ? (
+              <Badge variant="muted" role="status" className="flex-1 whitespace-normal text-left">
+                {generateLimit?.reason === 'shared_budget'
+                  ? t('limit.sharedBudgetExhausted')
+                  : t('limit.userLimitReached', { limit: generateLimit?.limit, resetTime: generateLimitResetTime })}
+              </Badge>
+            ) : null}
+          </CardFooter>
+        ) : null}
+        {/* Bug fix (user-reported, live): "it should have the same UI as
+         * when the plan is generated — that pop-up, background blurred and
+         * not clickable" — same `shadcn-glass-ui` Dialog pattern as
+         * `PlanWorkspace.tsx`'s own plan-creation loading modal (its
+         * backdrop already carries `backdrop-blur`), replacing the old
+         * inline progress block that left the rest of the page (including
+         * the sidebar) fully clickable during a generation. The generate
+         * button above stays inline and disabled/transparent from the
+         * first frame either way (Spec 2.12 AC1) — only the progress
+         * bar/stage text/hint move into this modal.
+         *
+         * `popup-glass-strong` (`index.css`, user-reported, live, round 3
+         * — see its own doc comment there for why this is a plain
+         * hand-written class, not a Tailwind arbitrary-value one). The
+         * decorative `IdeasSkeleton` above (first-ever auto-generate only
+         * — a *regenerate* already has the real grid mounted behind this
+         * dialog) is what gives its backdrop-blur real boxes to soften.
+         * `border shadow-[var(--shadow)]` (user-reported, live, explicit
+         * follow-up): a visible outline around the panel itself — this
+         * app's own `Card` component's exact recipe (`card.tsx`), same fix
+         * as `PlanWorkspace.tsx`'s own plan-creation loading modal. */}
+        <Dialog open={generating} onOpenChange={() => undefined}>
+          <DialogContent
+            showCloseButton={false}
+            className="popup-glass-strong flex flex-col items-center gap-3 border text-center shadow-[var(--shadow)]"
+          >
+            {/* `role="status"`/`aria-live` wraps the title too (not just the
+             * progress/hint below it) — same live region the old inline
+             * block was, just relocated, so the stage text is still
+             * announced as it changes and still lands inside this one
+             * region for `getByRole('status')` to find. A plain `div`, not
+             * `DialogContent` itself — Radix's own `role="dialog"` on that
+             * element stays untouched. */}
+            <div className="flex w-full flex-col items-center gap-3" aria-live="polite" role="status">
+              <DialogHeader className="items-center text-center">
+                <DialogTitle>{generatingStatusLabel}</DialogTitle>
+              </DialogHeader>
+              <div className="flex w-full flex-col gap-2">
                 <DeterminateProgressBar percent={progress} label={generatingStatusLabel} />
-                <p className="text-sm font-medium">{generatingStatusLabel}</p>
                 <p className="text-xs text-muted-foreground">{t('generatingHint')}</p>
               </div>
             </div>
-          </CardFooter>
-        ) : null}
+          </DialogContent>
+        </Dialog>
       </Card>
       {/* Story 2.8 AC3: panel-level (rendered once, not per-card) — driven by
        * `confirmIdea`. Confirming demotes nothing until the status write
        * actually succeeds; canceling changes nothing at all. */}
       <Dialog open={confirmIdea !== null} onOpenChange={(open: boolean) => { if (!open) setConfirmIdea(null); }}>
-        <DialogContent>
+        {/* `popup-glass-strong` (`index.css`, user-reported, live, round 3)
+         * — see the "Generating…" dialog above's own doc comment. */}
+        <DialogContent className="popup-glass-strong">
           <DialogHeader>
             <DialogTitle>{t('confirmSelect.title')}</DialogTitle>
             <DialogDescription>{t('confirmSelect.description')}</DialogDescription>

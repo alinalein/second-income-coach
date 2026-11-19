@@ -7,8 +7,7 @@
   "myPlans": {
     "heading": "Meine Pläne",
     "empty": "Noch keine Pläne — wähle eine Idee aus, um loszulegen.",
-    "activeStatus": "Aktiv",
-    "pausedStatus": "Pausiert"
+    "completedStatus": "Abgeschlossen"
   },
   "bookmarked": {
     "heading": "Gemerkt"

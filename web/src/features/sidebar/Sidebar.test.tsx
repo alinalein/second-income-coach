@@ -170,16 +170,40 @@ describe('Sidebar (2.9: desktop collapse state persists across a remount)', () =
 
 // 2.9 AC2: My plans — active marked, paused dimmed, empty state.
 describe('Sidebar (AC2: My plans list)', () => {
+  // Bug fix (user-reported, live): "remove the Active/Paused badges and the
+  // dimming completely" — they used to mark the open plan and dim a paused
+  // one; now removed entirely (only Story 4.5's neutral "Completed" label
+  // stays, asserted separately below).
   it.each([
-    ['active', fakePlanEntry({ status: 'active' }), 'Active'],
-    ['paused', fakePlanEntry({ status: 'paused' }), 'Paused'],
-  ])('shows a %s plan with its status badge', async (_case, entry, expectedBadge) => {
+    ['active', fakePlanEntry({ status: 'active' })],
+    ['paused', fakePlanEntry({ status: 'paused' })],
+  ] as const)('shows no status badge and no dimming for a %s plan', async (_case, entry) => {
     vi.stubGlobal('fetch', mockFetch({ '/api/plans': plansResponse([entry]), '/api/ideas': ideasResponse([]) }));
 
     renderSidebar(noopProps());
 
     const planButton = await screen.findByRole('button', { name: new RegExp(entry.ideaTitle) });
-    expect(planButton).toHaveTextContent(expectedBadge);
+    expect(planButton).not.toHaveTextContent('Active');
+    expect(planButton).not.toHaveTextContent('Paused');
+    expect(planButton.className).not.toMatch(/opacity-60/);
+  });
+
+  // Story 4.5 (AC5): the one label that stays — neutral, not dimmed, still
+  // selectable.
+  it('still shows the neutral "Completed" label, not dimmed, and still navigates when selected', async () => {
+    const entry = fakePlanEntry({ status: 'completed' });
+    vi.stubGlobal('fetch', mockFetch({ '/api/plans': plansResponse([entry]), '/api/ideas': ideasResponse([]) }));
+    const onNavigate = vi.fn();
+
+    renderSidebar({ ...noopProps(), onNavigate });
+
+    const planButton = await screen.findByRole('button', { name: new RegExp(entry.ideaTitle) });
+    expect(planButton).toHaveTextContent('Completed');
+    expect(planButton.className).not.toMatch(/opacity-60/);
+
+    fireEvent.click(planButton);
+
+    expect(onNavigate).toHaveBeenCalledWith({ kind: 'plan', ideaId: entry.ideaId, ideaTitle: entry.ideaTitle });
   });
 
   it('shows a localized empty note when there are no plans', async () => {

@@ -308,3 +308,43 @@ describe('createPlanChatRouter (bug fix: cost line missing because of the produc
     }
   });
 });
+
+// Story 4.5 (AC4): "the chat stays fully usable [after completion] — read
+// history, ask about completed steps, follow-up questions." Neither route
+// below gates on `plans.status` at all (only `start_step`/`complete_step`
+// do, at the tool level) — this proves a `completed` plan's thread is never
+// blocked by anything this story's own wiring (the new system-prompt note)
+// could have broken.
+describe('createPlanChatRouter (Story 4.5 AC4: chat stays usable for a completed plan)', () => {
+  it('POST /:planId/messages still succeeds, and GET /:planId/messages still reads history', async () => {
+    const userId = await createTestUser();
+    try {
+      const ideaId = await insertIdea(userId);
+      const [plan] = await db
+        .insert(plans)
+        .values({ ideaId, userId, status: 'completed', threadId: `plan:${randomUUID()}` })
+        .returning();
+
+      const model = fakeModel().respond(new AIMessage('You completed every step — your dog-walking plan is done.'));
+      const realAgent = createCoachAgent({
+        env: { OPENROUTER_API_KEY: 'test-key', MISTRAL_API_KEY: 'test-key', IDEAS_PER_BATCH: 2, DAILY_SEARCH_BUDGET: 500 },
+        checkpointer: new MemorySaver(),
+        db,
+        webSearchTool: {} as never,
+        model,
+        classify: async () => ({}),
+        tools: [],
+      });
+
+      const app = buildTestApp(realAgent, userId);
+      const postRes = await request(app).post(`/api/plans/${plan!.id}/messages`).send({ content: 'What did I just finish?' });
+      expect(postRes.status).toBe(200);
+
+      const getRes = await request(app).get(`/api/plans/${plan!.id}/messages`);
+      expect(getRes.status).toBe(200);
+      expect(getRes.body.messages.some((message: { role: string; content: string }) => message.role === 'assistant')).toBe(true);
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+});

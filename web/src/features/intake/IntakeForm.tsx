@@ -20,6 +20,25 @@ import { Label } from '../../components/ui/label';
 import { Select } from '../../components/ui/select';
 import { Textarea } from '../../components/ui/textarea';
 
+/** Bug fix (user-reported, live): on a re-save, the button itself goes
+ * straight back to its resting label — a small "Changes saved" note next to
+ * it is what shows for this long instead (also dismissed immediately,
+ * regardless of this timer, the instant the user edits a field again —
+ * `handleChange` below cancels the pending dismissal and clears it right
+ * away). Never shown for a first-ever save, since `onSaved` there navigates
+ * this component away before this state is ever reached. */
+const SAVED_CONFIRMATION_DURATION_MS = 2_000;
+
+/** Bug fix (user-reported, live): "the Saving… appears for just a
+ * millisecond, looking like a glitch" — intake save is a fast plain DB
+ * write (AC: "stored immediately ... within 1s"), so the real round trip is
+ * often well under this. A floor on how long the button's own `'submitting'`
+ * display stays up (never on `onSaved(...)` itself — that still fires the
+ * instant the real response lands, so a first-ever save's redirect/ideas-
+ * generation start is never delayed by this) turns that flash into a
+ * deliberate, readable state instead. */
+const MIN_SAVING_VISIBLE_MS = 400;
+
 /** Client-side cap on how long `POST /api/intake` (an LLM-backed, agent-
  * invoking call) is allowed to hang before this form treats it the same as
  * any other submit failure — no request should ever leave the user staring
@@ -80,18 +99,42 @@ export function IntakeForm({ onSaved }: IntakeFormProps) {
   const [form, setForm] = React.useState<SubmitIntakeRequest>(BLANK_FORM);
   const [loaded, setLoaded] = React.useState(false);
   // 'submitting': POST in flight. 'idle'/'error' both render the normal,
-  // editable form — 'error' just adds the error message. On success,
-  // `onSaved` fires immediately (no separate confirmation phase/delay).
+  // editable form — 'error' just adds the error message.
+  //
+  // Bug fix (user-reported, live): the button used to stay stuck on
+  // "Saving…" forever after a successful save — the success branch below
+  // called `onSaved(...)` but never transitioned `phase` back out of
+  // `'submitting'` at all (only the failure branch did). Invisible on a
+  // first-ever save, since `onSaved` there navigates this component away
+  // before the stuck state could ever be seen; very visible on a re-save,
+  // which stays mounted on this same form.
   const [phase, setPhase] = React.useState<'idle' | 'submitting' | 'error'>('idle');
   const [fieldErrors, setFieldErrors] = React.useState<FieldErrors>({});
-  // Spec 2.12 AC1 (amended): an edit of an existing intake (via "Review your
-  // intake answers") now stays on this form instead of being redirected away
-  // by `App.tsx` — this is the only feedback the user gets that the save
-  // actually happened. Cleared on the next edit, or after a short delay,
-  // whichever comes first.
-  const [justSaved, setJustSaved] = React.useState(false);
   const submitting = phase === 'submitting';
+  // Bug fix (user-reported, live): "only the button changes" — this used to
+  // also disable every field (`disabled:opacity-50` on `Select`/`Textarea`),
+  // which dimmed the *entire form* the instant a save started and un-dimmed
+  // it moments later, read as the whole form jumping/flickering. Scoped to
+  // the submit button alone now (prevents a double-submit, which is all it
+  // was really there for) — the fields stay fully interactive throughout; a
+  // mid-flight edit doesn't corrupt anything since the in-flight request
+  // already has its own snapshot of `form` from when it started.
   const disabled = submitting;
+  // Bug fix (user-reported, live): a re-save's own feedback — "Changes
+  // saved" next to the button, for `SAVED_CONFIRMATION_DURATION_MS` or
+  // until the next edit, whichever comes first (Spec 2.12 AC1 amendment: a
+  // re-save stays on this form instead of being redirected away by
+  // `App.tsx`). Never set on a first-ever save (see that effect's own doc
+  // comment on `SAVED_CONFIRMATION_DURATION_MS` above).
+  const [justSaved, setJustSaved] = React.useState(false);
+  const savedDismissTimeoutRef = React.useRef<number | null>(null);
+  const clearSavedDismissTimeout = React.useCallback(() => {
+    if (savedDismissTimeoutRef.current !== null) {
+      window.clearTimeout(savedDismissTimeoutRef.current);
+      savedDismissTimeoutRef.current = null;
+    }
+  }, []);
+  React.useEffect(() => clearSavedDismissTimeout, [clearSavedDismissTimeout]);
 
   const isMountedRef = React.useRef(true);
   React.useEffect(() => {
@@ -135,9 +178,15 @@ export function IntakeForm({ onSaved }: IntakeFormProps) {
     (key: keyof SubmitIntakeRequest) =>
       (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
         setForm((prev) => ({ ...prev, [key]: event.target.value }));
+        // Bug fix (user-reported, live): dismisses "Changes saved"
+        // immediately on the next edit, rather than waiting out the rest of
+        // its timer — cancels the pending auto-dismiss (it would otherwise
+        // still fire later and no-op harmlessly, but there's no reason to
+        // leave it dangling).
+        clearSavedDismissTimeout();
         setJustSaved(false);
       },
-    [],
+    [clearSavedDismissTimeout],
   );
 
   const handleSubmit = React.useCallback(
@@ -162,6 +211,12 @@ export function IntakeForm({ onSaved }: IntakeFormProps) {
 
       setFieldErrors({});
       setPhase('submitting');
+      // Bug fix (user-reported, live): "the Saving… appears for just a
+      // millisecond, looking like a glitch" — see `MIN_SAVING_VISIBLE_MS`'s
+      // own doc comment. Measured from here (not from the fetch call below)
+      // so it covers the client-side validation branch's own negligible
+      // cost too, though that's never the bottleneck.
+      const submitStartedAt = Date.now();
 
       // No request should leave the user staring at "Saving…" forever — a
       // hung/slow agent turn is treated the same as any other submit failure.
@@ -178,27 +233,46 @@ export function IntakeForm({ onSaved }: IntakeFormProps) {
         .then(async (res) => {
           const body: unknown = await res.json();
           const result = submitIntakeResponseSchema.safeParse(body);
+          const remainingMs = Math.max(0, MIN_SAVING_VISIBLE_MS - (Date.now() - submitStartedAt));
+
           if (!res.ok || !result.success) {
-            if (isMountedRef.current) setPhase('error');
+            window.setTimeout(() => {
+              if (isMountedRef.current) setPhase('error');
+            }, remainingMs);
             return;
           }
-          if (isMountedRef.current) {
-            onSaved(result.data.intake);
+
+          // `onSaved` fires the instant the real response lands, never
+          // delayed by the floor below — a first-ever save's redirect/ideas-
+          // generation start must never wait on this.
+          onSaved(result.data.intake);
+          window.setTimeout(() => {
+            if (!isMountedRef.current) return;
+            // Bug fix (user-reported, live): this is the line that was
+            // missing entirely — the button must leave `'submitting'` on
+            // success too, not just on failure (the actual stuck-button
+            // bug). Goes straight back to its resting label; "Changes
+            // saved" next to it is the feedback, not the button itself.
+            setPhase('idle');
             setJustSaved(true);
-            window.setTimeout(() => {
+            clearSavedDismissTimeout();
+            savedDismissTimeoutRef.current = window.setTimeout(() => {
               if (isMountedRef.current) setJustSaved(false);
-            }, 4000);
-          }
+            }, SAVED_CONFIRMATION_DURATION_MS);
+          }, remainingMs);
         })
         .catch(() => {
           // Covers both a thrown network error and the timeout abort above —
           // on failure or timeout, fall back out of the pending state with
           // fields re-enabled so the user can retry.
-          if (isMountedRef.current) setPhase('error');
+          const remainingMs = Math.max(0, MIN_SAVING_VISIBLE_MS - (Date.now() - submitStartedAt));
+          window.setTimeout(() => {
+            if (isMountedRef.current) setPhase('error');
+          }, remainingMs);
         })
         .finally(() => window.clearTimeout(timeoutId));
     },
-    [disabled, form, onSaved, t],
+    [disabled, form, onSaved, t, clearSavedDismissTimeout],
   );
 
   return (
@@ -219,7 +293,6 @@ export function IntakeForm({ onSaved }: IntakeFormProps) {
               onChange={handleChange('skillsInterests')}
               placeholder={t('skillsInterests.placeholder')}
               maxLength={INTAKE_FREE_TEXT_MAX_LENGTH}
-              disabled={disabled}
             />
             {fieldErrors.skillsInterests ? (
               <Badge variant="muted" role="alert">
@@ -234,7 +307,6 @@ export function IntakeForm({ onSaved }: IntakeFormProps) {
               id="intake-weeklyTimeAvailability"
               value={form.weeklyTimeAvailability}
               onChange={handleChange('weeklyTimeAvailability')}
-              disabled={disabled}
             >
               {weeklyTimeAvailabilitySchema.options.map((option) => (
                 <option key={option} value={option}>
@@ -250,7 +322,6 @@ export function IntakeForm({ onSaved }: IntakeFormProps) {
               id="intake-startingBudgetRange"
               value={form.startingBudgetRange}
               onChange={handleChange('startingBudgetRange')}
-              disabled={disabled}
             >
               {startingBudgetRangeSchema.options.map((option) => (
                 <option key={option} value={option}>
@@ -266,7 +337,6 @@ export function IntakeForm({ onSaved }: IntakeFormProps) {
               id="intake-riskTolerance"
               value={form.riskTolerance}
               onChange={handleChange('riskTolerance')}
-              disabled={disabled}
             >
               {riskToleranceSchema.options.map((option) => (
                 <option key={option} value={option}>
@@ -278,7 +348,7 @@ export function IntakeForm({ onSaved }: IntakeFormProps) {
 
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="intake-country">{t('country.label')}</Label>
-            <Select id="intake-country" value={form.country} onChange={handleChange('country')} disabled={disabled}>
+            <Select id="intake-country" value={form.country} onChange={handleChange('country')}>
               {countryCodeSchema.options.map((option) => (
                 <option key={option} value={option}>
                   {t(`country.options.${option}`)}
@@ -295,7 +365,6 @@ export function IntakeForm({ onSaved }: IntakeFormProps) {
               onChange={handleChange('stoppedBeforeText')}
               placeholder={t('stoppedBeforeText.placeholder')}
               maxLength={INTAKE_FREE_TEXT_MAX_LENGTH}
-              disabled={disabled}
             />
             {fieldErrors.stoppedBeforeText ? (
               <Badge variant="muted" role="alert">
@@ -310,9 +379,13 @@ export function IntakeForm({ onSaved }: IntakeFormProps) {
             </Badge>
           ) : null}
         </CardContent>
-        <CardFooter className="flex flex-col items-start gap-2">
+        {/* Bug fix (user-reported, live): "Changes saved" belongs next to
+         * the button, at the same height — not on its own line below it —
+         * so `flex-row items-center` (not the stacked `flex-col` this used
+         * to be). */}
+        <CardFooter className="flex flex-row items-center gap-3">
           <Button type="submit" disabled={disabled}>
-            {submitting ? (
+            {phase === 'submitting' ? (
               <>
                 <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
                 {t('savingButton')}
@@ -321,8 +394,12 @@ export function IntakeForm({ onSaved }: IntakeFormProps) {
               t('submitButton')
             )}
           </Button>
+          {/* Bug fix (user-reported, live): a re-save's own small, separate
+           * confirmation — next to the button, never inside it, and only
+           * ever for `SAVED_CONFIRMATION_DURATION_MS` (or until the next
+           * edit, whichever comes first). */}
           {justSaved ? (
-            <p role="status" aria-live="polite" className="text-sm text-muted-foreground">
+            <p role="status" aria-live="polite" className="text-xs text-muted-foreground">
               {t('savedConfirmation')}
             </p>
           ) : null}

@@ -689,7 +689,14 @@ describe('createPlansRouter POST /:planId/activate* (AD-14, end to end over HTTP
 
 // Story 2.9: the sidebar's "My plans" list data source.
 describe('createPlansRouter GET / (Story 2.9: My-plans list)', () => {
-  it("lists only this user's plans, each joined with its idea's title, sorted by last activity (updatedAt desc)", async () => {
+  // Story 2.9 AC (updated): "a stable order that never changes just because
+  // the user switches plans (by creation date, newest first)" — sorted by
+  // `createdAt`, never `updatedAt`. `newerPlan`'s own `updatedAt` is bumped
+  // past `olderPlan`'s *creation* time (simulating a later activation/step
+  // action on the older plan) and the order is unaffected either way —
+  // proving this is genuinely creation-date-sorted, not accidentally still
+  // activity-sorted.
+  it("lists only this user's plans, each joined with its idea's title, sorted by creation date (newest first), stable across activity updates", async () => {
     const userId = await createTestUser();
     const otherUserId = await createTestUser();
     try {
@@ -704,7 +711,10 @@ describe('createPlansRouter GET / (Story 2.9: My-plans list)', () => {
         .insert(plans)
         .values({ ideaId: ideaId2, userId, status: 'paused', threadId: `plan:${randomUUID()}` })
         .returning();
-      await db.update(plans).set({ updatedAt: new Date(Date.now() + 1000) }).where(eq(plans.id, newerPlan!.id));
+      // Touches `olderPlan`'s own `updatedAt` well past `newerPlan`'s
+      // `createdAt` — if the list were still sorted by `updatedAt`, this
+      // would flip the order; it must not.
+      await db.update(plans).set({ updatedAt: new Date(Date.now() + 1000) }).where(eq(plans.id, olderPlan!.id));
 
       const otherIdeaId = await insertIdea(otherUserId, 'selected');
       await db.insert(plans).values({ ideaId: otherIdeaId, userId: otherUserId, status: 'draft', threadId: `plan:${randomUUID()}` });
@@ -906,6 +916,56 @@ describe('createPlansRouter POST /:planId/steps/:stepId/start (Spec 2.12 AC8: ch
 
       expect(res.status).toBe(409);
       expect(invoke).not.toHaveBeenCalled();
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+});
+
+// Story 4.5 (AC3): `complete_step` on the plan's final step triggers the
+// same one-direct-model-call pattern as `start_step`'s own acknowledgment
+// (`buildStartStepAckMessage`) — fully fail-open: the plan completes either
+// way, a model failure just omits `chatMessage` (the UI's own fixed
+// `stepActions.planCompletedHint` is the fallback either way).
+describe('createPlansRouter POST /:planId/steps/:stepId/complete (Story 4.5 AC3: completion acknowledgment)', () => {
+  it.each([
+    [
+      'model call succeeds',
+      (): BaseChatModel => ({ invoke: vi.fn().mockResolvedValue(new AIMessage("You've finished your whole plan — nice work.")) }) as unknown as BaseChatModel,
+      true,
+    ],
+    [
+      'model call fails (covers timeout/moderation/guilt-language alike — same fail-open path)',
+      (): BaseChatModel => ({ invoke: vi.fn().mockRejectedValue(new Error('boom')) }) as unknown as BaseChatModel,
+      false,
+    ],
+  ] as const)('%s -> the plan completes either way, chat message present = %s', async (_name, buildModel, expectMessage) => {
+    const userId = await createTestUser();
+    try {
+      const { planId, stepId } = await insertPlanWithCurrentStep(userId);
+      const updateState = vi.fn().mockResolvedValue(undefined);
+      const agent = fakeAgent({ updateState });
+      const model = buildModel();
+
+      const res = await request(buildTestApp(agent, userId, { model, classify: fakeModeration('pass') }))
+        .post(`/api/plans/${planId}/steps/${stepId}/complete`)
+        .send();
+
+      expect(res.status).toBe(200);
+      expect(res.body.planCompleted).toBe(true);
+      if (expectMessage) {
+        expect(res.body.chatMessage).toMatchObject({ role: 'assistant', kind: 'message' });
+        expect(updateState).toHaveBeenCalledWith(
+          { configurable: { thread_id: `plan:${planId}` } },
+          expect.objectContaining({ messages: expect.any(Array) }),
+        );
+      } else {
+        expect(res.body.chatMessage).toBeUndefined();
+        expect(updateState).not.toHaveBeenCalled();
+      }
+
+      const [plan] = await db.select({ status: plans.status }).from(plans).where(eq(plans.id, planId));
+      expect(plan!.status).toBe('completed');
     } finally {
       await cleanUp(userId);
     }

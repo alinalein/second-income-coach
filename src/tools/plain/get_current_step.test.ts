@@ -101,6 +101,23 @@ describe('pickCurrentAndNext (AC/AD-4: capped to current+next)', () => {
     expect(pickCurrentAndNext(rows, gap).missedDays).toBe(4);
     expect(pickCurrentAndNext(rows, gap).checkedInToday).toBe(true);
   });
+
+  // Story 4.5 (AC1): the data `StatusPanel.tsx`'s "Plan completed" card
+  // needs — non-null only once a completion timestamp is actually passed in
+  // (`getCurrentStep` only does so once the plan's own status is
+  // `completed`), computed from the same rows this call already reads.
+  it.each([
+    [
+      'a completedAt is passed (the plan is completed)',
+      new Date('2026-01-15T00:00:00.000Z'),
+      { completedAt: '2026-01-15T00:00:00.000Z', completedSteps: 2 },
+    ],
+    ['no completedAt is passed (the plan is not completed)', null, null],
+  ] as const)('%s -> completion = %j', (_label, completedAt, expected) => {
+    const rows = [step({ stepOrder: 0, status: 'completed' }), step({ stepOrder: 1, status: 'completed' }), step({ stepOrder: 2, status: 'pending' })];
+
+    expect(pickCurrentAndNext(rows, undefined, completedAt).completion).toEqual(expected);
+  });
 });
 
 // Bug fix (user-reported): "how's your energy today" must ask at most once

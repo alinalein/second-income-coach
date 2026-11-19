@@ -36,6 +36,49 @@ function DeterminateProgressBar({ percent, label }: { percent: number; label: st
   );
 }
 
+/** Bug fix (user-reported, live): the "Setting up your plan…" dialog's own
+ * glass backdrop-blur only reads as "glass" when there's something with
+ * real edges/contrast behind it to soften — by the time this dialog mounts,
+ * the previous screen is already gone (nothing but the flat page background
+ * behind it). A shape-only skeleton of the real layout below (status/
+ * projection column + chat column) gives the blur real boxes to soften.
+ *
+ * Bug fix (user-reported, live, round 2): the first attempt filled the
+ * *entire* shape (including the chat column, which legitimately fills the
+ * remaining flex height — same as the real content once loaded) solid with
+ * `var(--blob)` — at that size it read as one large saturated rectangle,
+ * not a subtle blur ingredient, and its `animate-pulse` was distracting
+ * ("too much animation in the background"). Two small, individually
+ * blurred circles (`filter: blur(60px)` on themselves, `overflow-hidden`
+ * on the wrapper so they can never grow past it) is `index.css`'s own
+ * page-level blob decoration's exact recipe — soft/diffuse by construction,
+ * regardless of how big the wrapper is. The layout boxes themselves are
+ * outlined (`border border-border`), not filled — a crisp edge is what the
+ * dialog's own `backdrop-filter: blur()` visibly softens (the actual
+ * "glass" cue); a flat color fill gives it nothing sharp to soften. No
+ * animation — purely decorative, static is enough. */
+function WorkspaceSkeleton() {
+  return (
+    <div aria-hidden="true" className="relative min-h-0 flex-1 overflow-hidden rounded-lg">
+      <div
+        className="absolute rounded-full"
+        style={{ width: 220, height: 220, top: -40, left: 60, background: 'var(--blob)', opacity: 'var(--blob-opacity)', filter: 'blur(60px)' }}
+      />
+      <div
+        className="absolute rounded-full"
+        style={{ width: 220, height: 220, bottom: -40, right: 80, background: 'var(--blob)', opacity: 'var(--blob-opacity)', filter: 'blur(60px)' }}
+      />
+      <div className="relative flex h-full flex-col gap-4 p-4 sm:flex-row sm:items-stretch">
+        <div className="flex flex-col gap-4 sm:w-64 sm:shrink-0 sm:self-start">
+          <div className="h-40 rounded-lg border border-border" />
+          <div className="h-24 rounded-lg border border-border" />
+        </div>
+        <div className="min-h-0 flex-1 rounded-lg border border-border" />
+      </div>
+    </div>
+  );
+}
+
 /** Spec 2.12 AC2: `create_plan` is one plain structured-output call (no
  * nested search loop) — a much shorter typical duration than idea
  * generation's own `TYPICAL_GENERATE_DURATION_MS`. The bar fills toward 90%
@@ -44,6 +87,19 @@ function DeterminateProgressBar({ percent, label }: { percent: number; label: st
 const TYPICAL_PLAN_DURATION_MS = 10_000;
 const PROGRESS_HOLD_PERCENT = 90;
 const PROGRESS_TICK_MS = 300;
+
+/** Bug fix (user-reported, live): "switching between plans flashes the
+ * 'creating your plan' progress bar for a split second — this shouldn't
+ * happen, I want a smooth transition, not that modal popping in between."
+ * `POST /select/:ideaId` is lazy-create-or-fetch (AD-13) — for a plan that
+ * already exists (the common case when switching, as opposed to selecting
+ * a brand-new idea) it resolves near-instantly, with no real LLM call
+ * behind it at all. The loading modal below only shows once the request
+ * has been pending for longer than this — long enough that a fast,
+ * already-exists fetch never shows it at all, short enough that a genuine
+ * first-time creation (which takes seconds, per `TYPICAL_PLAN_DURATION_MS`)
+ * still shows it almost immediately. */
+const LOADING_MODAL_DELAY_MS = 200;
 
 export interface PlanWorkspaceProps {
   ideaId: string;
@@ -87,6 +143,12 @@ export function PlanWorkspace({ ideaId, ideaTitle, onPlanLoaded }: PlanWorkspace
   const { t } = useTranslation('plan');
   const [plan, setPlan] = React.useState<PlanResponse | null>(null);
   const [loadFailed, setLoadFailed] = React.useState(false);
+  // Bug fix (user-reported, live): see `LOADING_MODAL_DELAY_MS`'s own doc
+  // comment — `!plan` alone used to gate the modal, showing it the instant
+  // any `ideaId` change started a fetch, even one that resolves in a few
+  // milliseconds. This is the actual gate now; `!plan` still decides
+  // whether the *real* workspace renders at all.
+  const [showLoadingModal, setShowLoadingModal] = React.useState(false);
   // Spec 2.12 AC2: drives the determinate bar below while `create_plan` is
   // in flight.
   const [progress, setProgress] = React.useState(0);
@@ -127,17 +189,24 @@ export function PlanWorkspace({ ideaId, ideaTitle, onPlanLoaded }: PlanWorkspace
   // time it resolves the *second* invocation's interval is the one actually
   // still ticking.
   const progressIntervalRef = React.useRef<number | null>(null);
+  // Bug fix (user-reported, live): see `LOADING_MODAL_DELAY_MS`'s own doc
+  // comment — a dedicated ref, cleared from every exit path below (success,
+  // failure, StrictMode's synthetic re-run, and unmount), the same
+  // precedent as `progressIntervalRef` right above.
+  const loadingModalTimerRef = React.useRef<number | null>(null);
 
   React.useEffect(() => {
     setPlan(null);
     setLoadFailed(false);
     setProgress(0);
+    setShowLoadingModal(false);
 
     const startedAt = Date.now();
     progressIntervalRef.current = window.setInterval(() => {
       const elapsedMs = Date.now() - startedAt;
       setProgress(Math.min(PROGRESS_HOLD_PERCENT, (elapsedMs / TYPICAL_PLAN_DURATION_MS) * PROGRESS_HOLD_PERCENT));
     }, PROGRESS_TICK_MS);
+    loadingModalTimerRef.current = window.setTimeout(() => setShowLoadingModal(true), LOADING_MODAL_DELAY_MS);
 
     function clearProgressInterval() {
       if (progressIntervalRef.current !== null) {
@@ -146,11 +215,19 @@ export function PlanWorkspace({ ideaId, ideaTitle, onPlanLoaded }: PlanWorkspace
       }
     }
 
+    function clearLoadingModalTimer() {
+      if (loadingModalTimerRef.current !== null) {
+        window.clearTimeout(loadingModalTimerRef.current);
+        loadingModalTimerRef.current = null;
+      }
+    }
+
     if (inFlightRef.current?.ideaId === ideaId) {
       inFlightRef.current.cancelled = false;
       return () => {
         if (inFlightRef.current?.ideaId === ideaId) inFlightRef.current.cancelled = true;
         clearProgressInterval();
+        clearLoadingModalTimer();
       };
     }
 
@@ -166,6 +243,7 @@ export function PlanWorkspace({ ideaId, ideaTitle, onPlanLoaded }: PlanWorkspace
         // tick can never regress it back down.
         setProgress(100);
         clearProgressInterval();
+        clearLoadingModalTimer();
         if (!res.ok) {
           setLoadFailed(true);
           return;
@@ -184,6 +262,7 @@ export function PlanWorkspace({ ideaId, ideaTitle, onPlanLoaded }: PlanWorkspace
         if (!inFlight.cancelled) {
           setProgress(100);
           clearProgressInterval();
+          clearLoadingModalTimer();
           setLoadFailed(true);
         }
       });
@@ -191,6 +270,7 @@ export function PlanWorkspace({ ideaId, ideaTitle, onPlanLoaded }: PlanWorkspace
     return () => {
       inFlight.cancelled = true;
       clearProgressInterval();
+      clearLoadingModalTimer();
     };
   }, [ideaId]);
 
@@ -208,6 +288,40 @@ export function PlanWorkspace({ ideaId, ideaTitle, onPlanLoaded }: PlanWorkspace
   const [projectionRefreshKey, setProjectionRefreshKey] = React.useState(0);
   const refreshProjection = React.useCallback(() => setProjectionRefreshKey((key) => key + 1), []);
 
+  // Bug fix (user-reported, live): a *separate* key from the one above —
+  // `onPlanActivityChanged` already bumps `projectionRefreshKey` after
+  // every single successful Start/Complete, and `StatusPanel` already
+  // refetches itself for that case via its own `loadCurrentStep()`; tying
+  // its `key` to that same signal would force a wasteful full remount on
+  // every click too. This one bumps only on plan activation (`onActivated`
+  // below) — the one moment a draft's steps can have silently changed
+  // (Edit plan / Not quite — regenerate, both delete+reinsert `plan_steps`
+  // under new row ids) without `StatusPanel` ever having refetched since
+  // its initial mount.
+  const [statusRefreshKey, setStatusRefreshKey] = React.useState(0);
+
+  // Bug fix (user-reported, live): completing the plan's final step left
+  // this component's own cached `plan.status` at `active` until a full
+  // reload — the projection card kept its ongoing-projection framing (AC2),
+  // the energy pop-up stayed mounted (AC1), and the sidebar kept showing
+  // "Active" (AC5) because nothing ever told `App.tsx` to re-fetch
+  // `/api/plans`. Flipping `plan.status` here locally fixes the first two
+  // immediately; re-using `onPlanLoaded` (the same hook `App.tsx` already
+  // bumps `plansRefreshKey` from on the initial load) fixes the sidebar
+  // without adding a second refresh mechanism. `message` (the completion
+  // chat acknowledgment) is shown the same live way `onStepStarted` already
+  // shows a start acknowledgment — it previously only ever reached the
+  // thread via a later page reload's own history read.
+  const handlePlanCompleted = React.useCallback((message?: ChatMessage) => {
+    setPlan((prev) => {
+      if (!prev || prev.status === 'completed') return prev;
+      const updated: PlanResponse = { ...prev, status: 'completed' };
+      onPlanLoadedRef.current?.(updated);
+      return updated;
+    });
+    if (message) setIncomingMessage(message);
+  }, []);
+
   return (
     // Bug fix (user-reported): "the chat should have the full height of the
     // window" — `sm:h-full sm:min-h-0` give the desktop layout a definite
@@ -221,46 +335,90 @@ export function PlanWorkspace({ ideaId, ideaTitle, onPlanLoaded }: PlanWorkspace
           {t('loadFailed')}
         </p>
       ) : !plan ? (
-        // Spec 2.12 AC2: the same determinate-bar/stage-text pattern as idea
-        // generation (`IdeasPanel.tsx`) replaces the old indeterminate
-        // spinner — visible from first paint, jumps to 100% the instant the
-        // request settles, right before the plan itself replaces this view.
-        // User-reported follow-up: now a centered, backdropped modal (same
-        // `shadcn-glass-ui` Dialog pattern as `PlanActivationPanel`'s review)
-        // instead of inline page content, so the rest of the page is blocked
-        // while the plan is being created — same as that dialog. No close
-        // affordance: there is nothing safe to cancel back to mid-creation.
-        <Dialog open onOpenChange={() => undefined}>
-          {/* User-reported follow-up: same `--modal-bg` override as
-           * `PlanActivationPanel`'s review dialog — a solid card instead of
-           * the library's glass/translucent default. */}
-          <DialogContent
-            showCloseButton={false}
-            className="flex flex-col items-center gap-3 text-center [--modal-bg:var(--card)]"
-          >
-            <DialogHeader className="items-center text-center">
-              <DialogTitle>{t('loading')}</DialogTitle>
-            </DialogHeader>
-            <div className="flex w-full flex-col gap-2" aria-live="polite" role="status">
-              <DeterminateProgressBar percent={progress} label={t('loading')} />
-              <p className="text-xs text-muted-foreground">{t('loadingHint')}</p>
-            </div>
-          </DialogContent>
-        </Dialog>
+        // Bug fix (user-reported, live): the skeleton renders immediately
+        // (not delayed) — a plan switch that resolves within
+        // `LOADING_MODAL_DELAY_MS` (the common case, re-fetching an
+        // already-existing plan) never shows the *modal* below at all
+        // (which used to flash on every switch regardless of how fast it
+        // actually resolved), but a brief skeleton frame either way reads
+        // as normal loading, not a jarring pop-in.
+        <>
+          <WorkspaceSkeleton />
+          {showLoadingModal ? (
+            // Spec 2.12 AC2: the same determinate-bar/stage-text pattern as
+            // idea generation (`IdeasPanel.tsx`) replaces the old
+            // indeterminate spinner — visible from first paint, jumps to
+            // 100% the instant the request settles, right before the plan
+            // itself replaces this view. User-reported follow-up: now a
+            // centered, backdropped modal (same `shadcn-glass-ui` Dialog
+            // pattern as `PlanActivationPanel`'s review) instead of inline
+            // page content, so the rest of the page is blocked while the
+            // plan is being created — same as that dialog. No close
+            // affordance: there is nothing safe to cancel back to
+            // mid-creation.
+            <Dialog open onOpenChange={() => undefined}>
+              {/* `popup-glass-strong` (`index.css`, user-reported, live,
+               * round 3 — see its own doc comment there for why this is a
+               * plain hand-written class, not a Tailwind arbitrary-value
+               * one). `WorkspaceSkeleton` above (rendered behind this
+               * Dialog, same DOM position either way) is what gives its
+               * backdrop-blur real boxes to soften. `border
+               * shadow-[var(--shadow)]` (user-reported, live, explicit
+               * follow-up): a visible outline around the panel itself —
+               * this app's own `Card` component's exact recipe
+               * (`card.tsx`). */}
+              <DialogContent
+                showCloseButton={false}
+                className="popup-glass-strong flex flex-col items-center gap-3 border text-center shadow-[var(--shadow)]"
+              >
+                <DialogHeader className="items-center text-center">
+                  <DialogTitle>{t('loading')}</DialogTitle>
+                </DialogHeader>
+                <div className="flex w-full flex-col gap-2" aria-live="polite" role="status">
+                  <DeterminateProgressBar percent={progress} label={t('loading')} />
+                  <p className="text-xs text-muted-foreground">{t('loadingHint')}</p>
+                </div>
+              </DialogContent>
+            </Dialog>
+          ) : null}
+        </>
       ) : (
         <div className="flex flex-col gap-4 sm:h-full sm:min-h-0">
           {/* Story 3.2 (AD-14): the draft review/confirm/modify/reject panel
            * — only a `draft` plan needs human confirmation before it can
            * become `active`; once confirmed/already active, it's gone. */}
           {plan.status === 'draft' ? (
-            <PlanActivationPanel planId={plan.id} onActivated={(activatedPlan) => setPlan(activatedPlan)} />
+            <PlanActivationPanel
+              planId={plan.id}
+              onActivated={(activatedPlan) => {
+                setPlan(activatedPlan);
+                // Bug fix (user-reported, live): "I asked the AI to change
+                // the plan [during review, via Edit plan / Not quite —
+                // regenerate], then approved — the steps the user sees
+                // must be automatically updated, not still show the old
+                // plan." `StatusPanel` fetches `current-step` once on mount
+                // and never again on its own; editing or regenerating the
+                // draft deletes and reinserts `plan_steps` with brand-new
+                // row ids, but `StatusPanel` kept showing the *original*
+                // draft's steps (fetched before the user ever opened the
+                // review) straight through confirmation. Clicking Start/
+                // Mark-as-done then sent that stale, no-longer-current
+                // step id, which the server correctly 409'd. Bumping
+                // `statusRefreshKey` forces `StatusPanel` to remount and
+                // refetch the real, final steps.
+                setStatusRefreshKey((key) => key + 1);
+                refreshProjection();
+              }}
+            />
           ) : null}
           {/* Story 4.1 (AC, follow-up): the energy pop-up — mounted here
            * (not a permanent status-column control) so it only ever exists
            * on the plan-workspace route, never during intake or ideas; a
            * Radix dialog portals itself regardless of where it sits in this
-           * tree, so its position here doesn't affect layout. */}
-          <EnergyCheckInPopup planId={plan.id} onCheckInRecorded={refreshProjection} />
+           * tree, so its position here doesn't affect layout.
+           * Story 4.5 (AC1): never shown for a completed plan — there is
+           * nothing left to check in about. */}
+          {plan.status !== 'completed' ? <EnergyCheckInPopup planId={plan.id} onCheckInRecorded={refreshProjection} /> : null}
           {/* 2.9 AC: layout-preview.html's own layout — status column beside
            * the chat, side by side, on a desktop width; only a narrow
            * screen stacks the status panel above the chat as a compact
@@ -274,11 +432,33 @@ export function PlanWorkspace({ ideaId, ideaTitle, onPlanLoaded }: PlanWorkspace
              * height, while the chat column (no override) stretches to the
              * row's full height. */}
             <div className="flex flex-col gap-4 sm:w-64 sm:shrink-0 sm:self-start">
+              {/* Bug fix (user-reported, live): `key` forces a fresh mount/
+               * fetch on plan activation (`statusRefreshKey`, bumped only
+               * from `onActivated` above, never on every ordinary step
+               * action) — otherwise `current-step` is fetched once on
+               * mount and never again on its own, so editing or
+               * regenerating the draft during review (new `plan_steps`
+               * rows, same `plan.id`) left this showing the *original*
+               * draft's steps straight through confirmation.
+               *
+               * Bug fix (found while fixing the above): a bare number
+               * here collided with `ProjectionCard`'s own bare-number
+               * `key` below — `statusRefreshKey` and `projectionRefreshKey`
+               * both start at 0 and both get bumped together by
+               * `onActivated`, so the two (different-typed!) sibling
+               * elements ended up sharing the literal key `1`. React's
+               * sibling key-matching doesn't exempt same-key-different-type
+               * elements — it genuinely duplicated `StatusPanel` on screen
+               * (confirmed live: "two children with the same key" warning,
+               * both the old and new instance visible at once). Each gets
+               * its own namespaced string now. */}
               <StatusPanel
+                key={`status-${statusRefreshKey}`}
                 planId={plan.id}
                 ideaTitle={ideaTitle}
                 planStatus={plan.status}
                 onStepStarted={setIncomingMessage}
+                onPlanCompleted={handlePlanCompleted}
                 onPlanActivityChanged={refreshProjection}
               />
               {/* Code Map: "projection card extension point (a slot in the
@@ -287,7 +467,7 @@ export function PlanWorkspace({ ideaId, ideaTitle, onPlanLoaded }: PlanWorkspace
                * unchanged. `key` forces a fresh mount/fetch on the shared
                * refresh signal above (item 2) — no internal change to
                * `ProjectionCard` itself needed. */}
-              <ProjectionCard key={projectionRefreshKey} planId={plan.id} />
+              <ProjectionCard key={`projection-${projectionRefreshKey}`} planId={plan.id} planStatus={plan.status} />
             </div>
             <div className="flex min-h-0 flex-1 flex-col">
               {/* Story 5.2/5.3: `MessageCost` + `MessageFeedback` registered

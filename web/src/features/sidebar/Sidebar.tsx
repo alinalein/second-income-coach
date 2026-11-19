@@ -117,11 +117,26 @@ function isActivePlanRoute(activeRoute: SidebarActiveRoute, ideaId: string): boo
 }
 
 /**
- * 2.9 AC: "each entry is one idea with a plan ... the active plan is
- * marked, paused plans are dimmed." Two independent markings on the same
- * row: `aria-current` (this is the view currently open) vs. the
- * status-derived style (this plan itself is `active`/`paused` server-side,
- * regardless of which view is open right now).
+ * Story 2.9 AC (updated, user-reported): "no 'Active'/'Paused' badges and no
+ * dimming" — removed entirely (they used to mark the active plan and dim a
+ * paused one). Only the neutral "Completed" label (Story 4.5) stays. Order
+ * is the list's own prop order (sorted server-side by creation date — see
+ * `createPlansRouter`'s `GET /`), never re-derived here.
+ *
+ * Bug fix (user-reported, live): the label used to sit inline right after
+ * the title, so a row with one (or a different label) truncated the title
+ * at a different width than a row without — a visible shift whenever a
+ * plan's own status changed. The label now lives in its own fixed-width
+ * slot (`w-24`, rendered empty rather than omitted when there's no label),
+ * so every row's title truncates at the exact same width regardless of
+ * status, and the row's own height never changes either way (`Button`'s
+ * `size="sm"` already fixes that via `h-9`).
+ *
+ * Bug fix (user-reported, live): "the selection change should animate
+ * smoothly, respecting reduced motion" — `Button`'s own base class already
+ * carries `transition-colors` (Tailwind's default 150ms), which already
+ * animates the `ghost` -> `accent` swap below; `motion-reduce:transition-none`
+ * is the one addition needed to turn that off under reduced-motion.
  */
 function MyPlansList({
   plans,
@@ -147,12 +162,13 @@ function MyPlansList({
             variant={isActivePlanRoute(activeRoute, entry.ideaId) ? 'accent' : 'ghost'}
             size="sm"
             aria-current={isActivePlanRoute(activeRoute, entry.ideaId) ? 'page' : undefined}
-            className={`w-full justify-start gap-2 ${entry.status === 'paused' ? 'opacity-60' : ''}`}
+            className="w-full justify-start gap-2 motion-reduce:transition-none"
             onClick={() => onSelect(entry)}
           >
-            <span className="truncate">{entry.ideaTitle}</span>
-            {entry.status === 'active' ? <Badge variant="default">{t('myPlans.activeStatus')}</Badge> : null}
-            {entry.status === 'paused' ? <Badge variant="muted">{t('myPlans.pausedStatus')}</Badge> : null}
+            <span className="truncate flex-1 text-left">{entry.ideaTitle}</span>
+            <span className="flex w-24 shrink-0 justify-end">
+              {entry.status === 'completed' ? <Badge variant="outline">{t('myPlans.completedStatus')}</Badge> : null}
+            </span>
           </Button>
         </li>
       ))}

@@ -64,14 +64,18 @@ export type StartStepResponse = z.infer<typeof startStepResponseSchema>;
  * AC: "`complete_step` on the final step ... the plan's status becomes
  * `completed`, with its own completion acknowledgment distinct from a
  * per-step one" — `planCompleted` is the discriminator the caller (route or
- * agent) uses to pick which acknowledgment applies; this schema carries no
- * acknowledgment text itself (Design Notes: UI-button acknowledgments are
- * rendered client-side via i18n, chat acknowledgments are composed by the
- * model from this structured result, guarded by the AD-12 check).
+ * agent) uses to pick which acknowledgment applies.
+ *
+ * Story 4.5 (AC3): `chatMessage` mirrors `startStepResponseSchema`'s own
+ * field exactly — present only when `planCompleted` is true and the route's
+ * own one direct, non-agentic model call produced a completion message that
+ * passed moderation/guilt-language checks; absent (not an error) on any
+ * model-call failure/flag/timeout, or whenever this wasn't the final step.
  */
 export const completeStepResponseSchema = z.object({
   step: planStepResponseSchema,
   planCompleted: z.boolean(),
+  chatMessage: chatMessageSchema.optional(),
 });
 
 export type CompleteStepResponse = z.infer<typeof completeStepResponseSchema>;

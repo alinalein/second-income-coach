@@ -34,9 +34,21 @@ export const projectionDataSchema = z.object({
    * (the plan's current step is its last, or the plan has no current step
    * at all e.g. already `completed`) — `get_current_step`'s own
    * `next === null` cases (AD-4: this reuses that same read, never a second
-   * steps-reading path).
+   * steps-reading path). Kept for other consumers; `ProjectionCard.tsx`
+   * itself no longer reads its `title` (see `nextStepEstimate` below).
    */
   unlockedOpportunity: unlockedOpportunitySchema.nullable(),
+  /**
+   * Bug fix (user-reported, live): "do NOT show the next step's title in
+   * the 'at this pace' line — instead show the value the next step
+   * unlocks, computed deterministically with the same `computeProjection`
+   * but with the next step counted as completed." Same raw minor-units +
+   * currency shape as `estimate` (conversion happens client-side, same as
+   * that field) — `null` under the exact same condition as
+   * `unlockedOpportunity` (no next step: last step, completed plan, or
+   * draft with no current step at all).
+   */
+  nextStepEstimate: moneySchema.nullable().default(null),
 });
 
 export type ProjectionData = z.infer<typeof projectionDataSchema>;

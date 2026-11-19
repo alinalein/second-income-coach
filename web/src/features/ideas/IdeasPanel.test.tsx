@@ -348,8 +348,14 @@ describe('IdeasPanel (Spec 2.12 AC1: auto-generate mount has no idle frame)', ()
     render(<IdeasPanel autoGenerate />);
 
     // Synchronous, first-paint assertions — no idle/enabled frame ever
-    // exists for React to flush before this.
-    const generateButton = screen.getByRole('button', { name: 'Generating…' });
+    // exists for React to flush before this. Bug fix (user-reported, live):
+    // the generating state is now a blocking modal (same pattern as
+    // `PlanWorkspace.tsx`'s own plan-creation dialog) — Radix marks the
+    // page content behind it `aria-hidden`, including this button, so it's
+    // queried with `{ hidden: true }` (include elements outside the
+    // accessibility tree) rather than asserting it's accessible right now;
+    // it genuinely isn't, by design, while the modal is open.
+    const generateButton = screen.getByRole('button', { name: 'Generating…', hidden: true });
     expect(generateButton).toBeDisabled();
     const statusRegion = screen.getByRole('status');
     expect(statusRegion).toHaveTextContent('Reviewing your answers…');

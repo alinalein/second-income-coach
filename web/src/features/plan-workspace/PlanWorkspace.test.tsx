@@ -1,6 +1,6 @@
 import { StrictMode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, cleanup, waitFor, within } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react';
 import type { PlanResponse, CurrentStepResponse, ProjectionResponse } from '@app/shared';
 import { PlanWorkspace } from './PlanWorkspace';
 
@@ -14,9 +14,9 @@ function mockFetch(responses: Record<string, Response | (() => Response)>) {
   });
 }
 
-function fakePlan(): PlanResponse {
+function fakePlan(overrides: Partial<PlanResponse> = {}): PlanResponse {
   const now = new Date().toISOString();
-  return { id: 'plan-1', ideaId: 'idea-1', status: 'draft', threadId: 'plan:plan-1', createdAt: now, updatedAt: now };
+  return { id: 'plan-1', ideaId: 'idea-1', status: 'draft', threadId: 'plan:plan-1', createdAt: now, updatedAt: now, ...overrides };
 }
 
 // Story 4.4: `ProjectionCard` now fills the sidebar's projection extension
@@ -24,7 +24,7 @@ function fakePlan(): PlanResponse {
 // `current-step` read — mocked here so these pre-existing (Story 3.1)
 // tests keep passing unchanged.
 function fakeProjection(): ProjectionResponse {
-  return { estimate: { amountMinorUnits: 0, currencyCode: 'EUR' }, currency: 'EUR', progressRatio: 0, unlockedOpportunity: null };
+  return { estimate: { amountMinorUnits: 0, currencyCode: 'EUR' }, currency: 'EUR', progressRatio: 0, unlockedOpportunity: null, nextStepEstimate: null };
 }
 
 // Story 4.1 (AC, follow-up): `EnergyCheckInPopup` now also fetches this on
@@ -45,7 +45,7 @@ afterEach(() => {
 describe('PlanWorkspace (AC: lazy create-or-fetch wires ChatThread to the plan thread)', () => {
   it('fetches the plan via POST /api/plans/select/:ideaId and points ChatThread at /api/plans/:planId/messages', async () => {
     const plan = fakePlan();
-    const currentStep: CurrentStepResponse = { current: null, next: null, gapDetected: false, missedDays: 0, checkedInToday: false };
+    const currentStep: CurrentStepResponse = { current: null, next: null, gapDetected: false, missedDays: 0, checkedInToday: false, completion: null };
     const fetchMock = mockFetch({
       '/api/plans/select/idea-1': () => new Response(JSON.stringify(plan), { status: 200 }),
       '/api/plans/plan-1/current-step': () => new Response(JSON.stringify(currentStep), { status: 200 }),
@@ -75,7 +75,7 @@ describe('PlanWorkspace (AC: lazy create-or-fetch wires ChatThread to the plan t
   // cleanup+re-setup) let both invocations fire a real network request.
   it('calls POST /api/plans/select/:ideaId exactly once under StrictMode synthetic double-effect', async () => {
     const plan = fakePlan();
-    const currentStep: CurrentStepResponse = { current: null, next: null, gapDetected: false, missedDays: 0, checkedInToday: false };
+    const currentStep: CurrentStepResponse = { current: null, next: null, gapDetected: false, missedDays: 0, checkedInToday: false, completion: null };
     const fetchMock = mockFetch({
       '/api/plans/select/idea-1': () => new Response(JSON.stringify(plan), { status: 200 }),
       '/api/plans/plan-1/current-step': () => new Response(JSON.stringify(currentStep), { status: 200 }),
@@ -120,7 +120,7 @@ describe('PlanWorkspace (AC: lazy create-or-fetch wires ChatThread to the plan t
   // re-trigger that same refresh once the plan data is actually ready.
   it('calls onPlanLoaded with the resolved plan once POST /select/:ideaId succeeds', async () => {
     const plan = fakePlan();
-    const currentStep: CurrentStepResponse = { current: null, next: null, gapDetected: false, missedDays: 0, checkedInToday: false };
+    const currentStep: CurrentStepResponse = { current: null, next: null, gapDetected: false, missedDays: 0, checkedInToday: false, completion: null };
     const fetchMock = mockFetch({
       '/api/plans/select/idea-1': () => new Response(JSON.stringify(plan), { status: 200 }),
       '/api/plans/plan-1/current-step': () => new Response(JSON.stringify(currentStep), { status: 200 }),
@@ -140,6 +140,90 @@ describe('PlanWorkspace (AC: lazy create-or-fetch wires ChatThread to the plan t
   });
 });
 
+// Bug fix (user-reported, live): completing the plan's final step via
+// "Mark as done" left this component's own cached `plan.status` at `active`
+// until a full reload — the projection card kept its ongoing framing, the
+// sidebar kept showing "Active" (nothing re-fetched `/api/plans`), and the
+// completion chat message only appeared after that reload. All three must
+// now update live, from this one click.
+describe('PlanWorkspace (bug fix, live: completing the final step updates everything live, no reload)', () => {
+  it('shows the completion message in chat and relabels the projection card the instant the final step completes', async () => {
+    const plan = fakePlan({ status: 'active' });
+    const step = {
+      id: 'step-1',
+      stepOrder: 0,
+      title: 'Only step',
+      description: ['Do it.'],
+      dayOffset: 0,
+      status: 'current' as const,
+      startedAt: null,
+    };
+    const currentStep: CurrentStepResponse = {
+      current: step,
+      next: null,
+      gapDetected: false,
+      missedDays: 0,
+      checkedInToday: false,
+      completion: null,
+    };
+    const onPlanLoaded = vi.fn();
+    const fetchMock = mockFetch({
+      '/api/plans/select/idea-1': () => new Response(JSON.stringify(plan), { status: 200 }),
+      '/api/plans/plan-1/current-step': () => new Response(JSON.stringify(currentStep), { status: 200 }),
+      '/api/plans/plan-1/projection': () => new Response(JSON.stringify(fakeProjection()), { status: 200 }),
+      '/api/plans/plan-1/messages': () => new Response(JSON.stringify({ messages: [] }), { status: 200 }),
+      '/api/plans/plan-1/steps/step-1/complete': () =>
+        new Response(
+          JSON.stringify({
+            step: { ...step, status: 'completed' },
+            planCompleted: true,
+            chatMessage: { id: 'msg-1', role: 'assistant', kind: 'message', content: 'You finished the whole plan — nice work! 🎉', createdAt: new Date().toISOString() },
+          }),
+          { status: 200 },
+        ),
+      ...CHECK_IN_STATUS_ANSWERED,
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<PlanWorkspace ideaId="idea-1" ideaTitle="Resell thrifted clothing" onPlanLoaded={onPlanLoaded} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Mark as done' }));
+
+    expect(await screen.findByText('You finished the whole plan — nice work! 🎉')).toBeInTheDocument();
+    expect(await screen.findByText('Result')).toBeInTheDocument();
+    await waitFor(() => expect(onPlanLoaded).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'completed' })));
+  });
+});
+
+// Story 4.5 (AC1): the energy pop-up is not shown for a completed plan —
+// there's nothing left to check in about.
+describe('PlanWorkspace (Story 4.5 AC1: energy pop-up suppressed for a completed plan)', () => {
+  it('never fetches check-in-status (never mounts the pop-up) when the plan is completed', async () => {
+    const plan = fakePlan({ status: 'completed' });
+    const currentStep: CurrentStepResponse = {
+      current: null,
+      next: null,
+      gapDetected: false,
+      missedDays: 0,
+      checkedInToday: false,
+      completion: { completedAt: new Date().toISOString(), completedSteps: 3 },
+    };
+    const fetchMock = mockFetch({
+      '/api/plans/select/idea-1': () => new Response(JSON.stringify(plan), { status: 200 }),
+      '/api/plans/plan-1/current-step': () => new Response(JSON.stringify(currentStep), { status: 200 }),
+      '/api/plans/plan-1/projection': () => new Response(JSON.stringify(fakeProjection()), { status: 200 }),
+      '/api/plans/plan-1/messages': () => new Response(JSON.stringify({ messages: [] }), { status: 200 }),
+      ...CHECK_IN_STATUS_ANSWERED,
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<PlanWorkspace ideaId="idea-1" ideaTitle="Resell thrifted clothing" />);
+
+    expect(await screen.findByText('Plan completed')).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/api/plans/check-in-status'))).toBe(false);
+  });
+});
+
 // Spec 2.12 AC2: the old indeterminate spinner is replaced by the same
 // determinate-bar/stage-text pattern idea generation uses — visible from
 // first paint while `create_plan` is in flight, forced to 100% the instant
@@ -147,7 +231,7 @@ describe('PlanWorkspace (AC: lazy create-or-fetch wires ChatThread to the plan t
 describe('PlanWorkspace (Spec 2.12 AC2: determinate bar while the plan is created)', () => {
   it('shows a determinate progress bar at 0% while select is in flight, then reveals the plan', async () => {
     const plan = fakePlan();
-    const currentStep: CurrentStepResponse = { current: null, next: null, gapDetected: false, missedDays: 0, checkedInToday: false };
+    const currentStep: CurrentStepResponse = { current: null, next: null, gapDetected: false, missedDays: 0, checkedInToday: false, completion: null };
     let resolveSelect!: (value: Response) => void;
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = typeof input === 'string' ? input : input.toString();
@@ -170,14 +254,62 @@ describe('PlanWorkspace (Spec 2.12 AC2: determinate bar while the plan is create
 
     render(<PlanWorkspace ideaId="idea-1" ideaTitle="Resell thrifted clothing" />);
 
+    // Bug fix (user-reported, live): the modal itself now only appears
+    // after `LOADING_MODAL_DELAY_MS` (a fast, already-existing-plan fetch
+    // never shows it at all) — by the time it does, for a genuinely slow
+    // request like this one, a little real progress may already have
+    // ticked. The bar still starting low and *not yet finished* (not
+    // already at 100%) is what this AC is actually about.
     const statusRegion = await screen.findByRole('status');
     const progressBar = within(statusRegion).getByRole('progressbar');
-    expect(progressBar).toHaveAttribute('aria-valuenow', '0');
+    expect(Number(progressBar.getAttribute('aria-valuenow'))).toBeLessThan(100);
 
     resolveSelect(new Response(JSON.stringify(plan), { status: 200 }));
 
     await waitFor(() => expect(screen.queryByRole('progressbar')).not.toBeInTheDocument());
     expect(await screen.findByText('Your plan for Resell thrifted clothing')).toBeInTheDocument();
+  });
+});
+
+// Bug fix (user-reported, live): "switching between plans flashes the
+// 'creating your plan' progress bar for a split second — I want a smooth
+// transition, not that modal popping in between." `POST /select/:ideaId`
+// resolves near-instantly for an already-existing plan (the common case
+// when switching, unlike selecting a brand-new idea) — the modal must
+// never appear at all for that case, not even briefly.
+describe('PlanWorkspace (bug fix, live: a fast plan switch never flashes the loading modal)', () => {
+  it('never shows the loading modal when select resolves within the delay window', async () => {
+    const plan = fakePlan();
+    const currentStep: CurrentStepResponse = { current: null, next: null, gapDetected: false, missedDays: 0, checkedInToday: false, completion: null };
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      // Resolves on the microtask queue — real timers win every race
+      // against it (microtasks always run before the next macrotask), so
+      // this is deterministic under any machine load, unlike an artificial
+      // real-timer delay would be. Simulates the common "already exists"
+      // case, not a genuine first-time creation.
+      if (url.includes('/api/plans/select/idea-1')) return Promise.resolve(new Response(JSON.stringify(plan), { status: 200 }));
+      const match = [
+        ['/api/plans/plan-1/current-step', currentStep],
+        ['/api/plans/plan-1/messages', { messages: [] }],
+        ['/api/plans/plan-1/activate', { review: null }],
+        ['/api/plans/check-in-status', { answeredToday: true }],
+        ['/api/plans/plan-1/projection', fakeProjection()],
+      ].find(([key]) => url.includes(key as string));
+      if (!match) throw new Error(`Unmocked fetch: ${url}`);
+      return Promise.resolve(new Response(JSON.stringify(match[1]), { status: 200 }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<PlanWorkspace ideaId="idea-1" ideaTitle="Resell thrifted clothing" />);
+
+    expect(await screen.findByText('Your plan for Resell thrifted clothing')).toBeInTheDocument();
+    // Scoped to the loading modal specifically (never present at all once
+    // the real content has rendered) — a bare `progressbar` role query
+    // would also match `ProjectionCard`'s own (unrelated) progress-bar
+    // fill once its data loads, which has nothing to do with this fix.
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.queryByText('Setting up your plan…')).not.toBeInTheDocument();
   });
 });
 
@@ -190,7 +322,7 @@ describe('PlanWorkspace (Spec 2.12 AC2: determinate bar while the plan is create
 describe('PlanWorkspace (Spec 2.12 AC6: chat column fills height, status column keeps its own)', () => {
   it('applies sm:self-start to the status column only, not the chat column', async () => {
     const plan = fakePlan();
-    const currentStep: CurrentStepResponse = { current: null, next: null, gapDetected: false, missedDays: 0, checkedInToday: false };
+    const currentStep: CurrentStepResponse = { current: null, next: null, gapDetected: false, missedDays: 0, checkedInToday: false, completion: null };
     const fetchMock = mockFetch({
       '/api/plans/select/idea-1': () => new Response(JSON.stringify(plan), { status: 200 }),
       '/api/plans/plan-1/current-step': () => new Response(JSON.stringify(currentStep), { status: 200 }),
@@ -210,5 +342,79 @@ describe('PlanWorkspace (Spec 2.12 AC6: chat column fills height, status column 
     const chatColumn = statusColumn.nextElementSibling as HTMLElement;
     expect(chatColumn.className).not.toContain('self-start');
     expect(chatColumn.className).toContain('flex-1');
+  });
+});
+
+// Bug fix (user-reported, live): "I asked the AI to change the plan
+// [during review], then approved, then wanted to start the first item —
+// but the first (and later) items weren't updated accordingly." Root cause:
+// `StatusPanel` fetches `current-step` once on mount and never refetches on
+// its own; editing/regenerating the draft during review deletes and
+// reinserts `plan_steps` under new row ids, but `StatusPanel` had already
+// fetched the *original* draft's steps before the review ever opened.
+// Confirming then left it showing stale step data — clicking Start sent a
+// step id the server no longer recognized as current (409).
+describe('PlanWorkspace (bug fix, live: confirming activation refreshes the status panel with the final steps)', () => {
+  it('shows the post-regenerate step, not the original draft\'s, once the plan is confirmed', async () => {
+    const draftPlan = fakePlan({ status: 'draft' });
+    const activePlan = fakePlan({ status: 'active' });
+    const originalStep: CurrentStepResponse = {
+      current: { id: 'step-original', stepOrder: 0, title: 'Original first step', description: ['Do the old thing.'], dayOffset: 0, status: 'current', startedAt: null },
+      next: null,
+      gapDetected: false,
+      missedDays: 0,
+      checkedInToday: false,
+      completion: null,
+    };
+    const regeneratedStep: CurrentStepResponse = {
+      current: { id: 'step-regenerated', stepOrder: 0, title: 'Regenerated first step', description: ['Do the new thing.'], dayOffset: 0, status: 'current', startedAt: null },
+      next: null,
+      gapDetected: false,
+      missedDays: 0,
+      checkedInToday: false,
+      completion: null,
+    };
+    // Deliberately a *different* literal string from `regeneratedStep`'s own
+    // title below — this is what the review modal shows while reviewing,
+    // never what `StatusPanel` is being asserted on, so the two can't be
+    // confused with each other in the assertions below.
+    const review = { plan: draftPlan, steps: [{ id: 'step-regenerated', stepOrder: 0, title: 'Regenerated review step', description: ['Do the new thing.'], dayOffset: 0, status: 'current' as const, startedAt: null }] };
+
+    let currentStepCalls = 0;
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      const method = init?.method ?? 'GET';
+      if (url.includes('/api/plans/select/idea-1')) return Promise.resolve(new Response(JSON.stringify(draftPlan), { status: 200 }));
+      if (url.includes('/current-step')) {
+        currentStepCalls += 1;
+        const body = currentStepCalls === 1 ? originalStep : regeneratedStep;
+        return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+      }
+      if (url.includes('/projection')) return Promise.resolve(new Response(JSON.stringify(fakeProjection()), { status: 200 }));
+      if (url.includes('/messages')) return Promise.resolve(new Response(JSON.stringify({ messages: [] }), { status: 200 }));
+      if (url.includes('/activate/confirm')) return Promise.resolve(new Response(JSON.stringify(activePlan), { status: 200 }));
+      if (url.endsWith('/activate') && method === 'POST') return Promise.resolve(new Response(JSON.stringify(review), { status: 200 }));
+      if (url.endsWith('/activate') && method === 'GET') return Promise.resolve(new Response(JSON.stringify({ review: null }), { status: 200 }));
+      if (url.includes('/check-in-status')) return Promise.resolve(new Response(JSON.stringify({ answeredToday: true }), { status: 200 }));
+      throw new Error(`Unmocked fetch: ${method} ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<PlanWorkspace ideaId="idea-1" ideaTitle="Resell thrifted clothing" />);
+
+    // The review auto-opens (Story 4.5 live fix) showing the regenerated
+    // draft's own step — `StatusPanel`, mounted underneath it, still shows
+    // the *original* step it fetched before the review ever ran.
+    expect(await screen.findByText('Original first step')).toBeInTheDocument();
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(/Regenerated review step/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm & activate' }));
+
+    // Bug fix: `StatusPanel` must refetch and show the real, final step —
+    // never stay stuck on the one it fetched before the review ran.
+    expect(await screen.findByText('Regenerated first step')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText('Original first step')).not.toBeInTheDocument());
+    expect(currentStepCalls).toBe(2);
   });
 });

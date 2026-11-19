@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, cleanup } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
 import type { PlanStepResponse } from '@app/shared';
 import { StepActions } from './StepActions';
 
@@ -52,5 +52,34 @@ describe('StepActions (bug fix: reserved action slot, no height jump on Start)',
     expect(startSlotAfter).toBeDisabled();
     expect(startSlotAfter.className).toBe(classesBefore);
     expect(screen.getByRole('button', { name: 'Mark as done' })).not.toBeDisabled();
+  });
+});
+
+// Bug fix (user-reported, live): "I wanted to start a step or mark it
+// finished and it showed an error" — a 409 (this `step` is no longer the
+// plan's own current step, e.g. moved on from another tab/action) used to
+// just show "Something went wrong," and every retry hit the exact same
+// stale `stepId`, 409ing forever with no way out short of a full reload.
+// `onStepChanged()` (the same refetch a success already triggers) now
+// fires on a 409 too, so the view self-corrects to the real current step.
+describe('StepActions (bug fix, live: a 409 self-corrects instead of a dead end)', () => {
+  it.each([
+    ['start', 'Start this step', '/start'],
+    ['complete', 'Mark as done', '/complete'],
+  ] as const)('on %s, a 409 refetches the current step instead of showing "Something went wrong"', async (_action, buttonName, path) => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url.includes(path)) return Promise.resolve(new Response(JSON.stringify({ error: 'Step is not this plan\'s current step' }), { status: 409 }));
+      throw new Error(`Unmocked fetch: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const onStepChanged = vi.fn();
+
+    render(<StepActions planId="plan-1" step={fakeStep()} onStepChanged={onStepChanged} />);
+
+    fireEvent.click(screen.getByRole('button', { name: buttonName }));
+
+    await waitFor(() => expect(onStepChanged).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText('Something went wrong. Please try again.')).not.toBeInTheDocument();
   });
 });

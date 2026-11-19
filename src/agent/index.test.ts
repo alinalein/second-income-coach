@@ -241,6 +241,48 @@ describe('createCoachAgent (hook integration: personality flows from user_settin
 });
 
 /**
+ * Story 4.5 (AC4): "add the note to the plan chat's system context that the
+ * plan is completed". End-to-end via the `db` the outer node reads
+ * `plans.status` from (same precedent as the personality test above), not
+ * just a pure helper — the real risk is in the outer-node -> context ->
+ * inner-middleware wiring itself.
+ */
+describe('createCoachAgent (hook integration: Story 4.5 AC4 — completed-plan system note)', () => {
+  it.each([
+    ['a completed plan thread', 'completed', true],
+    ['an active plan thread', 'active', false],
+  ] as const)('%s: the system prompt includes the plan-completed note = %s', async (_label, planStatus, shouldInclude) => {
+    const model = fakeModel().respond(new AIMessage('Sure, happy to help!'));
+    const dbWithPlanStatus = {
+      select: () => ({
+        from: () => ({ where: () => ({ limit: () => Promise.resolve([{ personality: undefined, model: null, status: planStatus }]) }) }),
+      }),
+    } as unknown as CreateCoachAgentDeps['db'];
+    const agent = createCoachAgent({
+      env: { OPENROUTER_API_KEY: 'test-key', MISTRAL_API_KEY: 'test-key', IDEAS_PER_BATCH: 2, DAILY_SEARCH_BUDGET: 500 },
+      checkpointer: new MemorySaver(),
+      db: dbWithPlanStatus,
+      webSearchTool: {} as never,
+      model,
+      classify: async () => ({}),
+    });
+
+    await agent.invoke(
+      { messages: [new HumanMessage('What was my second step?')] },
+      { configurable: { thread_id: 'plan:plan-1', userId: 'user-1' } },
+    );
+
+    const [call] = model.calls;
+    const systemMessage = call?.messages.find((message) => message._getType() === 'system');
+    if (shouldInclude) {
+      expect(systemMessage?.text).toContain('already completed');
+    } else {
+      expect(systemMessage?.text).not.toContain('already completed');
+    }
+  });
+});
+
+/**
  * Story 5.3b (AD-2) I/O matrix: "Later turn, same topic -> system prompt
  * includes the stored memory" / "Later turn, different user -> no memory
  * surfaced (no cross-user leak)". `search` is faked to return a result only

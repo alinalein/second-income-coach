@@ -234,6 +234,10 @@ export function buildStartStepAckPrompt(
           styleHint,
           ...noRepeatLines,
           'Erwähne nichts Verpasstes, keine Verzögerung und keine frühere Pause — nur diesen Start selbst.',
+          // User-reported (live): "add some emojis to messages after the
+          // user clicks start" — one, occasionally two, never more; never a
+          // substitute for the actual words.
+          'Du darfst ein passendes Emoji einbauen (z. B. 👍, 💪, ✅) — höchstens eins, gelegentlich zwei, nie mehr, und nie anstelle echter Worte.',
           'Antworte nur mit der Bestätigung selbst, ohne Anführungszeichen oder zusätzlichen Text.',
         ]
       : [
@@ -246,6 +250,10 @@ export function buildStartStepAckPrompt(
           styleHint,
           ...noRepeatLines,
           'Never mention anything missed, any delay, or a past pause — only this start itself.',
+          // User-reported (live): "add some emojis to messages after the
+          // user clicks start" — one, occasionally two, never more; never a
+          // substitute for the actual words.
+          'You may include one fitting emoji (e.g. 👍, 💪, ✅) — at most one, occasionally two, never more, and never in place of real words.',
           'Reply with only the acknowledgment itself, no quotes or extra text.',
         ];
 
@@ -318,6 +326,147 @@ async function buildStartStepAckMessage(
     });
   } catch (error) {
     console.warn('[plans] start_step acknowledgment failed/timed out, omitting it:', {
+      threadId,
+      error: (error as Error)?.message,
+    });
+    return undefined;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Story 4.5 (AC3): marks a persisted `AIMessage` as this route's own
+ * plan-completion acknowledgment — its own tag, distinct from
+ * `STEP_START_ACK_KWARG`, even though nothing currently re-reads it (a plan
+ * only completes once, so there's no "recent completion acks" lookup to
+ * filter by it the way `getRecentStartStepAckTexts` does for start acks). */
+const PLAN_COMPLETION_ACK_KWARG = 'planCompletionAck';
+
+/**
+ * AC3 (4.5): the exact same direct, non-agentic, one-shot pattern as
+ * `buildStartStepAckPrompt` above (variety rules, no-repeat quoting) —
+ * themed around finishing the whole plan instead of starting one step.
+ * `recentMessages` reuses this thread's own recent *start*-step
+ * acknowledgments (`getRecentStartStepAckTexts`, below) as the "don't repeat
+ * this" context — a plan completes at most once, so there's no prior
+ * completion message of its own to avoid repeating; quoting the thread's
+ * recent tone instead is what AC3's "previous messages passed so it does not
+ * repeat" means here.
+ */
+export function buildPlanCompletionAckPrompt(
+  language: 'de' | 'en',
+  finalStepTitle: string,
+  totalSteps: number,
+  recentMessages: readonly string[],
+  styleHint: string,
+): string {
+  const noRepeatLines =
+    recentMessages.length > 0
+      ? language === 'de'
+        ? [
+            'Frühere kurze Bestätigungen in diesem Chat waren:',
+            ...recentMessages.map((message) => `- "${message}"`),
+            'Verwende weder denselben Satzanfang noch dieselbe Formulierung wie diese.',
+          ]
+        : [
+            'Earlier short acknowledgments in this chat were:',
+            ...recentMessages.map((message) => `- "${message}"`),
+            'Do not reuse their opener or wording.',
+          ]
+      : [];
+
+  // User-reported (live): the first live completion message read as a flat
+  // status recap ("You've completed all 12 steps... that's the whole plan
+  // finished"), not as something encouraging — the "no empty stock phrases"
+  // rule alone pushed the model toward a dry factual summary instead of
+  // genuine warmth with real content behind it. The lines below ask for
+  // both at once: lead with the feeling, then ground it in one concrete
+  // thing they actually did (not just the step/total count).
+  const lines =
+    language === 'de'
+      ? [
+          `Die Person hat gerade den letzten Schritt ihres Plans abgeschlossen ("${finalStepTitle}") — damit ist der ganze Plan mit ${totalSteps} Schritten fertig.`,
+          'Schreibe eine kurze, herzliche Nachricht auf Deutsch, die sich wie eine echte, warme Anerkennung anfühlt — kein trockener Statusbericht ("12 von 12 Schritten erledigt").',
+          'Beginne mit dem Gefühl (Freude, Stolz, Erleichterung), nicht mit einer Aufzählung — und verankere das dann in einer konkreten Sache, die die Person wirklich getan hat, in einfachen eigenen Worten.',
+          'Variiere den Satzanfang — beginne nicht immer gleich.',
+          'Variiere die Länge: oft ein bis zwei Sätze, manchmal drei — nie mehr.',
+          'Keine leeren Floskeln wie "Glückwunsch" oder "super gemacht" ohne eigenen Inhalt dahinter.',
+          styleHint,
+          ...noRepeatLines,
+          'Erwähne einmal, neutral, dass es in der Seitenleiste "Neue Ideen" gibt, falls die Person weitermachen möchte — niemals als Aufforderung oder Druck, nur als Option.',
+          'Keine Schuldzuweisung, kein Druck, keine Dringlichkeit — keine Erwähnung von Streaks, Punkten oder Leveln.',
+          // User-reported (live): "add some emojis" — a touch of warmth,
+          // never a substitute for the actual words.
+          'Du darfst ein oder zwei passende Emojis einbauen (z. B. 🎉, 👏, ✨) — nie mehr, und nie anstelle echter Worte.',
+          'Antworte nur mit der Nachricht selbst, ohne Anführungszeichen oder zusätzlichen Text.',
+        ]
+      : [
+          `The person just completed the final step of their plan ("${finalStepTitle}") — their whole plan, ${totalSteps} steps in total, is now finished.`,
+          'Write a short message in English that feels like a genuine, warm acknowledgment — never a dry status recap ("12 of 12 steps done").',
+          'Lead with the feeling (joy, pride, relief), not a tally — then ground it in one concrete thing they actually did, in plain words of your own.',
+          'Vary the opener — never always start the same way.',
+          'Vary the length: often one or two sentences, sometimes three — never more.',
+          'No empty stock phrases like "congratulations" or "great job" with no real content behind them.',
+          styleHint,
+          ...noRepeatLines,
+          'Mention once, neutrally, that "New ideas" is in the sidebar if they want to keep going — never as a call to action or pressure, just as an option.',
+          'No guilt, no pressure, no urgency — never mention streaks, points, or levels.',
+          // User-reported (live): "add some emojis" — a touch of warmth,
+          // never a substitute for the actual words.
+          'You may include one or two fitting emojis (e.g. 🎉, 👏, ✨) — never more, and never in place of real words.',
+          'Reply with only the message itself, no quotes or extra text.',
+        ];
+
+  return lines.join('\n');
+}
+
+/**
+ * AC3 (4.5): builds the chat acknowledgment for a successful `complete_step`
+ * on the plan's final step, fully fail-open — mirrors
+ * `buildStartStepAckMessage` exactly (AD-11 moderation, AD-12 guilt-language
+ * guard, same bounded one-shot timeout): any error, timeout, or
+ * moderation/guilt-language flag returns `undefined` rather than throwing,
+ * so completion itself is never affected by this best-effort extra.
+ */
+async function buildPlanCompletionAckMessage(
+  model: BaseChatModel,
+  classify: ClassifyText,
+  threadId: string,
+  language: 'de' | 'en',
+  finalStepTitle: string,
+  totalSteps: number,
+  recentMessages: readonly string[],
+  random: () => number = Math.random,
+): Promise<ChatMessage | undefined> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new Error('complete_step ack: exceeded its budget')), START_STEP_ACK_TIMEOUT_MS);
+
+  try {
+    const styleHint = pickStartStepAckStyleHint(language, random);
+    const response = await model.invoke(
+      [new HumanMessage(buildPlanCompletionAckPrompt(language, finalStepTitle, totalSteps, recentMessages, styleHint))],
+      { signal: controller.signal },
+    );
+    const text = (response.text ?? '').trim();
+    if (!text) return undefined;
+
+    // AD-11-equivalent: the same unsafe-output check the agent's own
+    // `afterModel` moderation middleware applies to every reply.
+    const verdict = await evaluateAssistantMessage(text, classify, threadId);
+    if (verdict.action === 'replace') return undefined;
+    // AD-12: this completion message must never slip into guilt-language
+    // phrasing either, even though nothing prompted it to.
+    if (containsGuiltLanguage(text)) return undefined;
+
+    return chatMessageSchema.parse({
+      id: randomUUID(),
+      role: 'assistant',
+      kind: 'message',
+      content: text,
+      createdAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.warn('[plans] complete_step completion acknowledgment failed/timed out, omitting it:', {
       threadId,
       error: (error as Error)?.message,
     });
@@ -481,12 +630,16 @@ export function createPlansRouter({ env, db, agent, model, createDraft, activate
     const userId = req.session.userId!;
 
     try {
+      // Story 2.9 AC (updated): "a stable order that never changes just
+      // because the user switches plans" — sorted by `createdAt` (newest
+      // first), never `updatedAt` (which every activation/pause/step action
+      // touches, and used to reshuffle this list on every switch).
       const rows = await db
         .select({ id: plans.id, ideaId: plans.ideaId, status: plans.status, updatedAt: plans.updatedAt, ideaTitle: ideas.title })
         .from(plans)
         .innerJoin(ideas, eq(ideas.id, plans.ideaId))
         .where(and(eq(plans.userId, userId), ne(ideas.status, 'rejected')))
-        .orderBy(desc(plans.updatedAt));
+        .orderBy(desc(plans.createdAt));
 
       res.json(
         planListResponseSchema.parse({
@@ -710,7 +863,41 @@ export function createPlansRouter({ env, db, agent, model, createDraft, activate
       }
 
       const result = await completeStep(db, planId, stepIdParse.data);
-      res.json(completeStepResponseSchema.parse(result));
+
+      // Story 4.5 (AC3): one direct model call produces the plan's own
+      // completion message, only when this was the final step —
+      // fully fail-open (see `buildPlanCompletionAckMessage`'s own doc
+      // comment), so nothing here can turn a successful completion into an
+      // error response; the fixed `stepActions.planCompletedHint` the UI
+      // already shows regardless is the fallback.
+      let chatMessage: ChatMessage | undefined;
+      if (result.planCompleted) {
+        const threadId = buildPlanThreadId(planId);
+        const replyLanguage = await detectUserReplyLanguage(agent, buildDiscoveryThreadId(userId));
+        const recentAckMessages = await getRecentStartStepAckTexts(agent, threadId, START_STEP_ACK_HISTORY_LIMIT);
+        chatMessage = await buildPlanCompletionAckMessage(
+          model,
+          classify,
+          threadId,
+          replyLanguage,
+          result.step.title,
+          result.step.stepOrder + 1,
+          recentAckMessages,
+        );
+        if (chatMessage) {
+          try {
+            await agent.updateState(
+              { configurable: { thread_id: threadId } },
+              { messages: [new AIMessage({ id: chatMessage.id, content: chatMessage.content, additional_kwargs: { [PLAN_COMPLETION_ACK_KWARG]: true } })] },
+            );
+          } catch (error) {
+            console.error('[plans] complete_step acknowledgment persistence failed:', { userId, planId, error: (error as Error)?.message });
+            chatMessage = undefined;
+          }
+        }
+      }
+
+      res.json(completeStepResponseSchema.parse({ ...result, chatMessage }));
     } catch (error) {
       if (error instanceof StepNotCurrentError) {
         res.status(409).json({ error: 'Step is not this plan\'s current step' });

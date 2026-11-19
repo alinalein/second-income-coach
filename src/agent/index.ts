@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { eq } from 'drizzle-orm';
 import { createAgent, dynamicSystemPromptMiddleware } from 'langchain';
 import { Annotation, END, MessagesAnnotation, START, StateGraph } from '@langchain/langgraph';
 import type { RetryPolicy } from '@langchain/langgraph';
@@ -21,6 +22,8 @@ import { sumTurnUsage, type TurnUsage } from './turn-cost.js';
 import { recallMemories, type MemorySearchStore } from './memory.js';
 import { createSubmitIntakeTool } from '../tools/plain/submit_intake.js';
 import { createGenerateIdeasTool } from '../tools/llm/generate_ideas.js';
+import { derivePlanIdFromThreadId } from '../tools/plain/get_current_step.js';
+import { plans } from '../db/schema/index.js';
 
 // Story 5.1 moved these to `./personality.js` (now backed by the shared
 // `personalitySchema` enum, AD-16) — re-exported so existing importers of
@@ -168,11 +171,33 @@ export function resolveUserId(configurable: Record<string, unknown> | undefined)
 
 /** The per-turn values the outer node resolves from `user_settings` and
  * hands to the inner `createAgent` as middleware context (AD-20: personality
- * for `buildSystemPrompt`, `modelId` for `createModelSelectionMiddleware`). */
+ * for `buildSystemPrompt`, `modelId` for `createModelSelectionMiddleware`).
+ * Story 4.5 (AC4): `planCompleted` is resolved the same per-turn way — from
+ * `plans.status`, keyed off the thread id, whenever this is a plan thread. */
 const agentContextSchema = z.object({
   personality: z.string().optional(),
   modelId: z.string().optional(),
+  planCompleted: z.boolean().optional(),
 });
+
+/**
+ * Story 4.5 (AC4): "add the note ... that the plan is completed, so the
+ * model answers questions about finished steps and does not try to start
+ * steps." The tool-level rejection (`assertPlanActive`, `step-state.ts`)
+ * already blocks `start_step`/`complete_step` on a completed plan either
+ * way — this just stops the model from attempting (and getting a rejected
+ * tool call back) in the first place, and steers it toward answering from
+ * history instead.
+ */
+const PLAN_COMPLETED_SYSTEM_NOTE =
+  'This plan is already completed — every step is finished. Answer questions about it and its completed ' +
+  'steps from the conversation history as usual, but never call start_step or complete_step on it, and never ' +
+  'suggest starting a new step on this plan.';
+
+function withPlanCompletedNote(extraSystemInstruction: string | undefined, planCompleted: boolean | undefined): string | undefined {
+  if (!planCompleted) return extraSystemInstruction;
+  return [extraSystemInstruction, PLAN_COMPLETED_SYSTEM_NOTE].filter(Boolean).join(' ');
+}
 
 /**
  * Story 5.2 (AD-21): this turn's summed token usage plus the model id that
@@ -332,9 +357,10 @@ export function createCoachAgent({
   // Boundary: "Retrieval failure never blocks a turn" — `recallMemories`
   // itself never throws, and no `memoryStore` at all is just as safe a
   // no-memory path as a `userId`/human-text miss below.
-  const systemPrompt = dynamicSystemPromptMiddleware<{ personality?: string }>(async (state, runtime) => {
+  const systemPrompt = dynamicSystemPromptMiddleware<{ personality?: string; planCompleted?: boolean }>(async (state, runtime) => {
     const personality = resolvePersonality(runtime.context?.personality);
-    if (!memoryStore) return buildSystemPrompt(personality, [], extraSystemInstruction);
+    const extra = withPlanCompletedNote(extraSystemInstruction, runtime.context?.planCompleted);
+    if (!memoryStore) return buildSystemPrompt(personality, [], extra);
 
     // Hardening: the Boundary ("retrieval failure never blocks a turn")
     // previously only covered `recallMemories`'s own internals. Wrapping
@@ -344,15 +370,15 @@ export function createCoachAgent({
     try {
       const userId = resolveUserId(runtime.configurable);
       const lastHuman = lastMessageOfType(state.messages, 'human');
-      if (!userId || !lastHuman?.text) return buildSystemPrompt(personality, [], extraSystemInstruction);
+      if (!userId || !lastHuman?.text) return buildSystemPrompt(personality, [], extra);
 
       const memories = await recallMemories(memoryStore, userId, lastHuman.text);
-      return buildSystemPrompt(personality, memories, extraSystemInstruction);
+      return buildSystemPrompt(personality, memories, extra);
     } catch (error) {
       console.error('[agent] memory-augmented system prompt failed, falling back to the base prompt:', {
         error: (error as Error)?.message,
       });
-      return buildSystemPrompt(personality, [], extraSystemInstruction);
+      return buildSystemPrompt(personality, [], extra);
     }
   });
   const forceToolChoice = createForceToolChoiceMiddleware();
@@ -388,6 +414,23 @@ export function createCoachAgent({
     const userId = resolveUserId(runtime.configurable);
     const settings = db && userId ? await getUserSettings(db, userId) : undefined;
 
+    // Story 4.5 (AC4): resolved once per turn, same precedent as the
+    // personality/model lookup above — `derivePlanIdFromThreadId` only ever
+    // matches a `plan:${planId}` thread id, so this is a no-op (and no extra
+    // query) on every other thread kind (discovery, ideas-trigger, etc.).
+    // Fail-open: a lookup error never blocks the turn, it just leaves the
+    // note off.
+    const planId = derivePlanIdFromThreadId(runtime.configurable?.thread_id as string | undefined);
+    let planCompleted = false;
+    if (db && planId) {
+      try {
+        const [plan] = await db.select({ status: plans.status }).from(plans).where(eq(plans.id, planId)).limit(1);
+        planCompleted = plan?.status === 'completed';
+      } catch (error) {
+        console.error('[agent] plan-completion lookup failed, defaulting to not-completed:', { planId, error: (error as Error)?.message });
+      }
+    }
+
     // `runtime` (a `LangGraphRunnableConfig`, which extends `RunnableConfig`)
     // carries `configurable` (incl. `thread_id`) alongside the callback/
     // tracing fields `reactAgent.invoke` expects; forwarding it as-is keeps
@@ -396,7 +439,7 @@ export function createCoachAgent({
     // middlewares above to read.
     const result = await reactAgent.invoke(
       { messages: state.messages },
-      { ...runtime, context: { personality: settings?.personality, modelId: settings?.model ?? undefined } },
+      { ...runtime, context: { personality: settings?.personality, modelId: settings?.model ?? undefined, planCompleted } },
     );
 
     // Story 5.2 (AD-21): "sums every model call made during that turn's full

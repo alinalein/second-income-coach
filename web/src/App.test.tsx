@@ -1,7 +1,7 @@
 import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, cleanup, fireEvent } from '@testing-library/react';
-import { App } from './App';
+import { App, computeViewKey, type Route } from './App';
 import { ThemeProvider } from './theme/theme-provider';
 import intakeEn from './locales/en/intake.json';
 
@@ -320,7 +320,11 @@ describe('App (Spec 2.12 AC1 amendment: redirect/auto-generate only on first-eve
       expect(await screen.findByRole('heading', { name: /your tailored income ideas/i })).toBeInTheDocument();
       await waitFor(() => expect(generateFetch).toHaveBeenCalledOnce());
     } else {
-      expect(await screen.findByText(intakeEn.savedConfirmation)).toBeInTheDocument();
+      // Bug fix (user-reported, live): the button goes straight back to its
+      // resting label on a successful re-save; "Changes saved" is a
+      // separate small note next to it, not inside the button.
+      expect(await screen.findByRole('button', { name: intakeEn.submitButton })).toBeInTheDocument();
+      expect(screen.getByText(intakeEn.savedConfirmation)).toBeInTheDocument();
       expect(screen.getByLabelText(intakeEn.skillsInterests.label)).toBeInTheDocument();
       expect(screen.queryByRole('heading', { name: /your tailored income ideas/i })).not.toBeInTheDocument();
       expect(generateFetch).not.toHaveBeenCalled();
@@ -458,5 +462,27 @@ describe('App (bug fix: a sidebar click always leaves intake-review mode)', () =
 
     expect(await screen.findByRole('heading', { name: /your tailored income ideas/i })).toBeInTheDocument();
     expect(screen.queryByDisplayValue('Woodworking')).not.toBeInTheDocument();
+  });
+});
+
+// Bug fix (user-reported, live): "transition between Review intake,
+// Bookmarked and New ideas is smooth, but clicking on one of the ideas or
+// switching between ideas the whole screen jumps" — `FadeIn`'s own `key`
+// (`computeViewKey`) used to be just `route.kind`, which stays `'plan'`
+// across a switch between two *different* plans, so it never remounted/
+// re-faded for that case — the screen just swapped in one commit instead.
+describe('computeViewKey (bug fix, live: a plan/bookmarked switch is its own transition)', () => {
+  const PLAN_A: Route = { kind: 'plan', ideaId: 'idea-a', ideaTitle: 'Idea A' };
+  const PLAN_B: Route = { kind: 'plan', ideaId: 'idea-b', ideaTitle: 'Idea B' };
+
+  it('gives two different plans two different keys, so switching between them is its own transition', () => {
+    expect(computeViewKey(true, false, PLAN_A)).not.toBe(computeViewKey(true, false, PLAN_B));
+  });
+
+  it.each([
+    ['ideas', { kind: 'ideas' } as Route, { kind: 'ideas' } as Route],
+    ['settings', { kind: 'settings' } as Route, { kind: 'settings' } as Route],
+  ])('keeps the same key for two renders of the same %s view (never a spurious re-fade)', (_label, routeA, routeB) => {
+    expect(computeViewKey(true, false, routeA)).toBe(computeViewKey(true, false, routeB));
   });
 });

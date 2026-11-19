@@ -13,6 +13,15 @@ export interface StepActionsProps {
    * server's own chat acknowledgment — separate from `onStepChanged` so
    * `complete()` (which never produces one) can't accidentally trigger it. */
   onStepStarted?: (message: ChatMessage) => void;
+  /** Bug fix (user-reported, live): fires once, only when `complete()`
+   * succeeds on the plan's final step (`planCompleted`) — the parent needs
+   * this (not just `onStepChanged`) to flip its own cached plan status to
+   * `completed` immediately and show the server's completion chat message
+   * live, same as `onStepStarted` does for a step start. Without it, the
+   * workspace kept showing the plan as `active` (stale projection-card
+   * framing, sidebar badge, energy pop-up) and the completion message only
+   * appeared after a full reload. */
+  onPlanCompleted?: (message?: ChatMessage) => void;
   /** Bug fix (user-reported, live): true while the plan itself isn't
    * `active` yet (still `draft`, awaiting `PlanActivationPanel`'s review) —
    * both buttons are disabled; the route rejects the call either way
@@ -62,7 +71,7 @@ type Phase = 'idle' | 'busy' | 'failed';
  * `phase === 'busy'` still disables both buttons during the in-flight
  * request (prevents a double-submit), just without changing either label.
  */
-export function StepActions({ planId, step, onStepChanged, onStepStarted, disabled = false }: StepActionsProps) {
+export function StepActions({ planId, step, onStepChanged, onStepStarted, onPlanCompleted, disabled = false }: StepActionsProps) {
   const { t } = useTranslation('plan');
   const [phase, setPhase] = React.useState<Phase>('idle');
   const [planCompleted, setPlanCompleted] = React.useState(false);
@@ -71,6 +80,18 @@ export function StepActions({ planId, step, onStepChanged, onStepStarted, disabl
     setPhase('busy');
     fetch(`/api/plans/${planId}/steps/${step.id}/start`, { method: 'POST', credentials: 'include' })
       .then(async (res) => {
+        // Bug fix (user-reported, live): a 409 means this `step` is no
+        // longer the plan's own current step (or the plan isn't active) —
+        // by the time the click landed, something else had already moved
+        // it on. Retrying the exact same `stepId` would just 409 again
+        // forever, stuck with no visible way out except a full reload.
+        // `onStepChanged()` (the same refetch a success already triggers)
+        // pulls the real current step instead, so the view self-corrects.
+        if (res.status === 409) {
+          setPhase('idle');
+          onStepChanged();
+          return;
+        }
         if (!res.ok) {
           setPhase('failed');
           return;
@@ -91,6 +112,13 @@ export function StepActions({ planId, step, onStepChanged, onStepStarted, disabl
     setPhase('busy');
     fetch(`/api/plans/${planId}/steps/${step.id}/complete`, { method: 'POST', credentials: 'include' })
       .then(async (res) => {
+        // Bug fix (user-reported, live): same self-correcting fix as
+        // `start()` above — see that branch's own comment.
+        if (res.status === 409) {
+          setPhase('idle');
+          onStepChanged();
+          return;
+        }
         if (!res.ok) {
           setPhase('failed');
           return;
@@ -103,6 +131,7 @@ export function StepActions({ planId, step, onStepChanged, onStepStarted, disabl
         }
         setPlanCompleted(parsed.data.planCompleted);
         setPhase('idle');
+        if (parsed.data.planCompleted) onPlanCompleted?.(parsed.data.chatMessage);
         onStepChanged();
       })
       .catch(() => setPhase('failed'));

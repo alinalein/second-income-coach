@@ -1,11 +1,21 @@
 import * as React from 'react';
 import { useTranslation } from 'react-i18next';
-import { convertMoney, formatMoney, projectionResponseSchema, type ProjectionResponse } from '@app/shared';
+import { convertMoney, formatMoney, projectionResponseSchema, type ProjectionResponse, type PlanStatus } from '@app/shared';
+import { Button } from '../../components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 
 export interface ProjectionCardProps {
   planId: string;
+  /** Story 4.5 (AC2): optional so every existing caller/test keeps working
+   * unchanged — only a `'completed'` plan relabels the card as the result
+   * of the finished plan. */
+  planStatus?: PlanStatus;
 }
+
+/** Bug fix (user-reported, live): same precedent as `StatusPanel.tsx`'s own
+ * `AUTO_RETRY_DELAYS_MS` — a transient fetch failure must never be a dead
+ * end with no way forward. */
+const AUTO_RETRY_DELAYS_MS = [1_000, 2_000];
 
 /** Same i18n-language -> `Intl.NumberFormat` locale map as `IdeasPanel.tsx`
  * (AD-24: "locale and currency are independent axes"). */
@@ -57,75 +67,146 @@ function AmountLine({
  * formats it via the one shared `shared/money.ts` helper (AD-27) — never a
  * second money implementation.
  */
-export function ProjectionCard({ planId }: ProjectionCardProps) {
+export function ProjectionCard({ planId, planStatus }: ProjectionCardProps) {
   const { t, i18n } = useTranslation('plan');
   const [data, setData] = React.useState<ProjectionResponse | null>(null);
   const [failed, setFailed] = React.useState(false);
+  // See `StatusPanel.tsx`'s own `cancelLoadRef` for the full doc comment —
+  // identical shape, same reason: one thing responsible for cancelling
+  // whichever attempt chain is in flight, regardless of whether it was
+  // started by the mount effect or a manual "Try again" click.
+  const cancelLoadRef = React.useRef<() => void>(() => undefined);
+
+  const loadProjection = React.useCallback(() => {
+    cancelLoadRef.current();
+    let cancelled = false;
+    let retryTimer: number | undefined;
+    cancelLoadRef.current = () => {
+      cancelled = true;
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+    };
+
+    function attempt(attemptIndex: number) {
+      fetch(`/api/plans/${planId}/projection`, { credentials: 'include' })
+        .then(async (res) => {
+          if (cancelled) return;
+          if (!res.ok) {
+            retryOrFail(attemptIndex);
+            return;
+          }
+          const body: unknown = await res.json();
+          const result = projectionResponseSchema.safeParse(body);
+          if (result.success) {
+            setData(result.data);
+            setFailed(false);
+          } else {
+            retryOrFail(attemptIndex);
+          }
+        })
+        .catch(() => {
+          if (!cancelled) retryOrFail(attemptIndex);
+        });
+    }
+
+    function retryOrFail(attemptIndex: number) {
+      if (cancelled) return;
+      if (attemptIndex < AUTO_RETRY_DELAYS_MS.length) {
+        retryTimer = window.setTimeout(() => attempt(attemptIndex + 1), AUTO_RETRY_DELAYS_MS[attemptIndex]);
+      } else {
+        setFailed(true);
+      }
+    }
+
+    attempt(0);
+  }, [planId]);
 
   React.useEffect(() => {
-    let cancelled = false;
     setData(null);
     setFailed(false);
+    loadProjection();
+    return () => cancelLoadRef.current();
+  }, [loadProjection]);
 
-    fetch(`/api/plans/${planId}/projection`, { credentials: 'include' })
-      .then(async (res) => {
-        if (cancelled) return;
-        if (!res.ok) {
-          setFailed(true);
-          return;
-        }
-        const body: unknown = await res.json();
-        const result = projectionResponseSchema.safeParse(body);
-        if (result.success) {
-          setData(result.data);
-        } else {
-          setFailed(true);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setFailed(true);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [planId]);
+  const handleRetry = React.useCallback(() => {
+    setFailed(false);
+    loadProjection();
+  }, [loadProjection]);
 
   const locale = LOCALE_BY_LANGUAGE[i18n.language] ?? 'en-US';
   const progressPercent = data ? Math.round(data.progressRatio * 100) : 0;
+  // Story 4.5 (AC2): the final estimate is labelled as the result of the
+  // finished plan, not an ongoing projection — same estimate/math as
+  // before (Story 4.4), only the card's own framing changes.
+  const isCompleted = planStatus === 'completed';
+  // Bug fix (user-reported, live): a `draft` plan hasn't been confirmed
+  // yet — showing a computed-looking "~€0.00" here would read as if a real
+  // (zero) estimate had already run; "—" is the honest "nothing to show
+  // yet" placeholder instead.
+  const isDraft = planStatus === 'draft';
+  // Bug fix (user-reported, live): "a bare 0 must never stand alone" — a
+  // genuine zero estimate (the plan is active, but no step/check-in has
+  // happened yet) gets an explanatory line under it instead of just
+  // sitting there looking broken. Never shown for `isDraft` (which shows
+  // "—", not a "0" at all) or `isCompleted` (that card has its own
+  // framing, and a finished plan realistically never nets exactly 0).
+  const showsZeroEstimateHint = !isDraft && !isCompleted && data?.estimate.amountMinorUnits === 0;
+  // Bug fix (user-reported, live, correction to an earlier message): never
+  // the next step's own title (that duplicates `StatusPanel`'s own "Next"
+  // region) — the concrete value it unlocks instead, computed server-side
+  // (`get_projection.ts`) by the same `computeProjection` with the next
+  // step counted as completed. `null` under the exact same "no next step"
+  // condition as `unlockedOpportunity` (last step, completed plan) — and
+  // never shown for a draft either, same as the main amount above.
+  const nextStepConverted =
+    !isCompleted && !isDraft && data?.nextStepEstimate ? convertMoney(data.nextStepEstimate, data.currency) : null;
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>{t('projectionCard.title')}</CardTitle>
+        <CardTitle>{isCompleted ? t('projectionCard.completedTitle') : t('projectionCard.title')}</CardTitle>
+        {/* Bug fix (user-reported, live): a one-line explanation of what
+         * this number even is — never shown for the completed-plan framing,
+         * which already has its own "Result of your finished plan" line. */}
+        {!isCompleted ? <p className="text-xs text-muted-foreground">{t('projectionCard.subtitle')}</p> : null}
       </CardHeader>
       <CardContent className="flex flex-col gap-2 text-sm">
         {failed ? (
-          <p className="text-muted-foreground" role="alert">
-            {t('projectionCard.loadFailed')}
-          </p>
+          <div className="flex flex-col items-start gap-2">
+            <p className="text-muted-foreground" role="alert">
+              {t('projectionCard.loadFailed')}
+            </p>
+            <Button type="button" size="sm" variant="outline" onClick={handleRetry}>
+              {t('projectionCard.retryButton')}
+            </Button>
+          </div>
         ) : !data ? (
           <p className="text-muted-foreground">{t('projectionCard.loading')}</p>
         ) : (
           <>
-            <AmountLine
-              data={data}
-              locale={locale}
-              prefix={t('projectionCard.amountPrefix')}
-              estimateLabel={t('projectionCard.estimateBadge')}
-              estimateLabelFull={t('projectionCard.estimateBadgeFull')}
-            />
-            {/* Bug fix (user-reported): restored as a required part of the
-             * card (epics.md Story 4.4 AC) — this line stays even though
-             * `StatusPanel`'s own "Next" region also names the next step
-             * with its full description; only the *title* renders here
-             * (never the description) to keep the duplication feeling
-             * minimal. Omitted entirely when there is no next step (the
-             * plan's last step, or a completed plan) — AC: "the next
-             * step's own title ... no invented text." */}
-            {data.unlockedOpportunity ? (
+            {isDraft ? (
+              <p className="text-lg font-semibold">—</p>
+            ) : (
+              <AmountLine
+                data={data}
+                locale={locale}
+                prefix={t('projectionCard.amountPrefix')}
+                estimateLabel={t('projectionCard.estimateBadge')}
+                estimateLabelFull={t('projectionCard.estimateBadgeFull')}
+              />
+            )}
+            {showsZeroEstimateHint ? <p className="text-xs text-muted-foreground">{t('projectionCard.zeroEstimateHint')}</p> : null}
+            {isCompleted ? (
+              <p className="text-xs text-muted-foreground">{t('projectionCard.completedLabel')}</p>
+            ) : nextStepConverted ? (
               <p className="text-xs text-muted-foreground">
-                {t('projectionCard.paceSubline', { opportunity: data.unlockedOpportunity.title })}
+                {t('projectionCard.paceSubline', {
+                  amount: `${t('projectionCard.amountPrefix')}${formatMoney(nextStepConverted, locale)}`,
+                })}
+                {nextStepConverted.isEstimate ? (
+                  <span className="ml-1" aria-label={t('projectionCard.estimateBadgeFull')}>
+                    {t('projectionCard.estimateBadge')}
+                  </span>
+                ) : null}
               </p>
             ) : null}
             <div

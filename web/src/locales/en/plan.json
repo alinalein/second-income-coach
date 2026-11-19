@@ -6,10 +6,16 @@
     "title": "Your plan for {{ideaTitle}}",
     "loading": "Loading…",
     "loadFailed": "Couldn't load your current step.",
+    "retryButton": "Try again",
     "noCurrentStep": "No current step yet.",
     "nextLabel": "Next step",
     "dayLabel": "Day {{day}}",
-    "gapBanner": "Good to have you back — no need to explain a gap. We've adjusted your timeline, so pick up whenever you're ready."
+    "gapBanner": "Good to have you back — no need to explain a gap. We've adjusted your timeline, so pick up whenever you're ready.",
+    "completedCard": {
+      "title": "Plan completed",
+      "completedOn": "Completed on {{date}}",
+      "stepsCompleted": "Steps completed: {{count}}"
+    }
   },
   "checkIn": {
     "title": "Check in",
@@ -30,16 +36,21 @@
   },
   "projectionCard": {
     "title": "Projection",
+    "subtitle": "Estimated extra income per month at your current pace",
     "loading": "Loading…",
     "loadFailed": "Couldn't load your projection.",
+    "retryButton": "Try again",
     "amountPrefix": "~",
-    "paceSubline": "at this pace · unlocks: {{opportunity}}",
+    "zeroEstimateHint": "Complete your first step to see your estimate grow.",
+    "paceSubline": "At this pace · next step brings you to {{amount}}",
     "estimateBadge": "(est.)",
-    "estimateBadgeFull": "estimate"
+    "estimateBadgeFull": "estimate",
+    "completedTitle": "Result",
+    "completedLabel": "Result of your finished plan"
   },
   "activation": {
     "title": "Review & activate your plan",
-    "hint": "Check your plan once more before it becomes active.",
+    "hint": "To start working on this plan, you'll need to review and approve it first.",
     "startButton": "Review plan",
     "loading": "Loading your plan for review…",
     "loadFailed": "Couldn't load the review. Please try again.",

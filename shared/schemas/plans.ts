@@ -132,6 +132,22 @@ export const currentStepResponseSchema = z.object({
    * `true` once a `record_check_in` row already exists for today (UTC).
    */
   checkedInToday: z.boolean(),
+  /**
+   * Story 4.5 (AC1): non-null only once the plan's own status is
+   * `completed` — the data `StatusPanel.tsx`'s "Plan completed" card needs
+   * (completion date, number of completed steps) instead of the generic
+   * "No current step yet" text. `completedSteps` is a count only (never new
+   * step content), so this stays within `get_current_step`'s own AD-4 cap
+   * ("current+next step content only") — it's computed from rows this call
+   * already reads for `current`/`next`, not a second steps-reading path.
+   */
+  completion: z
+    .object({
+      completedAt: z.iso.datetime(),
+      completedSteps: z.number().int().nonnegative(),
+    })
+    .nullable()
+    .default(null),
 });
 
 export type CurrentStepResponse = z.infer<typeof currentStepResponseSchema>;

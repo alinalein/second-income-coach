@@ -6,10 +6,16 @@
     "title": "Dein Plan für {{ideaTitle}}",
     "loading": "Lädt…",
     "loadFailed": "Dein aktueller Schritt konnte nicht geladen werden.",
+    "retryButton": "Erneut versuchen",
     "noCurrentStep": "Noch kein aktueller Schritt.",
     "nextLabel": "Nächster Schritt",
     "dayLabel": "Tag {{day}}",
-    "gapBanner": "Schön, dass du wieder da bist — du musst keine Pause erklären. Wir haben deinen Zeitplan angepasst, leg einfach los, sobald du bereit bist."
+    "gapBanner": "Schön, dass du wieder da bist — du musst keine Pause erklären. Wir haben deinen Zeitplan angepasst, leg einfach los, sobald du bereit bist.",
+    "completedCard": {
+      "title": "Plan abgeschlossen",
+      "completedOn": "Abgeschlossen am {{date}}",
+      "stepsCompleted": "Abgeschlossene Schritte: {{count}}"
+    }
   },
   "checkIn": {
     "title": "Check-in",
@@ -30,16 +36,21 @@
   },
   "projectionCard": {
     "title": "Prognose",
+    "subtitle": "Geschätztes Zusatzeinkommen pro Monat bei deinem aktuellen Tempo",
     "loading": "Lädt…",
     "loadFailed": "Deine Prognose konnte nicht geladen werden.",
+    "retryButton": "Erneut versuchen",
     "amountPrefix": "~",
-    "paceSubline": "bei diesem Tempo · schaltet frei: {{opportunity}}",
+    "zeroEstimateHint": "Erledige deinen ersten Schritt, dann wächst deine Schätzung.",
+    "paceSubline": "Bei deinem Tempo bringt dich der nächste Schritt auf {{amount}}",
     "estimateBadge": "(ca.)",
-    "estimateBadgeFull": "Schätzung"
+    "estimateBadgeFull": "Schätzung",
+    "completedTitle": "Ergebnis",
+    "completedLabel": "Ergebnis deines abgeschlossenen Plans"
   },
   "activation": {
     "title": "Plan prüfen & aktivieren",
-    "hint": "Prüfe deinen Plan noch einmal, bevor er aktiv wird.",
+    "hint": "Um mit diesem Plan loszulegen, musst du ihn zuerst prüfen und bestätigen.",
     "startButton": "Plan prüfen",
     "loading": "Dein Plan wird zur Prüfung geladen…",
     "loadFailed": "Die Prüfung konnte nicht geladen werden. Bitte versuche es erneut.",

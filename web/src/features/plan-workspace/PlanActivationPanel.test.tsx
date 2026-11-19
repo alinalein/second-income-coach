@@ -64,7 +64,8 @@ describe('PlanActivationPanel (bug fix: modify/reject must re-POST /activate, ne
 
     render(<PlanActivationPanel planId="plan-1" onActivated={() => undefined} />);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Review plan' }));
+    // Bug fix (user-reported, live): the review now starts automatically
+    // on mount (nothing pending yet) — no "Review plan" click needed first.
     await screen.findByText(/First action/);
 
     fireEvent.click(screen.getByRole('button', { name: 'Edit plan' }));
@@ -76,7 +77,7 @@ describe('PlanActivationPanel (bug fix: modify/reject must re-POST /activate, ne
     expect(screen.queryByText('Something went wrong. Please try again.')).not.toBeInTheDocument();
     // The follow-up fetch after modify must be the fixed `POST`, not `GET`.
     expect(getActivateCalls).toBe(1); // only the initial mount check
-    expect(postActivateCalls).toBe(2); // "Review plan" click + the post-modify re-request
+    expect(postActivateCalls).toBe(2); // the auto-started review + the post-modify re-request
   });
 });
 
@@ -105,11 +106,46 @@ describe('PlanActivationPanel (Spec 2.12 AC4: review-needing phases render insid
     vi.stubGlobal('fetch', fetchMock);
 
     render(<PlanActivationPanel planId="plan-1" onActivated={() => undefined} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Review plan' }));
 
+    // Bug fix (user-reported, live): the review now starts automatically
+    // on mount — no "Review plan" click needed first.
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByText('Take one photo.')).toBeInTheDocument();
     expect(within(dialog).queryByText('• Take one photo.')).not.toBeInTheDocument();
     expect(within(dialog).getByRole('button', { name: 'Confirm & activate' })).toBeInTheDocument();
+  });
+});
+
+// Bug fix (user-reported, live): "we can remove that [intermediate 'Review
+// & activate your plan' card] entirely" — a fresh draft's review now opens
+// immediately, with no extra click to get there. The earlier user-reported
+// follow-up that made the modal's own X/Escape/backdrop close actually work
+// stays intact: closing it still has to land somewhere, so it shows the
+// same card as a way back in rather than a dead end.
+describe('PlanActivationPanel (bug fix, live: review starts automatically, no intermediate card)', () => {
+  it('opens the review with no "Review plan" click, and closing it shows a reopen card instead of a dead end', async () => {
+    const review = fakeReview();
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      const method = init?.method ?? 'GET';
+      if (url.endsWith('/activate') && method === 'POST') {
+        return Promise.resolve(new Response(JSON.stringify(review), { status: 200 }));
+      }
+      if (url.endsWith('/activate') && method === 'GET') {
+        return Promise.resolve(new Response(JSON.stringify({ review: null }), { status: 200 }));
+      }
+      throw new Error(`Unmocked fetch: ${method} ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<PlanActivationPanel planId="plan-1" onActivated={() => undefined} />);
+
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Review plan' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Review plan' })).toBeInTheDocument();
   });
 });

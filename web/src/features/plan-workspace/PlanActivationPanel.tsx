@@ -77,8 +77,16 @@ export function PlanActivationPanel({ planId, onActivated }: PlanActivationPanel
     return requestId !== requestIdRef.current;
   }
 
-  // Page-refresh mid-review: pick up any already-pending review instead of
-  // starting a fresh one.
+  // Bug fix (user-reported, live): "we can remove that [intermediate
+  // 'Review & activate your plan' card] entirely" — this mount effect used
+  // to fall back to an `'idle'` card with its own "Review plan" button
+  // whenever a page-refresh mid-review found no review already pending
+  // (the common case: a freshly-created draft nobody has reviewed yet).
+  // It now starts the review immediately instead. AD-14's actual
+  // human-in-the-loop requirement (the explicit Confirm & activate / Edit /
+  // Regenerate choice inside the modal) is unaffected — only the extra
+  // click to *open* that modal is gone. A page-refresh mid-review still
+  // picks up the already-pending one, same as before.
   React.useEffect(() => {
     const requestId = beginRequest();
     setPhase('loading');
@@ -87,14 +95,14 @@ export function PlanActivationPanel({ planId, onActivated }: PlanActivationPanel
       .then(async (res) => {
         if (isStale(requestId)) return;
         if (!res.ok) {
-          setPhase('idle');
+          startReview();
           return;
         }
         const body: unknown = await res.json();
         if (isStale(requestId)) return;
         const parsed = (body as { review?: unknown } | undefined)?.review;
         if (!parsed) {
-          setPhase('idle');
+          startReview();
           return;
         }
         const result = planActivationReviewSchema.safeParse(parsed);
@@ -102,11 +110,11 @@ export function PlanActivationPanel({ planId, onActivated }: PlanActivationPanel
           setReview(result.data);
           setPhase('reviewing');
         } else {
-          setPhase('idle');
+          startReview();
         }
       })
       .catch(() => {
-        if (!isStale(requestId)) setPhase('idle');
+        if (!isStale(requestId)) startReview();
       });
 
     // Unmount counts as "stale" too (same precedent as `PlanWorkspace`'s own
@@ -117,6 +125,11 @@ export function PlanActivationPanel({ planId, onActivated }: PlanActivationPanel
     return () => {
       beginRequest();
     };
+    // `startReview` is a fresh closure every render (not memoized) — adding
+    // it here would re-run this effect on every render instead of only
+    // when `planId` changes, which is the one thing it's actually meant to
+    // react to.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [planId]);
 
   function startReview() {
@@ -264,6 +277,12 @@ export function PlanActivationPanel({ planId, onActivated }: PlanActivationPanel
       });
   }
 
+  // Bug fix (user-reported, live): no longer the *first* thing shown for a
+  // fresh draft (the mount effect above starts the review immediately for
+  // that case) — only reached if the user explicitly closes the review
+  // modal (X/Escape/backdrop, `onOpenChange` below) and needs a way back
+  // to it. Still the exact same card/copy; it's a reopen affordance now,
+  // not a gate.
   if (phase === 'idle') {
     return (
       <Card>
@@ -324,14 +343,18 @@ export function PlanActivationPanel({ planId, onActivated }: PlanActivationPanel
   // that, closest available to a further +20% ask) plus a bounded,
   // scrollable height — a 6-step review's own content was tall enough to
   // clip the footer buttons past the viewport's bottom edge with no way to
-  // reach them. `[--modal-bg:var(--card)]` overrides the library's own
-  // glass/translucent card background (by design elsewhere) with this
-  // app's solid `--card` token — user-reported: a review this
-  // information-dense reads better opaque, not semi-see-through over the
-  // blurred page behind it. Set via a CSS custom-property class, not a
-  // `style` prop: the library's own `DialogContent` sets
-  // `background`/`backdropFilter`/etc inline and a `style` prop would
-  // replace that whole object, dropping its border/shadow/glow too.
+  // reach them. `popup-glass-dense` (`index.css`) overrides the library's
+  // own defaults (by design elsewhere, strengthened in round 3, then
+  // explicitly set to "80% of" `popup-glass-strong`'s own see-through
+  // amount in round 4 — see that class's own doc comment for the exact
+  // numbers and for why it's a plain hand-written class, not a Tailwind
+  // arbitrary-value one) — user-reported follow-up: a review this
+  // information-dense still reads better more opaque than the other
+  // popups' own `popup-glass-strong`, not as see-through as a short
+  // confirm dialog like `IdeasPanel.tsx`'s own idea-select confirm — but
+  // the original fully-solid `var(--card)` went further than asked;
+  // `color-mix` keeps it mostly `--card` with a bit of the blurred page
+  // behind it showing through.
   return (
     <Dialog
       open
@@ -339,7 +362,7 @@ export function PlanActivationPanel({ planId, onActivated }: PlanActivationPanel
         if (!open && phase !== 'busy') setPhase('idle');
       }}
     >
-      <DialogContent size="lg" className="max-h-[85vh] overflow-y-auto [--modal-bg:var(--card)]">
+      <DialogContent size="lg" className="popup-glass-dense max-h-[85vh] overflow-y-auto">
         {phase === 'editing' ? (
           <>
             <DialogHeader>
@@ -453,6 +476,10 @@ export function PlanActivationPanel({ planId, onActivated }: PlanActivationPanel
                 .sort((a, b) => a.stepOrder - b.stepOrder)
                 .map((step, index) => (
                   <div key={step.id} className="border-b border-dashed border-border pb-3 last:border-none">
+                    {/* User-reported follow-up: the day now reads above the
+                     * step, not below its actions — same text/translation,
+                     * just moved. */}
+                    <p className="text-xs text-muted-foreground">{t('activation.dayLabel', { day: step.dayOffset })}</p>
                     <p className="font-semibold">
                       {t('activation.stepLabel', { index: index + 1 })}: {step.title}
                     </p>
@@ -461,12 +488,12 @@ export function PlanActivationPanel({ planId, onActivated }: PlanActivationPanel
                         <li key={actionIndex}>{stripLeadingBulletMarker(action)}</li>
                       ))}
                     </ul>
-                    <p className="mt-1 text-xs text-muted-foreground">{t('activation.dayLabel', { day: step.dayOffset })}</p>
                   </div>
                 ))}
             </div>
             <DialogFooter>
               <Button type="button" onClick={confirm} disabled={phase === 'busy'}>
+                {phase === 'busy' ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : null}
                 {phase === 'busy' ? t('activation.activating') : t('activation.confirmButton')}
               </Button>
               <Button type="button" variant="outline" onClick={startEditing} disabled={phase === 'busy'}>

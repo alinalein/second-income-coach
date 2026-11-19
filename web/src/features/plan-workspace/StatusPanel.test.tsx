@@ -55,6 +55,7 @@ describe('StatusPanel (AC: only current+next step visible)', () => {
       gapDetected: false,
       missedDays: 0,
       checkedInToday: false,
+      completion: null,
     };
     vi.stubGlobal(
       'fetch',
@@ -106,6 +107,7 @@ describe('StatusPanel (AC: only current+next step visible)', () => {
       gapDetected: false,
       missedDays: 0,
       checkedInToday: false,
+      completion: null,
     };
     vi.stubGlobal('fetch', mockFetch({ '/api/plans/plan-1/current-step': () => new Response(JSON.stringify(body), { status: 200 }) }));
 
@@ -122,6 +124,7 @@ describe('StatusPanel (AC: only current+next step visible)', () => {
       gapDetected: false,
       missedDays: 0,
       checkedInToday: false,
+      completion: null,
     };
     vi.stubGlobal(
       'fetch',
@@ -153,7 +156,7 @@ describe('StatusPanel (AC follow-up: Start/Complete notify onPlanActivityChanged
       JSON.stringify({ step: { ...fakeStep(), status: 'completed' }, planCompleted: false }),
     ],
   ] as const)('clicking "%s" calls onPlanActivityChanged once it succeeds', async (buttonLabel, actionPath, actionResponseBody) => {
-    const body: CurrentStepResponse = { current: fakeStep(), next: null, gapDetected: false, missedDays: 0, checkedInToday: false };
+    const body: CurrentStepResponse = { current: fakeStep(), next: null, gapDetected: false, missedDays: 0, checkedInToday: false, completion: null };
     const onPlanActivityChanged = vi.fn();
     vi.stubGlobal(
       'fetch',
@@ -171,12 +174,39 @@ describe('StatusPanel (AC follow-up: Start/Complete notify onPlanActivityChanged
   });
 });
 
+// Story 4.5 (AC1): a completed plan's workspace shows a "Plan completed"
+// card (completion date, number of completed steps) instead of "No current
+// step yet", and renders no Start/Mark-as-done controls (points/streaks/
+// levels/badges are a non-goal, never built at all — nothing to assert a
+// negative on).
+describe('StatusPanel (Story 4.5 AC1: completed plan)', () => {
+  it('shows the "Plan completed" card with the completion date and step count, and no Start/Mark-as-done buttons', async () => {
+    const body: CurrentStepResponse = {
+      current: null,
+      next: null,
+      gapDetected: false,
+      missedDays: 0,
+      checkedInToday: false,
+      completion: { completedAt: '2026-01-15T00:00:00.000Z', completedSteps: 4 },
+    };
+    vi.stubGlobal('fetch', mockFetch({ '/api/plans/plan-1/current-step': () => new Response(JSON.stringify(body), { status: 200 }) }));
+
+    render(<StatusPanel planId="plan-1" ideaTitle="Resell thrifted clothing" planStatus="completed" />);
+
+    expect(await screen.findByText('Plan completed')).toBeInTheDocument();
+    expect(screen.getByText('Steps completed: 4')).toBeInTheDocument();
+    expect(screen.queryByText('No current step yet.')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Start this step' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Mark as done' })).not.toBeInTheDocument();
+  });
+});
+
 // Bug fix (user-reported, live): a plan still awaiting human review/
 // activation must not let its current step be started/completed early —
 // the backend rejects it too (`PlanNotActiveError`), this is the UI mirror.
 describe('StatusPanel (AC follow-up: Start/Mark-as-done disabled before the plan is active)', () => {
   it('disables both buttons while planStatus is "draft"', async () => {
-    const body: CurrentStepResponse = { current: fakeStep(), next: null, gapDetected: false, missedDays: 0, checkedInToday: false };
+    const body: CurrentStepResponse = { current: fakeStep(), next: null, gapDetected: false, missedDays: 0, checkedInToday: false, completion: null };
     vi.stubGlobal('fetch', mockFetch({ '/api/plans/plan-1/current-step': () => new Response(JSON.stringify(body), { status: 200 }) }));
 
     render(<StatusPanel planId="plan-1" ideaTitle="Resell thrifted clothing" planStatus="draft" />);
@@ -184,4 +214,45 @@ describe('StatusPanel (AC follow-up: Start/Mark-as-done disabled before the plan
     expect(await screen.findByRole('button', { name: 'Start this step' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Mark as done' })).toBeDisabled();
   });
+});
+
+// Bug fix (user-reported, live): "this should not happen — how am I
+// supposed to fix any dev server, or any user that uses the app?" — a
+// transient failure (the common real-world case: a cold start, a backend
+// restart, a brief network blip) must never be a dead end with no way
+// forward. Real timers (not faked) — the retry delays are short enough
+// (1s, 2s) that this stays fast without the fake-timer/testing-library
+// interaction pitfalls that come with faking them.
+describe('StatusPanel (bug fix, live: a transient load failure retries instead of a dead end)', () => {
+  it('recovers silently after transient failures — the error is never shown at all', async () => {
+    let callCount = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => {
+        callCount += 1;
+        if (callCount < 3) return Promise.resolve(new Response(null, { status: 502 }));
+        const body: CurrentStepResponse = { current: fakeStep(), next: null, gapDetected: false, missedDays: 0, checkedInToday: false, completion: null };
+        return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+      }),
+    );
+
+    render(<StatusPanel planId="plan-1" ideaTitle="Resell thrifted clothing" planStatus="active" />);
+
+    expect(await screen.findByText('Current title', {}, { timeout: 5000 })).toBeInTheDocument();
+    expect(screen.queryByText("Couldn't load your current step.")).not.toBeInTheDocument();
+    expect(callCount).toBe(3);
+  }, 10_000);
+
+  it('shows a "Try again" button once the automatic retries are exhausted, and retries again on click', async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(new Response(null, { status: 502 })));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<StatusPanel planId="plan-1" ideaTitle="Resell thrifted clothing" planStatus="active" />);
+
+    const retryButton = await screen.findByRole('button', { name: 'Try again' }, { timeout: 5000 });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+
+    fireEvent.click(retryButton);
+    await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(3));
+  }, 10_000);
 });

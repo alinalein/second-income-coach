@@ -193,7 +193,7 @@ function signOut(onSignedOut: () => void) {
  * `useResolvedPlanTitle` below fills it in once. Every in-app navigation
  * (a card, a sidebar entry) already has the title in hand and passes it
  * straight through. */
-type Route =
+export type Route =
   | { kind: 'ideas' }
   | { kind: 'settings' }
   | { kind: 'plan'; ideaId: string; ideaTitle: string | null }
@@ -294,6 +294,29 @@ function useResolvedPlanTitle(route: Route, setRoute: (route: Route) => void): v
   }, [route.kind, route.kind === 'plan' ? route.ideaId : undefined, route.kind === 'plan' ? route.ideaTitle : undefined]);
 }
 
+/**
+ * Which of the mutually-exclusive branches below is active — used only as
+ * `FadeIn`'s `key` so a real transition (not a same-branch re-render, e.g. a
+ * card's status changing) is what restarts the fade. Exported as a pure
+ * function (not inlined in `App()`) so the bug below is unit-testable
+ * without rendering the whole app and racing `requestAnimationFrame`.
+ *
+ * Bug fix (user-reported, live): "transition between Review intake,
+ * Bookmarked and New ideas is smooth, but clicking on one of the ideas or
+ * switching between ideas the whole screen jumps" — `route.kind` alone
+ * stays `'plan'` (or `'bookmarked'`) across a switch to a *different*
+ * idea/plan, so `FadeIn` never remounted/re-faded for that case at all; the
+ * content just swapped in the same commit, and a height difference between
+ * the two plans read as a jump. Folding the specific `ideaId` into the key
+ * makes every distinct plan/idea its own transition too.
+ */
+export function computeViewKey(hasIntake: boolean | null, showIntakeForm: boolean, route: Route): string {
+  if (hasIntake === null) return 'loading';
+  if (showIntakeForm) return 'intake';
+  if (route.kind === 'plan' || route.kind === 'bookmarked') return `${route.kind}:${route.ideaId}`;
+  return route.kind;
+}
+
 export function App() {
   const { t } = useTranslation('common');
   const { t: tIntake } = useTranslation('intake');
@@ -355,10 +378,7 @@ export function App() {
   // split via `useIsDesktop` (JS `matchMedia`), not a `sm:hidden` CSS
   // toggle — see that hook's own doc comment for why.
   const isDesktop = useIsDesktop();
-  // UX fix: which of the 4 mutually-exclusive branches below is active —
-  // used only as `FadeIn`'s `key` so a real transition (not a same-branch
-  // re-render, e.g. a card's status changing) is what restarts the fade.
-  const viewKey = hasIntake === null ? 'loading' : showIntakeForm ? 'intake' : route.kind;
+  const viewKey = computeViewKey(hasIntake, showIntakeForm, route);
 
   if (authStatus.state !== 'authenticated') {
     return (
