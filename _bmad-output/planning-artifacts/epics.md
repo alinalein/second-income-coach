@@ -1556,7 +1556,7 @@ So that I can evaluate the technical implementation and understand the reasoning
 
 **Given** the codebase
 **When** described
-**Then** the doc includes the code structure (the source tree from the architecture spine, annotated with what lives where)
+**Then** the code structure (annotated source tree) is documented once, in the README's Project structure section, and the rationale doc links to it (no second copy)
 
 **Given** real-world usage
 **When** described

@@ -14,3 +14,4 @@ Blueprint-LLM-agent-app.md
 # src/evals/fixtures/ and src/evals/report-fixtures/ are the versioned,
 # committed part of the suite).
 src/evals/results/
+README copy.md

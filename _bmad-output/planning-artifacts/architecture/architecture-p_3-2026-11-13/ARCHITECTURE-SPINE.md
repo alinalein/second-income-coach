@@ -7,7 +7,7 @@ paradigm: "single LLM agent with tool-calling via LangChain's createAgent, runni
 scope: "Governs the agent paradigm, tool/state boundaries, resilience fabric, moderation, voice-interface abstraction, and idea/plan/check-in lifecycle rules for the Second Income Coach agent, backend, and frontend."
 status: final
 created: "2026-11-13"
-updated: "2026-11-15"
+updated: "2026-11-19"
 binds: [CAP-1, CAP-2, CAP-3, CAP-4, CAP-5, CAP-6, CAP-7, CAP-8, CAP-9, CAP-10, CAP-11, CAP-12]
 sources: ["../../specs/spec-second-income-coach/SPEC.md"]
 companions: []
@@ -17,16 +17,54 @@ companions: []
 
 ## Design Paradigm
 
-Single LLM agent with tool-calling (an agentic loop), not a multi-agent/orchestrator setup — the model calls domain-specific tools, observes results, and iterates before producing a final response. Implemented via LangChain's `createAgent` (TypeScript) running on the LangGraph.js runtime.
+One LLM agent with tool-calling on LangChain's `createAgent` (LangGraph.js runtime). The agent loop, the three tool kinds (LLM-backed, plain-code, MCP), the persistence split and the reasons behind them are explained once, in [docs/TECHNICAL-RATIONALE.md](../../../../docs/TECHNICAL-RATIONALE.md). Below: how one chat turn runs through the middleware, and the one LangGraph graph we build ourselves (plan activation). Further down: dependency direction, models in use, stack and source tree.
 
-Namespace mapping:
+### One chat turn (middleware lifecycle)
 
-- **Agent loop / middleware** — `createAgent` wiring, composable hooks (`beforeAgent` / `beforeModel` / `wrapModelCall` / `afterModel` / `afterAgent`), node-level resilience config (`setNodeDefaults`).
-- **LLM-backed tools** — generation-only tools whose output is non-deterministic: `generate_ideas`, `create_plan`.
-- **Plain-code tools** — deterministic tools that read/write Postgres directly: `submit_intake`, `set_idea_status`, `get_current_step`, `start_step`, `complete_step`, `record_check_in`, `get_projection`, `activate_plan`.
-- **MCP tool** — `web_search`, wired via `@langchain/mcp-adapters`, used only by `generate_ideas` (CAP-2), which is where the baseline income rate is sourced at idea-generation time per AD-6; `get_projection` never calls it.
-- **Voice interface** — one contract (`transcribeCheckIn` / `speakResponse`) behind which the v1 and v2 implementations sit.
-- **Persistence** — Postgres (Neon) for hard state; LangGraph checkpointer (thread state) and Store/pgvector (semantic memory) for conversational context only.
+Source: `src/agent/index.ts` (`createCoachAgent`), `moderation.ts`, `guilt-language.ts`, `progress.ts`, `moderation-web-search.ts`. The turn is an outer `StateGraph` (START -> `model` -> END, with retry/timeout defaults and the Postgres checkpointer). The `model` node loads the user's settings, then runs the inner `createAgent` loop, whose middleware wraps every model and tool call.
+
+```mermaid
+flowchart TD
+    U(["User message"]) --> N["1 Outer node<br/>model<br/>loads settings"]
+    N --> P1["2a Progress<br/>Middleware<br/>progress event"]
+    P1 --> MOD1["2b Mistral<br/>Moderation<br/>Middleware<br/>checks input"]
+    MOD1 -- "rejected" --> X["Fixed refusal<br/>text, model<br/>never sees it"]
+    MOD1 -- "ok" --> SP["3a dynamic<br/>SystemPrompt<br/>prompt, memories"]
+    SP --> FT["3b ForceTool<br/>Choice<br/>Middleware"]
+    FT --> MS["3c Model<br/>Selection<br/>Middleware"]
+    MS --> M["4 Model call<br/>answer or<br/>tool call"]
+    M --> MOD2["5a Mistral<br/>Moderation<br/>Middleware<br/>checks output"]
+    MOD2 --> GL["5b Guilt<br/>Language<br/>Middleware<br/>plan chat only"]
+    GL -- "tool call" --> WT["6 Progress<br/>Middleware<br/>tool label"]
+    WT --> T["7 Tool runs<br/>plain-code tool,<br/>generate_ideas<br/>or create_plan"]
+    T --> P1
+    GL -- "answer" --> R(["Reply saved<br/>to checkpoint"])
+    X --> R
+```
+
+1. **Outer node (`model`):** loads personality and model from `user_settings`, adds the plan-completed and already-checked-in notes.
+2. **beforeModel:** (a) `ProgressMiddleware` emits the progress event; (b) `MistralModerationMiddleware` checks the user message (jailbreak or PII is rejected with a fixed text and ends the turn).
+3. **wrapModelCall:** (a) `dynamicSystemPromptMiddleware` builds the system prompt with recalled memories; (b) `ForceToolChoiceMiddleware` forces the tool choice when the flow requires it; (c) `ModelSelectionMiddleware` picks the user's chosen model.
+4. **Model:** answers or requests a tool call.
+5. **afterModel:** (a) `MistralModerationMiddleware` checks the output; (b) `GuiltLanguageMiddleware` checks for guilt/streak language (plan chat only).
+6. **wrapToolCall:** `ProgressMiddleware` emits the tool's progress label.
+7. **Tool:** plain-code tools (`submit_intake`, `start_step`, `complete_step`, ...) or `generate_ideas` / `create_plan`. `generate_ideas` runs a fixed pipeline (query plan, parallel searches with budget guard and moderation, one writing call per idea, checks); see docs/TECHNICAL-RATIONALE.md. After a tool the loop returns to step 2.
+
+### Plan activation graph (human in the loop)
+
+The one graph we build ourselves (`src/tools/plain/activate_plan.ts`). The main chat agent comes from `createAgent`, which builds its own nodes internally. A plan only becomes `active` after the user's explicit decision: the graph pauses at `interrupt()` and the pause survives requests and restarts via the Postgres checkpointer.
+
+```mermaid
+flowchart TD
+    S([START]) --> R["node: review<br/>loads draft<br/>plan and steps"]
+    R --> I{{"interrupt()<br/>pause and wait<br/>for the user"}}
+    I -- "confirm" --> C["activate plan<br/>other active<br/>plan is paused"]
+    I -- "modify" --> M["save edited<br/>draft"]
+    I -- "reject + feedback" --> G["regenerate draft<br/>create_plan,<br/>same plan row"]
+    C --> E([END])
+    M --> E
+    G --> E
+```
 
 > The full AD-1..AD-30 decision texts were removed from this file on 2026-11-19 (too long to read). AD-n ids stay cited by tests, epics.md and the docs; the full texts are in git history (see the commit that removes this block).
 
@@ -34,22 +72,60 @@ Namespace mapping:
 
 ```mermaid
 flowchart TB
-    FE["React Frontend"] --> API["Node Backend API"]
-    API --> VOICE["Voice Interface (transcribeCheckIn / speakResponse)"]
-    VOICE --> V1["v1: gpt-transcribe"]
-    VOICE -. deferred .-> V2["v2: gpt-audio-mini"]
-    API --> LOOP["Agent Loop (createAgent / LangGraph.js runtime)"]
-    LOOP --> MOD["Moderation + guilt-language hooks\n(beforeModel / wrapToolCall / afterModel)"]
-    LOOP --> LLMT["LLM-backed tools\n(generate_ideas, create_plan)"]
-    LOOP --> PCT["Plain-code tools\n(submit_intake, set_idea_status, get_current_step,\nstart_step, complete_step, record_check_in,\nget_projection, activate_plan)"]
-    LOOP --> MCPT["MCP tool: web_search"]
-    LLMT --> PG[("Postgres (Neon)\nhard state")]
+    FE["React<br/>Frontend"] --> API["Node<br/>Backend API"]
+    API --> VOICE["Voice<br/>Interface<br/>transcribeCheckIn<br/>speakResponse"]
+    VOICE --> V1["v1:<br/>Whisper<br/>large-v3-turbo"]
+    VOICE -. deferred .-> V2["v2:<br/>gpt-audio-mini"]
+    API --> LOOP["Agent Loop<br/>createAgent on<br/>LangGraph.js"]
+    LOOP --> MOD["Moderation and<br/>guilt-language<br/>hooks"]
+    LOOP --> LLMT["LLM-backed<br/>tools<br/>generate_ideas<br/>create_plan"]
+    LOOP --> PCT["Plain-code<br/>tools<br/>submit_intake<br/>set_idea_status<br/>get_current_step<br/>start_step<br/>complete_step<br/>record_check_in<br/>get_projection<br/>activate_plan"]
+    LOOP --> MCPT["MCP tool<br/>web_search"]
+    LLMT --> PG[("Postgres<br/>Neon<br/>hard state")]
     PCT --> PG
-    MCPT --> EXT["External search provider"]
-    LOOP -.-> CKPT[("Checkpointer + Store/pgvector\nconversational context only")]
+    MCPT --> EXT["External<br/>search provider"]
+    LOOP -.-> CKPT[("Checkpointer<br/>and pgvector<br/>Store<br/>chat context only")]
 ```
 
 No arrow runs in reverse: tools never call the frontend, Postgres never calls back into the agent loop, and the voice implementation never calls check-in logic directly (only through the interface in AD-8).
+
+## Where data is stored
+
+One Postgres database holds everything we store about a user, in three separate homes (never mixed). Nothing else keeps user data: model and search providers only process requests.
+
+```mermaid
+flowchart LR
+    APP["Node backend"] --> T["1 App tables<br/>Drizzle ORM<br/>hard state"]
+    APP --> C["2 Checkpointer<br/>PostgresSaver<br/>chat threads"]
+    APP --> S["3 Store<br/>PostgresStore<br/>pgvector<br/>per-user memory"]
+    APP -.-> L["LangSmith<br/>traces and<br/>anonymized<br/>rated examples"]
+```
+
+| Home | Tables | What is saved |
+|---|---|---|
+| 1 App tables (hard state, always read fresh) | `users`, `session`, `user_settings`, `intake`, `ideas`, `idea_translations`, `plans`, `plan_steps`, `check_ins`, `message_costs`, `message_feedback`, `user_generation_counts`, `search_budget_counts` | Account and login session; settings (personality, model, language, currency); intake answers and failure pattern; ideas with rationale and sourced income rate; plans and steps with status and timeline; check-ins; token cost per message; thumbs ratings and comments; daily usage counters |
+| 2 Checkpointer | `checkpoints`, `checkpoint_blobs`, `checkpoint_writes` | Conversation state of each thread: one discovery thread per user plus one thread per plan |
+| 3 Store + pgvector | `store`, `store_vectors` | Per-user semantic memory, namespace `["memory", userId]`: the comments a user writes with a thumbs rating, embedded with `mistral-embed` (1024 dims) and recalled for similar questions |
+| LangSmith (external) | none | Traces of agent turns; rated examples with PII anonymized, for offline prompt improvement only |
+
+Voice recordings are never stored: the audio goes straight to transcription and is discarded.
+
+## Models in use
+
+Everything except Mistral runs through one OpenRouter key (`OPENROUTER_API_KEY`); Mistral uses `MISTRAL_API_KEY`.
+
+| Purpose | Model | Provider | User-selectable |
+|---|---|---|---|
+| Coach agent (discovery chat, plan chat, check-in text) | `openai/gpt-6-luna` (default) | OpenRouter | Intended: Settings can switch to `google/gemini-3.8-flash` or `anthropic/claude-haiku-4.5` |
+| `generate_ideas` (writing calls) and `create_plan` | `openai/gpt-6-luna` (default, same as the coach agent) | OpenRouter | follows the coach model |
+| Guilt-language check (plan chat) | `openai/gpt-6-luna` (default, same as the coach agent) | OpenRouter | follows the coach model |
+| Idea-card translation (DE/EN) | `openai/gpt-6-luna` | OpenRouter | no, fixed |
+| Moderation (input, output, web-search results) | `mistral-moderation-2603` | Mistral | no |
+| Memory embeddings (pgvector, 1024 dims) | `mistral-embed` | Mistral | no |
+| Voice check-in transcription | `openai/whisper-large-v3-turbo` (the "gpt-transcribe" of AD-9) | OpenRouter | no |
+| Web search (not an LLM) | Tavily via MCP `web_search` | Tavily | no |
+| Evals only: judges | `google/gemini-3.8-flash`, `deepseek/deepseek-v4.1-flash` | OpenRouter | no |
+| Evals only: fourth coach model under test (same cases as the three selectable ones) | `anthropic/claude-sonnet-5.5` | OpenRouter | no, not offered in the app |
 
 ## Consistency Conventions
 
@@ -75,7 +151,7 @@ No arrow runs in reverse: tools never call the frontend, Postgres never calls ba
 | @langchain/langgraph | 1.7.3 |
 | @langchain/langgraph-checkpoint-postgres | current (unpinned) |
 | @langchain/mcp-adapters | 2.0+ |
-| gpt-transcribe (voice v1) | 2026-07-28 release |
+| Whisper large-v3-turbo via OpenRouter (voice v1) | `openai/whisper-large-v3-turbo` |
 | gpt-audio-mini (voice v2, deferred) | gpt-audio-mini-2025-12-15 |
 | Mistral Moderation 2 | mistral-moderation-2603 |
 | React Compiler (via @vitejs/plugin-react `reactCompilerPreset`; peers @rolldown/plugin-babel, babel-plugin-react-compiler, @babel/core) | current (Vite 8 + @vitejs/plugin-react v6) |
@@ -91,41 +167,18 @@ No arrow runs in reverse: tools never call the frontend, Postgres never calls ba
 
 ## Structural Seed
 
-```mermaid
-flowchart TB
-    subgraph Client
-        FE["React App\n(TanStack Query, React Compiler)"]
-    end
-    subgraph Server["Node Backend"]
-        API["API layer (Express)"]
-        LOOP["Agent loop (createAgent)"]
-        MOD["Moderation + resilience hooks"]
-        TOOLS["Tools (LLM-backed / plain-code)"]
-    end
-    subgraph Data
-        PG[("Postgres\nhard state")]
-        CKPT[("Checkpointer +\nStore/pgvector")]
-    end
-    MCP["MCP: web_search"]
-    FE -->|HTTP| API --> LOOP
-    LOOP --> MOD --> TOOLS
-    TOOLS --> PG
-    LOOP -.-> CKPT
-    TOOLS --> MCP
-```
-
 ### Deployment & environments
 
 ```mermaid
 flowchart LR
-    subgraph Local["Local — build + live class demo"]
+    subgraph Local["Local: build and class demo"]
         FE1["React app"]
-        BE1["Node backend + agent"]
+        BE1["Node backend<br/>and agent"]
         PG1[("Postgres")]
     end
-    subgraph Cloud["Cloud — after the demo"]
-        CR["Cloud Run\n(Node backend + agent, always-free tier,\n2M req/month, scales to zero)"]
-        NEON[("Neon Postgres\n(auto-wakes on query after scale-to-zero)")]
+    subgraph Cloud["Cloud: after the demo"]
+        CR["Cloud Run<br/>Node backend<br/>and agent<br/>free tier<br/>2M req/month<br/>scales to zero"]
+        NEON[("Neon Postgres<br/>auto-wakes on<br/>first query")]
     end
     FE1 --> BE1 --> PG1
     CR --> NEON
@@ -137,35 +190,3 @@ Local-only first, on the user's laptop, for build and the live class demo. Deplo
 **Secrets/config:** local environment variables (`.env`) during local-only build and demo; Google Cloud's Secret Manager once deployed to Cloud Run. Applies to every credential this system holds: the voice model API key, Mistral Moderation's API key, the web-search MCP provider's key, the Google OAuth client secret (and the session secret), and the LangSmith API key.
 
 **Env-variable rule:** every story that introduces an external service adds its variable(s) to `.env.example` (placeholders only - never a real key) and to the startup check in `src/config/env.ts`, which names a missing variable without printing any value and states per variable whether it is required at startup or optional (the feature degrades per its own story). The story's completion report states which keys the user must fill in. Introducing stories: 1.2 (Google OAuth, session secret), 1.3 (model, moderation, LangSmith), 2.2 (web search), 4.3 (voice), 7.3 (deploy secrets), plus 5.1/5.3 if they add a provider not already covered. The same startup check runs unchanged against Secret Manager-provided values after deploy.
-
-### Minimal source tree
-
-```text
-src/
-  agent/           # createAgent wiring, middleware hooks, setNodeDefaults resilience config
-  tools/
-    llm/           # generate_ideas, create_plan (LLM-backed)
-    plain/         # submit_intake, set_idea_status, get_current_step, start_step, complete_step, record_check_in, get_projection, activate_plan, set_personality, set_model, record_feedback
-    mcp/           # web_search MCP client wiring
-  voice/           # transcribeCheckIn / speakResponse interface + v1 (gpt-transcribe) implementation
-  db/              # Postgres access via Drizzle ORM (hard-state tables; Neon in prod) - AD-30
-  shared/
-    schemas/       # Zod schemas (imported by backend + frontend)
-  api/             # Express app - HTTP API consumed by frontend, request/response only (AD-19)
-  config/          # env.ts - startup check of every required/optional environment variable
-web/
-  src/             # React frontend, TanStack Query hooks
-```
-
-## Deferred
-
-- **v2 voice (`gpt-audio-mini` speech-to-speech)** — waits until the v1 record→transcribe→review flow has proven itself in real use (per AD-9); the unified speech-to-speech path removes the transcript-review step and isn't needed to clear the course deadline. Note: `gpt-audio-mini-2025-12-15` (the Stack-table pin) currently has a live OpenAI deprecation notice (replacement `gpt-audio-1.5`); re-check its status directly against OpenAI's deprecations page before v2 work starts rather than trusting this pin.
-- **Voice interface contract's exact method signature/statefulness** — `transcribeCheckIn`/`speakResponse`'s precise parameter/return shapes and purity guarantees are an implementation-level detail within the AD-8 contract.
-- **Audio-retention deletion endpoint** — the exact point at which raw audio is deleted relative to transcript confirmation (within AD-9/AD-10's "no longer than needed" constraint) is left for implementation.
-- **Plant/gamification companion** — explicit non-goal for this version (SPEC constraints/non-goals); deferred to keep build time on core agent logic.
-- **Background-job missed-check-in detection + proactive notifications** — needs a scheduler (e.g. Cloud Scheduler) and a not-yet-designed notification channel (push/email); lazy detection (AD-15) is sufficient for v1's best-effort CAP-4 scope and the live demo.
-- **Exact Postgres schema (column-level detail)** — left for implementation; AD-2/AD-3 fix which tables own which class of fact, not their columns.
-- **Exact preselected range boundaries for the available-time, budget, and risk-tolerance intake fields** — left for Architecture/UX per SPEC's own assumption; not fixed in this spine.
-- **Final adoption of Mistral Moderation 2** — mandatory as the moderation mechanism and hook placement (AD-11), but the model itself is pending evaluation against the project's labelled/held-out test sets before being treated as a closed decision.
-- **UI visual design** — a separate UX step (DESIGN.md/EXPERIENCE.md), not this spine's concern.
-- **Exact retry counts, backoff values, and timeout durations** — AD-7 fixes where resilience config lives (node-level `setNodeDefaults`) and which tool classes get longer vs. shorter policies, not the specific numbers; left for implementation/tuning.
