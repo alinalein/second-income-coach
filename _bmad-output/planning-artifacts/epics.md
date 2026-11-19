@@ -1684,6 +1684,10 @@ So that the code is consistent, free of leftovers and easy to read before handof
 **When** audited
 **Then** it reports and removes dead code, unused exports/files/i18n keys, commented-out code, stray `console.log`/debug output and stale TODOs - but before deleting anything it checks epics.md and the spine for the name; anything an AC, UX-DR or AD names stays and is reported to the user instead (CLAUDE.md "Requirements stay in place")
 
+**Given** the audit tooling
+**When** the pass runs
+**Then** it uses the `simplify` skill once per workspace (shared, src, web) under the ACs of this story, then at most one medium `code-review` on the resulting diff; no other skills or reviewers (token budget)
+
 **Given** duplicated logic or oversized files/functions
 **When** found
 **Then** they are consolidated or split only where it is a clear, low-risk win (same helper written twice, a file mixing unrelated concerns); no speculative abstractions, no renames of public API/route/env names
