@@ -8,6 +8,11 @@
 - At the end of each story, report: the new tests, the AC or AD each one maps to, and the total run time. Remove any test you cannot map.
 - Per story, at most one test per I/O-matrix row or acceptance criterion, plus one per distinct failure branch in security-relevant code; put variants of the same case into one table-driven test (it.each). If a story would need more than 20 new tests, stop and list them with the reason before writing any.
 
+## Idea generation smoke check
+
+- Any change that touches `src/tools/llm/generate_ideas.ts`, its prompts or schemas, `src/agent/resilience.ts`, the model/registry config, `shared/schemas/ideas.ts` or `WEB_SEARCH_MODE` handling must run `npm run smoke:ideas` before the report. The report states its result (success, ideas returned, seconds). A red or missing smoke check means the story is not done.
+- Do not leave `npm run dev` running in the lane while editing; a watch restart during a live request shows up as a 502.
+
 ## External service configuration
 
 - Every story that introduces an external service adds its variable to `.env.example` (placeholder only, never a real key) and to the startup validation in `src/config/env.ts`.
