@@ -1,5 +1,5 @@
 import type { ReportData, MistralJailbreakFlagRateSection } from './build-report.js';
-import type { ModelCostSummary } from './cost.js';
+import type { GroupCostSummary, ModelCostSummary } from './cost.js';
 
 function pct(value: number): string {
   return `${(value * 100).toFixed(1)}%`;
@@ -7,6 +7,19 @@ function pct(value: number): string {
 
 function usd(value: number | null): string {
   return value === null ? 'n/a (no registered price)' : `$${value.toFixed(4)}`;
+}
+
+/** User-requested (2026-11-20, amended): a group that was never recorded
+ * this run must never render as a confirmed-looking `$0.0000` — show
+ * exactly why there's no number instead. */
+function groupCostCell(group: GroupCostSummary): string {
+  if (group.status === 'not-recorded') return 'not recorded';
+  if (group.status === 'not-priced') return 'not priced';
+  return usd(group.estimatedCostUsd);
+}
+
+function ms(value: number | null): string {
+  return value === null ? 'not measured' : `${Math.round(value)} ms`;
 }
 
 /**
@@ -110,20 +123,38 @@ export function renderMarkdown(report: ReportData): string {
 
   lines.push('## Estimated run cost');
   lines.push('');
-  lines.push(`Mechanism: ${report.cost.mechanism} (see Known limitations).`);
+  lines.push(`Mechanism: ${report.cost.mechanism} (see Known limitations). Prices as of ${report.cost.priceAsOf}, source: ${report.cost.priceSource}.`);
   lines.push('');
-  lines.push('| Model | Input tokens | Output tokens | $/1M in | $/1M out | Estimated cost | Data |');
-  lines.push('|---|---|---|---|---|---|---|');
+  lines.push('| Model | Role | Input tokens | Output tokens | $/1M in | $/1M out | Estimated cost | Data |');
+  lines.push('|---|---|---|---|---|---|---|---|');
   for (const entry of report.cost.perModel) {
     lines.push(
-      `| ${entry.modelId} | ${entry.inputTokens} | ${entry.outputTokens} | ${entry.pricePerMillionInputTokens ?? 'n/a'} | ${entry.pricePerMillionOutputTokens ?? 'n/a'} | ${usd(entry.estimatedCostUsd)} | ${dataStatus(entry)} |`,
+      `| ${entry.modelId} | ${entry.role} | ${entry.inputTokens} | ${entry.outputTokens} | ${entry.pricePerMillionInputTokens ?? 'n/a'} | ${entry.pricePerMillionOutputTokens ?? 'n/a'} | ${usd(entry.estimatedCostUsd)} | ${dataStatus(entry)} |`,
     );
   }
   lines.push('');
-  lines.push(`**Total estimated cost (priced models only): $${report.cost.totalEstimatedCostUsd.toFixed(4)}**`);
+  lines.push('| Group | Estimated cost |');
+  lines.push('|---|---|');
+  lines.push(`| Target models | ${groupCostCell(report.cost.groups.targetModels)} |`);
+  lines.push(`| Sonnet (eval-only) | ${groupCostCell(report.cost.groups.sonnet)} |`);
+  lines.push(`| Judges | ${groupCostCell(report.cost.groups.judges)} |`);
+  lines.push('');
+  lines.push(`**Total (${report.cost.totalLabel}): $${report.cost.totalEstimatedCostUsd.toFixed(4)}**`);
   if (hasIncompleteCostData(report.cost.perModel)) {
     lines.push('');
     lines.push('⚠️ At least one model above has `partial` or `none` usage data (see its "Data" column) — its token/cost figures are a floor, not a precise total.');
+  }
+  lines.push('');
+
+  lines.push('## Latency');
+  lines.push('');
+  lines.push('Per model, the one direct `/steps/:stepId/start-ack` model call (5 real calls, run via its own standalone, cheap eval step) versus a full deterministic trajectory case\'s own agent turn. "not measured" means the relevant step has not been run for this results file — never a fabricated number.');
+  lines.push('');
+  lines.push('| Model | Start-step ack: median | Start-step ack: max | Calls | Trajectory case: median |');
+  lines.push('|---|---|---|---|---|');
+  for (const ackRow of report.latency.ackByModel) {
+    const detRow = report.latency.deterministicByModel.find((entry) => entry.modelId === ackRow.modelId);
+    lines.push(`| ${ackRow.modelId} | ${ms(ackRow.medianMs)} | ${ms(ackRow.maxMs)} | ${ackRow.calls} | ${ms(detRow?.medianMs ?? null)} |`);
   }
   lines.push('');
 
@@ -185,14 +216,22 @@ export function renderHtml(report: ReportData): string {
   const costRows = report.cost.perModel
     .map(
       (entry) =>
-        `<tr><td>${escape(entry.modelId)}</td><td>${entry.inputTokens}</td><td>${entry.outputTokens}</td><td>${entry.pricePerMillionInputTokens ?? 'n/a'}</td><td>${entry.pricePerMillionOutputTokens ?? 'n/a'}</td><td>${escape(usd(entry.estimatedCostUsd))}</td><td>${dataStatus(entry)}</td></tr>`,
+        `<tr><td>${escape(entry.modelId)}</td><td>${entry.role}</td><td>${entry.inputTokens}</td><td>${entry.outputTokens}</td><td>${entry.pricePerMillionInputTokens ?? 'n/a'}</td><td>${entry.pricePerMillionOutputTokens ?? 'n/a'}</td><td>${escape(usd(entry.estimatedCostUsd))}</td><td>${dataStatus(entry)}</td></tr>`,
     )
     .join('\n');
   const incompleteCostNote = hasIncompleteCostData(report.cost.perModel)
     ? '<p>⚠️ At least one model above has <code>partial</code> or <code>none</code> usage data (see its "Data" column) — its token/cost figures are a floor, not a precise total.</p>'
     : '';
+  const costTotalLine = `<p><strong>Total (${escape(report.cost.totalLabel)}): $${report.cost.totalEstimatedCostUsd.toFixed(4)}</strong></p>`;
 
   const limitationItems = report.limitations.map((limitation) => `<li>${escape(limitation.summary)}</li>`).join('\n');
+
+  const latencyRows = report.latency.ackByModel
+    .map((ackRow) => {
+      const detRow = report.latency.deterministicByModel.find((entry) => entry.modelId === ackRow.modelId);
+      return `<tr><td>${escape(ackRow.modelId)}</td><td>${escape(ms(ackRow.medianMs))}</td><td>${escape(ms(ackRow.maxMs))}</td><td>${ackRow.calls}</td><td>${escape(ms(detRow?.medianMs ?? null))}</td></tr>`;
+    })
+    .join('\n');
 
   return `<!doctype html>
 <html lang="en">
@@ -241,12 +280,23 @@ ${qualityRows}
 </table>
 
 <h2>Estimated run cost</h2>
-<p>Mechanism: ${escape(report.cost.mechanism)} (see Known limitations).</p>
-<table><tr><th>Model</th><th>Input tokens</th><th>Output tokens</th><th>$/1M in</th><th>$/1M out</th><th>Estimated cost</th><th>Data</th></tr>
+<p>Mechanism: ${escape(report.cost.mechanism)} (see Known limitations). Prices as of ${escape(report.cost.priceAsOf)}, source: ${escape(report.cost.priceSource)}.</p>
+<table><tr><th>Model</th><th>Role</th><th>Input tokens</th><th>Output tokens</th><th>$/1M in</th><th>$/1M out</th><th>Estimated cost</th><th>Data</th></tr>
 ${costRows}
 </table>
-<p><strong>Total estimated cost (priced models only): $${report.cost.totalEstimatedCostUsd.toFixed(4)}</strong></p>
+<table><tr><th>Group</th><th>Estimated cost</th></tr>
+<tr><td>Target models</td><td>${escape(groupCostCell(report.cost.groups.targetModels))}</td></tr>
+<tr><td>Sonnet (eval-only)</td><td>${escape(groupCostCell(report.cost.groups.sonnet))}</td></tr>
+<tr><td>Judges</td><td>${escape(groupCostCell(report.cost.groups.judges))}</td></tr>
+</table>
+${costTotalLine}
 ${incompleteCostNote}
+
+<h2>Latency</h2>
+<p>Per model, the one direct <code>/steps/:stepId/start-ack</code> model call (5 real calls, run via its own standalone, cheap eval step) versus a full deterministic trajectory case's own agent turn. "not measured" means the relevant step has not been run for this results file — never a fabricated number.</p>
+<table><tr><th>Model</th><th>Start-step ack: median</th><th>Start-step ack: max</th><th>Calls</th><th>Trajectory case: median</th></tr>
+${latencyRows}
+</table>
 
 <h2>Known limitations</h2>
 <ul>
@@ -286,7 +336,15 @@ export function renderJsonSummary(report: ReportData): object {
     cost: {
       perModel: report.cost.perModel,
       totalEstimatedCostUsd: report.cost.totalEstimatedCostUsd,
+      totalLabel: report.cost.totalLabel,
       mechanism: report.cost.mechanism,
+      priceAsOf: report.cost.priceAsOf,
+      priceSource: report.cost.priceSource,
+      groups: report.cost.groups,
+    },
+    latency: {
+      ackByModel: report.latency.ackByModel,
+      deterministicByModel: report.latency.deterministicByModel,
     },
     limitations: report.limitations,
   };

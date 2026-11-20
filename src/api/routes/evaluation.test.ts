@@ -2,10 +2,10 @@ import express from 'express';
 import session from 'express-session';
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
-import { createQualityRouter } from './quality.js';
+import { createEvaluationRouter } from './evaluation.js';
 import { requireAuth } from '../middleware/requireAuth.js';
 
-const SESSION_USER_ID = 'quality-test-session-user-id';
+const SESSION_USER_ID = 'evaluation-test-session-user-id';
 
 function buildTestApp(authenticated: boolean) {
   const app = express();
@@ -19,7 +19,7 @@ function buildTestApp(authenticated: boolean) {
   // Same gate every other route sits behind in `app.ts` — exercised here
   // directly (not bypassed) since this story's own AC is about this gate.
   app.use(requireAuth);
-  app.use('/api/quality', createQualityRouter());
+  app.use('/api/evaluation', createEvaluationRouter());
   return app;
 }
 
@@ -27,7 +27,7 @@ function buildTestApp(authenticated: boolean) {
 // secrets, and no private LangSmith trace links - verified, not just
 // asserted" (AD-28). Reads the real, committed sources (no path overrides)
 // so this proves the actual shipped payload, not a fixture.
-describe('createQualityRouter GET / (AC: no user data, secrets or LangSmith links)', () => {
+describe('createEvaluationRouter GET / (AC: no user data, secrets or LangSmith links)', () => {
   it.each([
     ['the signed-in session user id', SESSION_USER_ID],
     ['a LangSmith trace link', /smith\.langchain\.com/i],
@@ -35,20 +35,20 @@ describe('createQualityRouter GET / (AC: no user data, secrets or LangSmith link
   ])('the payload never contains %s', async (_label, forbidden) => {
     const app = buildTestApp(true);
 
-    const res = await request(app).get('/api/quality');
+    const res = await request(app).get('/api/evaluation');
 
     expect(res.status).toBe(200);
     expect(JSON.stringify(res.body)).not.toMatch(forbidden);
   });
 });
 
-// AC: "/quality and its data endpoint require a signed-in session like
+// AC: "/evaluation and its data endpoint require a signed-in session like
 // every other route (AD-28, no exception)".
-describe('createQualityRouter GET / (AC: AD-28, same auth as every other route)', () => {
+describe('createEvaluationRouter GET / (AC: AD-28, same auth as every other route)', () => {
   it('rejects a signed-out request with 401', async () => {
     const app = buildTestApp(false);
 
-    const res = await request(app).get('/api/quality');
+    const res = await request(app).get('/api/evaluation');
 
     expect(res.status).toBe(401);
   });

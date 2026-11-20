@@ -156,6 +156,6 @@ export * from './progress.js';
  */
 export * from './eval-results.js';
 
-/** Story 7.5: `GET /api/quality`'s response shape, validated both
- * server-side (before responding) and client-side (the `/quality` page). */
-export * from './quality.js';
+/** Story 7.5: `GET /api/evaluation`'s response shape, validated both
+ * server-side (before responding) and client-side (the `/evaluation` page). */
+export * from './evaluation.js';

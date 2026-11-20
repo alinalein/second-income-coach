@@ -47,39 +47,67 @@ export const stepActionToolSchema = z.object({
 export type StepActionToolArgs = z.infer<typeof stepActionToolSchema>;
 
 /**
- * Spec 2.12 AC8: `chatMessage` is present only when the server's own one
- * direct, non-agentic model call produced a start-of-step acknowledgment
- * that passed moderation/guilt-language checks — absent (not an error) on
- * any model-call failure/flag/timeout, same fail-open precedent as every
- * other best-effort extra in this codebase.
+ * `POST .../steps/:stepId/start`'s own response — the plain DB write only.
+ * Perf fix (user-reported, live): `chatMessage` used to live here too (one
+ * direct, non-agentic model call run inline), making this response wait on
+ * it; that call is now `startStepAckResponseSchema` below, fetched by the
+ * frontend as a second request right after this one succeeds.
  */
 export const startStepResponseSchema = z.object({
   step: planStepResponseSchema,
-  chatMessage: chatMessageSchema.optional(),
 });
 
 export type StartStepResponse = z.infer<typeof startStepResponseSchema>;
 
 /**
- * AC: "`complete_step` on the final step ... the plan's status becomes
+ * Spec 2.12 AC8: `POST .../steps/:stepId/start-ack`'s own response —
+ * `chatMessage` is present only when the server's own one direct,
+ * non-agentic model call produced a start-of-step acknowledgment that
+ * passed moderation/guilt-language checks — absent (not an error) on any
+ * model-call failure/flag/timeout, same fail-open precedent as every other
+ * best-effort extra in this codebase.
+ */
+export const startStepAckResponseSchema = z.object({
+  chatMessage: chatMessageSchema.optional(),
+});
+
+export type StartStepAckResponse = z.infer<typeof startStepAckResponseSchema>;
+
+/**
+ * `POST .../steps/:stepId/complete`'s own response — the plain DB write
+ * only. Story 4.6 (perf fix, mirroring `startStepResponseSchema`'s own
+ * precedent exactly): `chatMessage` used to live here too (one direct,
+ * non-agentic model call run inline), making this response wait on it;
+ * that call is now `completeStepAckResponseSchema` below, fetched by the
+ * frontend as a second request right after this one succeeds.
+ * `planCompleted` is the discriminator the caller (route, agent, or the
+ * later `/complete-ack` request) uses to pick which acknowledgment applies
+ * — "`complete_step` on the final step ... the plan's status becomes
  * `completed`, with its own completion acknowledgment distinct from a
- * per-step one" — `planCompleted` is the discriminator the caller (route or
- * agent) uses to pick which acknowledgment applies.
- *
- * Story 4.5 (AC3) + user-requested follow-up: `chatMessage` mirrors
- * `startStepResponseSchema`'s own field exactly — present whenever the
- * route's own one direct, non-agentic model call produced a completion
- * message that passed moderation/guilt-language checks, themed around the
- * whole plan when `planCompleted` is true or around just this one step
- * otherwise; absent (not an error) on any model-call failure/flag/timeout.
+ * per-step one".
  */
 export const completeStepResponseSchema = z.object({
   step: planStepResponseSchema,
   planCompleted: z.boolean(),
-  chatMessage: chatMessageSchema.optional(),
 });
 
 export type CompleteStepResponse = z.infer<typeof completeStepResponseSchema>;
+
+/**
+ * Story 4.6: `POST .../steps/:stepId/complete-ack`'s own response — mirrors
+ * `startStepAckResponseSchema` exactly. `chatMessage` is present only when
+ * the server's own one direct, non-agentic model call produced a completion
+ * acknowledgment (themed around the whole plan on the plan's final step, or
+ * around just this one step otherwise — never both: the final step's own
+ * plan-completion message is the only message this route ever produces for
+ * that step) that passed moderation/guilt-language checks — absent (not an
+ * error) on any model-call failure/flag/timeout, same fail-open precedent.
+ */
+export const completeStepAckResponseSchema = z.object({
+  chatMessage: chatMessageSchema.optional(),
+});
+
+export type CompleteStepAckResponse = z.infer<typeof completeStepAckResponseSchema>;
 
 /**
  * Story 4.1 (AC, follow-up): `GET /api/plans/check-in-status` — whether

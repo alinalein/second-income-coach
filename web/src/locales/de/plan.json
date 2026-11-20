@@ -70,6 +70,7 @@
     "feedbackLabel": "Was soll sich ändern?",
     "feedbackPlaceholder": "Sag uns, was an diesem Plan geändert werden soll…",
     "feedbackRequired": "Bitte beschreibe, was sich ändern soll.",
+    "feedbackStepCountOutOfRange": "Minimal {{min}} Schritte, maximal {{max}} Schritte.",
     "submitFeedbackButton": "Feedback senden & neu erstellen",
     "regenerating": "Dein Plan wird basierend auf deinem Feedback aktualisiert…",
     "saving": "Wird gespeichert…",

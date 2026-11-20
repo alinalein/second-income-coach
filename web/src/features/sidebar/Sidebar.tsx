@@ -14,7 +14,7 @@ import { Badge } from '../../components/ui/badge';
 export type SidebarTarget =
   | { kind: 'ideas' }
   | { kind: 'settings' }
-  | { kind: 'quality' }
+  | { kind: 'evaluation' }
   | { kind: 'plan'; ideaId: string; ideaTitle: string }
   | { kind: 'bookmarked'; ideaId: string }
   // UX fix (user-reported): "Bookmarked" is now one button (like "New
@@ -27,7 +27,7 @@ export type SidebarTarget =
 export type SidebarActiveRoute =
   | { kind: 'ideas' }
   | { kind: 'settings' }
-  | { kind: 'quality' }
+  | { kind: 'evaluation' }
   | { kind: 'plan'; ideaId: string }
   | { kind: 'bookmarked'; ideaId: string }
   | { kind: 'bookmarkedAll' }
@@ -326,20 +326,20 @@ export function Sidebar({
         <MyPlansList plans={plansList} activeRoute={activeRoute} onSelect={handleSelectPlan} t={t} />
       </div>
 
-      {/* Story 7.5: "Quality" sits directly above "Settings" in this same
-       * footer group, own row (full-width, same as the top-nav entries)
-       * since "Settings" shares its row with sign-out. */}
+      {/* Story 7.5: "Evaluation" sits directly above "Settings" in this
+       * same footer group, own row (full-width, same as the top-nav
+       * entries) since "Settings" shares its row with sign-out. */}
       <div className="mt-auto flex flex-col gap-2 border-t border-border pt-4">
         <Button
           type="button"
-          variant={activeRoute.kind === 'quality' ? 'accent' : 'ghost'}
+          variant={activeRoute.kind === 'evaluation' ? 'accent' : 'ghost'}
           size="sm"
-          aria-current={activeRoute.kind === 'quality' ? 'page' : undefined}
+          aria-current={activeRoute.kind === 'evaluation' ? 'page' : undefined}
           className="w-full justify-start"
-          onClick={() => handleNavigate({ kind: 'quality' })}
+          onClick={() => handleNavigate({ kind: 'evaluation' })}
         >
           <ShieldCheck className="h-4 w-4 shrink-0" aria-hidden="true" />
-          {t('profile.qualityLabel')}
+          {t('profile.evaluationLabel')}
         </Button>
 
         {/* UX fix (user-reported): the dark/light toggle moved into the

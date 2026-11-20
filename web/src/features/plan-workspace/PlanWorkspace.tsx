@@ -188,6 +188,14 @@ export function PlanWorkspace({ ideaId, ideaTitle, onPlanLoaded }: PlanWorkspace
   // `incomingMessage` prop (id-guarded there against a later history re-GET
   // that also picks up this same server-persisted message).
   const [incomingMessage, setIncomingMessage] = React.useState<ChatMessage | undefined>(undefined);
+  // Perf fix (user-reported, live): true the moment `start_step`'s own DB
+  // write succeeds, before its (now separate, async) chat acknowledgment
+  // request has resolved — shown by `ChatThread` as a typing indicator so
+  // the chat reflects *something* immediately instead of staying silent for
+  // however long that second request takes. Cleared either by the
+  // acknowledgment landing (`setIncomingMessage` below already re-renders
+  // regardless) or by its own fail-open "no message" settlement.
+  const [awaitingStepAck, setAwaitingStepAck] = React.useState(false);
   // Kept in a ref (not the main effect's own dependency array below) so a
   // new `onPlanLoaded` function identity on every parent render never
   // re-triggers the lazy `POST /select/:ideaId` fetch — only a genuine
@@ -343,18 +351,17 @@ export function PlanWorkspace({ ideaId, ideaTitle, onPlanLoaded }: PlanWorkspace
   // `/api/plans`. Flipping `plan.status` here locally fixes the first two
   // immediately; re-using `onPlanLoaded` (the same hook `App.tsx` already
   // bumps `plansRefreshKey` from on the initial load) fixes the sidebar
-  // without adding a second refresh mechanism. `message` (the completion
-  // chat acknowledgment) is shown the same live way `onStepStarted` already
-  // shows a start acknowledgment — it previously only ever reached the
-  // thread via a later page reload's own history read.
-  const handlePlanCompleted = React.useCallback((message?: ChatMessage) => {
+  // without adding a second refresh mechanism. Story 4.6: no longer takes
+  // the completion chat message — that now arrives separately, the same
+  // live way `onStepStarted` already shows a start acknowledgment, via
+  // `onStepCompletionAck` (shared `incomingMessage` state) below.
+  const handlePlanCompleted = React.useCallback(() => {
     setPlan((prev) => {
       if (!prev || prev.status === 'completed') return prev;
       const updated: PlanResponse = { ...prev, status: 'completed' };
       onPlanLoadedRef.current?.(updated);
       return updated;
     });
-    if (message) setIncomingMessage(message);
     setShowConfetti(true);
   }, []);
 
@@ -531,8 +538,19 @@ export function PlanWorkspace({ ideaId, ideaTitle, onPlanLoaded }: PlanWorkspace
                 planId={plan.id}
                 ideaTitle={ideaTitle}
                 planStatus={plan.status}
-                onStepStarted={setIncomingMessage}
+                onStepStarting={() => setAwaitingStepAck(true)}
+                onStepStarted={(message) => {
+                  setAwaitingStepAck(false);
+                  setIncomingMessage(message);
+                }}
+                onStepStartAckFailed={() => setAwaitingStepAck(false)}
                 onPlanCompleted={handlePlanCompleted}
+                onStepCompleting={() => setAwaitingStepAck(true)}
+                onStepCompletionAck={(message) => {
+                  setAwaitingStepAck(false);
+                  setIncomingMessage(message);
+                }}
+                onStepCompletionAckFailed={() => setAwaitingStepAck(false)}
                 onPlanActivityChanged={refreshProjection}
               />
             </div>
@@ -551,6 +569,7 @@ export function PlanWorkspace({ ideaId, ideaTitle, onPlanLoaded }: PlanWorkspace
                 endpoint={`/api/plans/${plan.id}/messages`}
                 footerItems={footerItems}
                 incomingMessage={incomingMessage}
+                awaitingExternalReply={awaitingStepAck}
                 inputExtra={(fillDraft, disabled, getSendCount) => (
                   <VoiceInput fillDraft={fillDraft} disabled={disabled} getSendCount={getSendCount} />
                 )}

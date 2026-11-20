@@ -173,15 +173,21 @@ describe('PlanWorkspace (bug fix, live: completing the final step updates everyt
       '/api/plans/plan-1/current-step': () => new Response(JSON.stringify(currentStep), { status: 200 }),
       '/api/plans/plan-1/projection': () => new Response(JSON.stringify(fakeProjection()), { status: 200 }),
       '/api/plans/plan-1/messages': () => new Response(JSON.stringify({ messages: [] }), { status: 200 }),
-      '/api/plans/plan-1/steps/step-1/complete': () =>
+      // Story 4.6: `/complete` is the DB write alone, no `chatMessage` —
+      // the acknowledgment is a separate, later `/complete-ack` request
+      // (mirrors `/start` + `/start-ack`). Listed before `/complete` below
+      // so this mock helper's own substring matching (`url.includes(key)`)
+      // checks the more specific key first — `/complete-ack` would
+      // otherwise also match the plain `/complete` entry.
+      '/api/plans/plan-1/steps/step-1/complete-ack': () =>
         new Response(
           JSON.stringify({
-            step: { ...step, status: 'completed' },
-            planCompleted: true,
             chatMessage: { id: 'msg-1', role: 'assistant', kind: 'message', content: 'You finished the whole plan — nice work! 🎉', createdAt: new Date().toISOString() },
           }),
           { status: 200 },
         ),
+      '/api/plans/plan-1/steps/step-1/complete': () =>
+        new Response(JSON.stringify({ step: { ...step, status: 'completed' }, planCompleted: true }), { status: 200 }),
       ...CHECK_IN_STATUS_ANSWERED,
     });
     vi.stubGlobal('fetch', fetchMock);

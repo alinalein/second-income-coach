@@ -19,9 +19,8 @@ Trimmed to the most significant weaknesses (short "Weakness" headline, max ~8 wo
 | ID | Scenario | What happens | Suggestion |
 |---|---|---|---|
 | EC-1 | The user lives outside UTC. | "Once per day" (the energy question) and missed-day counting use UTC calendar days, so a day can start or end at an odd local hour. | Store the user's time zone and compute days in it. |
-| EC-2 | The user asks the plan chat about a step that is neither current nor next (e.g. "what exactly was step 3?"). | The model only sees the current and next step (AD-4 cap), so it cannot answer and says so instead of guessing. Found in end-to-end testing. | Let `get_current_step` also return already-completed steps (past steps carry no spoiler risk); keep the cap for future steps. |
-| EC-3 | The user clicks through plans and actions very quickly. | The rate limits can answer 429 (general 600/min, plan actions 40/min after being raised). The UI recovers on the next request. | Show a short "slow down" notice instead of a raw error. |
-| EC-4 | One idea of a batch fails (timeout, unsupported income rate). | The failing slot is dropped instead of failing the whole batch, so fewer than `IDEAS_PER_BATCH` ideas can be returned. | Offer "generate one more" automatically when a batch is short. |
+| EC-2 | The user clicks through plans and actions very quickly. | The rate limits can answer 429 (general 600/min, plan actions 40/min after being raised). The UI recovers on the next request. | Show a short "slow down" notice instead of a raw error. |
+| EC-3 | One idea of a batch fails (timeout, unsupported income rate). | The failing slot is dropped instead of failing the whole batch, so fewer than `IDEAS_PER_BATCH` ideas can be returned. | Offer "generate one more" automatically when a batch is short. |
 
 ## Code improvement suggestions
 
@@ -39,7 +38,7 @@ Trimmed to the most significant weaknesses (short "Weakness" headline, max ~8 wo
 | Core Functionality | [README § Example Use Case](../README.md#example-use-case), [TECHNICAL-RATIONALE § Agent loop](TECHNICAL-RATIONALE.md#agent-loop), [TECHNICAL-RATIONALE § Tool boundary](TECHNICAL-RATIONALE.md#tool-boundary-llm-backed-vs-plain-code-vs-mcp), `src/tools/`, `src/evals/published/eval-results.json` (100% tool-call accuracy for all 4 models, 13/13 each, above the 80% target; 55/55 guardrail tests passing) |
 | User Interface | `web/src/` (React app), [README § Getting started](../README.md#getting-started) |
 | Technical Implementation | [TECHNICAL-RATIONALE.md](TECHNICAL-RATIONALE.md) in full (agent shape, tool boundary, error handling, security, idea generation, models/cost, memory), [README § Project structure](../README.md#project-structure), [ARCHITECTURE-SPINE.md](../_bmad-output/planning-artifacts/architecture/architecture-p_3-2026-11-13/ARCHITECTURE-SPINE.md) |
-| Documentation / reflection | [README.md](../README.md), [TECHNICAL-RATIONALE.md](TECHNICAL-RATIONALE.md), this document, the **Quality & Decisions page** (`/quality`, signed-in only, linked from the sidebar footer — Story 7.5) |
+| Documentation / reflection | [README.md](../README.md), [TECHNICAL-RATIONALE.md](TECHNICAL-RATIONALE.md), this document, the **Evaluation & Decisions page** (`/evaluation`, signed-in only, linked from the sidebar footer — Story 7.5) |
 
 ## Eval numbers behind the table above (verbatim from `eval-results.json`)
 

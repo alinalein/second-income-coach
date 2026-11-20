@@ -45,8 +45,27 @@ export const MODEL_NODE_TIMEOUT_MS = 30_000;
  * constant's doc comment has the measured evidence) — comfortably over 2
  * attempts at 110s (220s) plus the outer agent's own decision/final-reply
  * calls.
+ *
+ * Bug fix (user-reported, live): raised to 380s alongside
+ * `generate_ideas.ts`'s own `MAX_DRAFT_ATTEMPTS` 2 -> 3 raise (a slot
+ * dropping after exhausting its retries — "only 2 of 3 ideas" — kept
+ * recurring live even after the rationale-shape guard's own prompt fix).
+ * The real, logged per-attempt latency is consistently ~10-12s, nowhere
+ * near `DRAFT_ATTEMPT_TIMEOUT_MS`'s own 110s ceiling (a defensive cap for
+ * a hung call, not the expected duration) — a 3rd attempt only costs
+ * real time when a slot's first two genuinely failed. 380s keeps the
+ * same "comfortable margin over the mathematical worst case" standard
+ * this constant already follows: 3 attempts at 110s (330s) plus query
+ * planning and the outer agent's own decision/final-reply calls.
+ *
+ * Bug fix (found live, diagnosed from a real `502`): 380s -> 410s,
+ * alongside `generate_ideas.ts`'s own `QUERY_PLANNING_TIMEOUT_MS` 30s ->
+ * 60s raise (that constant's own doc comment has the measured cause and
+ * evidence) — keeps the "3 attempts at 110s (330s) plus query planning
+ * and the outer agent's own decision/final-reply calls" margin intact
+ * now that query planning's own worst case doubled.
  */
-export const IDEAS_MODEL_NODE_TIMEOUT_MS = 230_000;
+export const IDEAS_MODEL_NODE_TIMEOUT_MS = 410_000;
 
 /**
  * Story 2.2 round 9, fix (a) (user-required, not a guess): "the ideas path

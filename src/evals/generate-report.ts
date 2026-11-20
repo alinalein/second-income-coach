@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { publishedEvalResultsSchema } from '@app/shared';
 import { assessRunCompleteness, buildReport, type TrajectoryResults } from './build-report.js';
 import { runGuardrailSuites, type GuardrailSuiteResult } from './guardrails.js';
@@ -119,4 +119,14 @@ function main(): void {
   }
 }
 
-main();
+// Bug fix (discovered live, 2026-11-20): `main()` used to run unconditionally
+// at module scope — every test importing `runGenerateReport` from this file
+// (`generate-report.test.ts`) also ran a real `main()` as an unwanted
+// side effect, overwriting the committed `published/eval-results.json`
+// against whatever stale `results/trajectory-results.json` happened to be
+// on disk every time `npm test` ran. Only runs when this file is the actual
+// process entry point (`tsx evals/generate-report.ts`, `eval:report`'s own
+// script), never on a plain import.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main();
+}

@@ -14,8 +14,8 @@ import planEn from '../locales/en/plan.json';
 import planDe from '../locales/de/plan.json';
 import sidebarEn from '../locales/en/sidebar.json';
 import sidebarDe from '../locales/de/sidebar.json';
-import qualityEn from '../locales/en/quality.json';
-import qualityDe from '../locales/de/quality.json';
+import evaluationEn from '../locales/en/evaluation.json';
+import evaluationDe from '../locales/de/evaluation.json';
 
 /**
  * AD-24: `react-i18next`, resources bundled statically (no HTTP backend —
@@ -31,8 +31,8 @@ import qualityDe from '../locales/de/quality.json';
  */
 void i18n.use(initReactI18next).init({
   resources: {
-    en: { common: commonEn, chat: chatEn, intake: intakeEn, ideas: ideasEn, settings: settingsEn, plan: planEn, sidebar: sidebarEn, quality: qualityEn },
-    de: { common: commonDe, chat: chatDe, intake: intakeDe, ideas: ideasDe, settings: settingsDe, plan: planDe, sidebar: sidebarDe, quality: qualityDe },
+    en: { common: commonEn, chat: chatEn, intake: intakeEn, ideas: ideasEn, settings: settingsEn, plan: planEn, sidebar: sidebarEn, evaluation: evaluationEn },
+    de: { common: commonDe, chat: chatDe, intake: intakeDe, ideas: ideasDe, settings: settingsDe, plan: planDe, sidebar: sidebarDe, evaluation: evaluationDe },
   },
   lng: 'en',
   fallbackLng: 'en',

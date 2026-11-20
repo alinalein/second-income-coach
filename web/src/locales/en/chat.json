@@ -2,6 +2,7 @@
   "title": "Coach chat",
   "loading": "Loading…",
   "empty": "Say hello to get started.",
+  "typing": "Typing…",
   "placeholder": "Type a message…",
   "messageAriaLabel": "Message",
   "sendButton": "Send",

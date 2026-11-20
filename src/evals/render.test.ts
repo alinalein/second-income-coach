@@ -53,13 +53,23 @@ describe.each([
     expect(output).toContain('judge call failed: 429 rate limited');
   });
 
-  it('AD-21: discloses the unpriced eval-only model as having no registered price, never a guessed number', () => {
+  // User-requested (2026-11-20, Job B): the eval-only price table now
+  // actually prices every model this fixture names (including the
+  // Sonnet/eval-only model and both judges) — the null-price branch is
+  // only reachable for a model truly absent from that table, so this test
+  // adds one rather than relying on the fixture's own (now-priced) models.
+  it('AD-21: discloses a model absent from the eval-only price table as having no registered price, never a guessed number', () => {
+    const unpricedModelId = 'unknown-provider/not-in-the-eval-price-table';
+    const reportWithUnpricedModel = buildReport(
+      { ...sampleTrajectoryResults, perModelAccuracy: [...sampleTrajectoryResults.perModelAccuracy, { modelId: unpricedModelId, deterministicCaseCount: 0, passedCaseCount: 0, accuracy: 0, meetsTarget: false }] },
+      guardrailResults,
+    );
     // Verification-gap: the data layer (`ReportData.cost.perModel[...].estimatedCostUsd === null`)
     // was already checked elsewhere, but nothing asserted the *rendered*
     // text actually carries the disclosure through — a regression in
     // `usd()`'s null branch (e.g. returning a guessed "$0.0000") would
     // have passed every other assertion here.
-    expect(output).toContain('no registered price');
+    expect(render(reportWithUnpricedModel)).toContain('no registered price');
   });
 });
 

@@ -4,6 +4,8 @@ import { useTranslation } from 'react-i18next';
 import {
   planActivationReviewSchema,
   createPlanDraftSchema,
+  MIN_PLAN_STEPS,
+  MAX_PLAN_STEPS,
   type PlanActivationReview,
   type PlanResponse,
   type CreatePlanDraft,
@@ -35,6 +37,27 @@ function toEditableSteps(steps: PlanActivationReview['steps']): EditableStep[] {
     .map((step) => ({ title: step.title, descriptionText: step.description.join('\n'), dayOffset: step.dayOffset }));
 }
 
+/**
+ * User-reported, live: "Not quite — regenerate" feedback asking for a step
+ * count outside `create_plan`'s own 3-12 bound (`MIN_PLAN_STEPS`/
+ * `MAX_PLAN_STEPS`, `shared/schemas/plans.ts`) used to reach the model
+ * anyway — asked to satisfy both "exactly N steps" and "between 3 and 12
+ * steps" at once, it padded a fake extra step with placeholder content
+ * ("Step 3: x") rather than silently ignoring the out-of-range request.
+ * Caught here, before the request ever reaches the model: a plain digit
+ * count next to the word "step(s)"/"Schritt(e)" (English or German, this
+ * feedback box's own two supported languages), rejected if it falls
+ * outside the schema's own bound. Word-form numbers ("two steps") aren't
+ * recognized — a known, narrow miss (the request still reaches the model,
+ * same as today), never a false rejection of an in-range request.
+ */
+const REQUESTED_STEP_COUNT_PATTERN = /\b(\d{1,2})\s*(steps?|schritten?)\b/i;
+
+function extractRequestedStepCount(feedback: string): number | null {
+  const match = feedback.match(REQUESTED_STEP_COUNT_PATTERN);
+  return match ? Number(match[1]) : null;
+}
+
 function toDraft(steps: EditableStep[]): CreatePlanDraft {
   return {
     steps: steps.map((step) => ({
@@ -49,6 +72,10 @@ function toDraft(steps: EditableStep[]): CreatePlanDraft {
 }
 
 type Phase = 'idle' | 'loading' | 'reviewing' | 'editing' | 'rejecting' | 'busy' | 'failed';
+
+/** Matches `index.css`'s `.popup-glass-dense`/`.popup-glass-strong` 180ms
+ * close transition, plus a small buffer. */
+const DIALOG_EXIT_MS = 200;
 
 /**
  * Story 3.2 (AD-14): the draft review/confirm/modify/reject panel. Own
@@ -73,7 +100,27 @@ export function PlanActivationPanel({ planId, ideaTitle, onActivated }: PlanActi
   const [editableSteps, setEditableSteps] = React.useState<EditableStep[]>([]);
   const [editError, setEditError] = React.useState(false);
   const [feedback, setFeedback] = React.useState('');
-  const [feedbackError, setFeedbackError] = React.useState(false);
+  // User-reported, live: `'stepCount'` is the new out-of-range guard above
+  // (`extractRequestedStepCount`); `'required'` is the pre-existing empty-
+  // feedback guard, unchanged.
+  const [feedbackError, setFeedbackError] = React.useState<'required' | 'stepCount' | null>(null);
+  // UX fix (user-reported, live): "Confirm & activate" used to call
+  // `onActivated` the instant the request resolved, which flips the
+  // parent's `plan.status` away from `'draft'` and unmounts this whole
+  // component in that same render — an unmounted Dialog never gets
+  // Radix's own close transition, so the review dialog just vanished.
+  // `exiting` flips the Dialog's own `open` to `false` first (now a real
+  // close, which `index.css`'s `[data-state='closed']` rule fades out),
+  // and `onActivated` itself is delayed by `DIALOG_EXIT_MS` so the parent
+  // only unmounts this component after that fade has actually played.
+  const [exiting, setExiting] = React.useState(false);
+  const exitTimeoutRef = React.useRef<number | undefined>(undefined);
+
+  React.useEffect(() => {
+    return () => {
+      if (exitTimeoutRef.current !== undefined) window.clearTimeout(exitTimeoutRef.current);
+    };
+  }, []);
 
   // Review fix: the mount-time GET (page-refresh resume) and a user-
   // triggered POST (`startReview`/`saveEdits`/`submitReject`) can resolve
@@ -181,7 +228,8 @@ export function PlanActivationPanel({ planId, ideaTitle, onActivated }: PlanActi
         }
         const body: unknown = await res.json();
         if (isStale(requestId)) return;
-        onActivated(body as PlanResponse);
+        setExiting(true);
+        exitTimeoutRef.current = window.setTimeout(() => onActivated(body as PlanResponse), DIALOG_EXIT_MS);
       })
       .catch(() => {
         if (!isStale(requestId)) setPhase('failed');
@@ -244,16 +292,21 @@ export function PlanActivationPanel({ planId, ideaTitle, onActivated }: PlanActi
 
   function startRejecting() {
     setFeedback('');
-    setFeedbackError(false);
+    setFeedbackError(null);
     setPhase('rejecting');
   }
 
   function submitReject() {
     if (feedback.trim().length === 0) {
-      setFeedbackError(true);
+      setFeedbackError('required');
       return;
     }
-    setFeedbackError(false);
+    const requestedStepCount = extractRequestedStepCount(feedback);
+    if (requestedStepCount !== null && (requestedStepCount < MIN_PLAN_STEPS || requestedStepCount > MAX_PLAN_STEPS)) {
+      setFeedbackError('stepCount');
+      return;
+    }
+    setFeedbackError(null);
     const requestId = beginRequest();
     setPhase('busy');
     fetch(`/api/plans/${planId}/activate/reject`, {
@@ -298,8 +351,17 @@ export function PlanActivationPanel({ planId, ideaTitle, onActivated }: PlanActi
   // to it. Still the exact same card/copy; it's a reopen affordance now,
   // not a gate.
   if (phase === 'idle') {
+    // User-reported, live: closing the review/edit/reject `Dialog` (X,
+    // Escape, backdrop) used to swap straight into this inline `Card` with
+    // no transition at all — unlike every phase swap *inside* the Dialog
+    // above (`content-fade-in`, keyed by `phase`), the harder dialog-to-card
+    // swap right here had nothing, so this card (and whatever it pushes
+    // down, per the Boundary note above) just popped in. Same
+    // `content-fade-in` keyframe (`index.css`) as everywhere else in this
+    // file — it's a fresh mount each time this branch is reached, so it
+    // replays automatically, no `key` needed.
     return (
-      <Card>
+      <Card className="content-fade-in">
         <CardHeader>
           <CardTitle>{t('activation.title')}</CardTitle>
         </CardHeader>
@@ -335,8 +397,9 @@ export function PlanActivationPanel({ planId, ideaTitle, onActivated }: PlanActi
   }
 
   if (phase === 'failed' && !review) {
+    // Same gap/fix as the `'idle'` card just above.
     return (
-      <Card>
+      <Card className="content-fade-in">
         <CardContent className="flex flex-col gap-2 p-6 text-sm">
           <p role="alert" className="text-muted-foreground">
             {t('activation.failed')}
@@ -381,13 +444,30 @@ export function PlanActivationPanel({ planId, ideaTitle, onActivated }: PlanActi
   // behind it showing through.
   return (
     <Dialog
-      open
+      open={!exiting}
       onOpenChange={(open: boolean) => {
-        if (!open && phase !== 'busy') setPhase('idle');
+        // UX fix (user-reported, live): this used to call `setPhase('idle')`
+        // directly, which switches this component's own top-level return to
+        // the plain `<Card>` branch above in the very same render — the
+        // whole `<Dialog>` subtree is removed from the React tree outright,
+        // so Radix never keeps a mounted `data-state='closed'` node around
+        // for the `[data-state='closed']` fade (`index.css`) to actually
+        // play on. Same `exiting`/`DIALOG_EXIT_MS` delay as `confirm()`'s
+        // own success path below: flip `open` to `false` first (a real
+        // close Radix/CSS can animate), only switch to the `'idle'` branch
+        // once that fade has had time to play.
+        if (!open && phase !== 'busy' && !exiting) {
+          setExiting(true);
+          exitTimeoutRef.current = window.setTimeout(() => {
+            setExiting(false);
+            setPhase('idle');
+          }, DIALOG_EXIT_MS);
+        }
       }}
     >
       <DialogContent size="lg" className="popup-glass-dense max-h-[85vh] overflow-y-auto">
-        {phase === 'editing' ? (
+        <div key={phase} className="content-fade-in">
+          {phase === 'editing' ? (
           <>
             <DialogHeader>
               <DialogTitle>{t('activation.modifyButton')}</DialogTitle>
@@ -460,7 +540,9 @@ export function PlanActivationPanel({ planId, ideaTitle, onActivated }: PlanActi
               />
               {feedbackError ? (
                 <p role="alert" className="text-muted-foreground">
-                  {t('activation.feedbackRequired')}
+                  {feedbackError === 'stepCount'
+                    ? t('activation.feedbackStepCountOutOfRange', { min: MIN_PLAN_STEPS, max: MAX_PLAN_STEPS })
+                    : t('activation.feedbackRequired')}
                 </p>
               ) : null}
             </div>
@@ -529,6 +611,7 @@ export function PlanActivationPanel({ planId, ideaTitle, onActivated }: PlanActi
             </DialogFooter>
           </>
         )}
+        </div>
       </DialogContent>
     </Dialog>
   );

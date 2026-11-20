@@ -1,4 +1,4 @@
-import type { QualityWeaknesses } from '@app/shared';
+import type { EvaluationWeaknesses, EvaluationTools } from '@app/shared';
 
 /**
  * Story 7.5 / AD-29: the Reflection section's weaknesses/edge-cases/
@@ -21,12 +21,13 @@ function parsePipeRow(line: string): string[] {
 }
 
 /** Returns the data rows (header + separator rows dropped) of the pipe
- * table immediately following a `## <heading>` line. */
-function findTableDataRows(markdown: string, heading: string): string[][] {
+ * table immediately following a `## <heading>` (or, with `headingMarker`
+ * set to `'###'`, a `### <heading>`) line. */
+function findTableDataRows(markdown: string, heading: string, headingMarker: '##' | '###' = '##'): string[][] {
   const lines = markdown.split('\n');
-  const headingIndex = lines.findIndex((line) => line.trim() === `## ${heading}`);
+  const headingIndex = lines.findIndex((line) => line.trim() === `${headingMarker} ${heading}`);
   if (headingIndex === -1) {
-    throw new Error(`docs/KNOWN-WEAKNESSES.md: heading "## ${heading}" not found`);
+    throw new Error(`docs: heading "${headingMarker} ${heading}" not found`);
   }
 
   let i = headingIndex + 1;
@@ -42,8 +43,8 @@ function findTableDataRows(markdown: string, heading: string): string[][] {
 }
 
 /** Parses the three pipe tables (`KW-`, `EC-`, `CI-` rows) in
- * `docs/KNOWN-WEAKNESSES.md` into `/api/quality`'s `weaknesses` shape. */
-export function parseKnownWeaknesses(markdown: string): QualityWeaknesses {
+ * `docs/KNOWN-WEAKNESSES.md` into `/api/evaluation`'s `weaknesses` shape. */
+export function parseKnownWeaknesses(markdown: string): EvaluationWeaknesses {
   const knownWeaknesses = findTableDataRows(markdown, 'Known weaknesses & improvement suggestions').map(
     ([id, weakness, impact, suggestion]) => ({ id: id!, weakness: weakness!, impact: impact!, suggestion: suggestion! }),
   );
@@ -55,6 +56,30 @@ export function parseKnownWeaknesses(markdown: string): QualityWeaknesses {
   );
 
   return { knownWeaknesses, edgeCases, codeImprovements };
+}
+
+/**
+ * Story 7.5/7.2: parses the two `### `-level tables under `docs/
+ * TECHNICAL-RATIONALE.md`'s own "## Tool boundary: LLM-backed vs.
+ * plain-code vs. MCP" section into `/api/evaluation`'s `tools` shape —
+ * never a hand-typed second copy of either table.
+ */
+export function parseToolsSection(markdown: string): EvaluationTools {
+  const agentTools = findTableDataRows(markdown, 'Which tools each agent can call', '###').map(
+    ([whereUserIs, agentThread, toolsModelCanCall]) => ({ whereUserIs: whereUserIs!, agentThread: agentThread!, toolsModelCanCall: toolsModelCanCall! }),
+  );
+  const toolDetails = findTableDataRows(markdown, 'What each tool does', '###').map(
+    ([tool, kind, whoCallsIt, whereInFlow, whatItDoes, writesState]) => ({
+      tool: tool!,
+      kind: kind!,
+      whoCallsIt: whoCallsIt!,
+      whereInFlow: whereInFlow!,
+      whatItDoes: whatItDoes!,
+      writesState: writesState!,
+    }),
+  );
+
+  return { agentTools, toolDetails };
 }
 
 /** Parses a `## <heading>` section's own `- ` bullet lines (up to the

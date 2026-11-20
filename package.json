@@ -20,6 +20,9 @@
     "test": "npm run test --workspace=shared && npm run test --workspace=src && npm run test --workspace=web",
     "eval": "npm run eval --workspace=src",
     "eval:report": "npm run eval:report --workspace=src",
+    "eval:latency": "npm run eval:latency --workspace=src",
+    "smoke:ideas": "npm run smoke:ideas --workspace=src",
+    "check": "npm run typecheck && npm run lint && DATABASE_URL=postgres://second_income_coach:second_income_coach@localhost:5432/second_income_coach_b_test npm run test && npm run smoke:ideas",
     "db:up": "docker compose up -d",
     "db:down": "docker compose down"
   },

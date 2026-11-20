@@ -1,5 +1,6 @@
 import { ChatOpenAI } from '@langchain/openai';
 import { createMiddleware } from 'langchain';
+import type { Callbacks } from '@langchain/core/callbacks/manager';
 import { AIMessage, type BaseMessage } from '@langchain/core/messages';
 import type { Env } from '../config/env.js';
 import { DEFAULT_MODEL_ID, findModelEntry, isProviderConfigured } from './registry.js';
@@ -17,11 +18,23 @@ const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
  * so `createModelSelectionMiddleware` below — and tests — can inject a fake
  * instead of constructing a real `ChatOpenAI`.
  */
-export function createChatModel(env: Pick<Env, 'OPENROUTER_API_KEY'>, modelId: string = DEFAULT_MODEL_ID): ChatOpenAI {
+/**
+ * `callbacks` (User-requested, 2026-11-20): optional, never passed by any
+ * production caller — `src/evals/judges.ts` is the one caller that supplies
+ * one, to capture each judge call's own token usage via `handleLLMEnd`
+ * (there's no other seam: `agentevals`' judge evaluator calls
+ * `judge.invoke(...)` itself, with no way to pass per-call config through).
+ */
+export function createChatModel(
+  env: Pick<Env, 'OPENROUTER_API_KEY'>,
+  modelId: string = DEFAULT_MODEL_ID,
+  callbacks?: Callbacks,
+): ChatOpenAI {
   return new ChatOpenAI({
     model: modelId,
     apiKey: env.OPENROUTER_API_KEY,
     configuration: { baseURL: OPENROUTER_BASE_URL },
+    callbacks,
   });
 }
 

@@ -11,6 +11,8 @@
     "test": "vitest run",
     "eval": "vitest run --config evals/vitest.eval.config.ts",
     "eval:report": "tsx evals/generate-report.ts",
+    "eval:latency": "tsx evals/measure-latency.ts",
+    "smoke:ideas": "DATABASE_URL=postgres://second_income_coach:second_income_coach@localhost:5432/second_income_coach_b_test WEB_SEARCH_MODE=stub IDEAS_PER_BATCH=3 tsx scripts/smoke-ideas.ts",
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",
     "db:migrate": "drizzle-kit migrate"

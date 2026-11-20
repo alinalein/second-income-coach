@@ -107,14 +107,82 @@ describe('buildReport', () => {
     );
   });
 
-  it('AC 6.3-3: estimates run cost from the registry price list and flags the unpriced eval-only model as a limitation', () => {
+  // User-requested (2026-11-20, Job B): Sonnet is now priced from the
+  // eval-only price table (never `MODEL_REGISTRY`, AD-20 still holds) — a
+  // deliberate change from the old registry-based mechanism, where it was
+  // always `null`. The headline total still excludes it by scope, not by
+  // being unpriced (see the next test).
+  it('AC 6.3-3: estimates run cost from the eval-only price table, pricing the eval-only Sonnet model too', () => {
     const report = buildReport(sampleTrajectoryResults, passingGuardrails);
-    const sonnet = report.cost.perModel.find((entry) => entry.modelId === 'anthropic/claude-sonnet-5.5');
-    expect(sonnet?.estimatedCostUsd).toBeNull();
+    const sonnet = report.cost.perModel.find((entry) => entry.modelId === 'anthropic/claude-sonnet-5.5' && entry.role === 'target');
+    expect(sonnet?.estimatedCostUsd).toBeGreaterThan(0);
     expect(sonnet?.inputTokens).toBe(900);
     expect(report.cost.totalEstimatedCostUsd).toBeGreaterThan(0);
     expect(report.limitations.map((limitation) => limitation.id)).toEqual(
-      expect.arrayContaining(['unpriced-eval-only-model', 'cost-mechanism-not-built', 'story-7-4-pending', 'judge-call-cost-excluded']),
+      expect.arrayContaining(['cost-mechanism-not-built', 'story-7-4-pending', 'judge-call-cost-excluded']),
     );
+    expect(report.limitations.map((limitation) => limitation.id)).not.toContain('unpriced-eval-only-model');
+  });
+
+  // User-requested (2026-11-20, amended): "never present a partial sum as
+  // the full cost" — the sample fixture predates judge-call usage capture
+  // (no judge-role rows at all, so the judges group has 0 calls), so the
+  // headline sums only the groups that were actually recorded and priced
+  // (target models + Sonnet), and its label names the excluded group by
+  // reason rather than silently widening or silently narrowing.
+  it('the headline total sums every measured group and labels the excluded one by reason', () => {
+    const report = buildReport(sampleTrajectoryResults, passingGuardrails);
+    expect(report.cost.groups.judges.status).toBe('not-recorded');
+    expect(report.cost.groups.judges.estimatedCostUsd).toBeNull();
+    const sonnet = report.cost.perModel.find((entry) => entry.modelId === 'anthropic/claude-sonnet-5.5' && entry.role === 'target');
+    expect(sonnet?.estimatedCostUsd).toBeGreaterThan(0);
+    // The headline equals target models + Sonnet exactly — Sonnet's real,
+    // nonzero cost is folded in; the judges group (not recorded) is not.
+    expect(report.cost.totalEstimatedCostUsd).toBe((report.cost.groups.targetModels.estimatedCostUsd ?? 0) + (report.cost.groups.sonnet.estimatedCostUsd ?? 0));
+    expect(report.cost.totalLabel).toBe('target models + Sonnet; judges not recorded');
+  });
+
+  // User-requested (2026-11-20, amended): the committed sample fixture
+  // predates both latency sources (no `durationMs` on any row, no
+  // `ackLatencyRows` field at all) — every model must render as "not
+  // measured" (`null`), never a fabricated number, and every
+  // `EVAL_MODEL_IDS` entry from the fixture's own `perModelAccuracy` must
+  // be covered.
+  it('no ackLatencyRows and no durationMs anywhere -> every model is "not measured"', () => {
+    const report = buildReport(sampleTrajectoryResults, passingGuardrails);
+    expect(report.latency.ackByModel).toEqual(
+      sampleTrajectoryResults.perModelAccuracy.map((entry) => ({ modelId: entry.modelId, medianMs: null, maxMs: null, calls: 0 })),
+    );
+    expect(report.latency.deterministicByModel).toEqual(
+      sampleTrajectoryResults.perModelAccuracy.map((entry) => ({ modelId: entry.modelId, medianMs: null })),
+    );
+  });
+
+  // User-requested (2026-11-20, amended): once both sources carry real
+  // data — both now written to the same `trajectory-results.json` by
+  // `trajectory.eval.ts` itself, never a separate file — each reaches the
+  // report under its own distinct field; the ack-call median and a full
+  // trajectory-case's own agent-turn median must never be conflated into
+  // one number.
+  it('real ackLatencyRows and durationMs rows reach the report under their own distinct fields', () => {
+    const withLatencyData = {
+      ...sampleTrajectoryResults,
+      rows: sampleTrajectoryResults.rows.map((row) =>
+        row.modelId === 'openai/gpt-6-luna' && row.caseType === 'deterministic' ? { ...row, durationMs: 1200 } : row,
+      ),
+      ackLatencyRows: [{ modelId: 'openai/gpt-6-luna', callDurationsMs: [500, 600, 700, 800, 900], medianMs: 700, maxMs: 900, missingMessageCount: 1 }],
+    };
+    const report = buildReport(withLatencyData, passingGuardrails);
+
+    expect(report.latency.ackByModel.find((entry) => entry.modelId === 'openai/gpt-6-luna')).toEqual({
+      modelId: 'openai/gpt-6-luna',
+      medianMs: 700,
+      maxMs: 900,
+      calls: 5,
+    });
+    expect(report.latency.deterministicByModel.find((entry) => entry.modelId === 'openai/gpt-6-luna')).toEqual({
+      modelId: 'openai/gpt-6-luna',
+      medianMs: 1200,
+    });
   });
 });

@@ -53,6 +53,8 @@ Other commands:
 | `npm run db:up` / `npm run db:down` | Start/stop the local Postgres container |
 | `npm run eval` | Full eval suite on demand (real model + judge calls over OpenRouter, never part of `npm test`); needs `OPENROUTER_API_KEY` in `.env` |
 | `npm run eval:report` | Builds the quality report from the last `npm run eval` results (run `eval` first); also refreshes `src/evals/published/eval-results.json` (committed — Story 7.5 reads it) when the run was complete, never from a partial/`-t` run |
+| `npm run smoke:ideas` | Regression smoke test: runs the real `generate_ideas` pipeline once against the test DB with a seeded, heavy idea-history fixture user, prints per-stage timings, exits 1 on too few ideas or a budget overrun; needs `OPENROUTER_API_KEY`/`MISTRAL_API_KEY` in `.env` |
+| `npm run check` | `typecheck` + `lint` + `npm test` (against the test DB) + `smoke:ideas`, in order — the one command to run before committing |
 
 The frontend defaults to light mode; the dark-mode toggle (top-right) persists the choice in `localStorage` across reloads. Teal accent tokens and contrast ratios are pinned in `stack.md` and wired in `web/src/index.css`.
 
@@ -70,7 +72,7 @@ The frontend defaults to light mode; the dark-mode toggle (top-right) persists t
 | CAP-8 | Token count + estimated cost shown under every response |
 | CAP-9 | Thumbs up/down feedback, never gating the chat |
 | CAP-10 | Bilingual (German/English) chat, matched per message to whatever language the user used |
-| CAP-11 | A signed-in "Quality & Decisions" page (`/quality`, linked in the sidebar footer): eval results, key architecture decisions, and a reflection — all generated from source, never hand-copied |
+| CAP-11 | A signed-in "Evaluation & Decisions" page (`/evaluation`, linked in the sidebar footer): eval results, key architecture decisions, and a reflection — all generated from source, never hand-copied |
 
 Full detail: [`_bmad-output/specs/spec-second-income-coach/SPEC.md`](_bmad-output/specs/spec-second-income-coach/SPEC.md).
 

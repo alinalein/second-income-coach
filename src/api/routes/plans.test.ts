@@ -7,7 +7,7 @@ import { eq } from 'drizzle-orm';
 import { AIMessage } from '@langchain/core/messages';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import type { CreatePlanDraft, SubmitIntakeToolArgs } from '@app/shared';
-import { createPlansRouter, isUniqueViolationError, type PlansRouterDeps } from './plans.js';
+import { createPlansRouter, isUniqueViolationError, buildStepCompletionAckMessage, type PlansRouterDeps } from './plans.js';
 import { createDb } from '../../db/client.js';
 import { createCheckpointer } from '../../agent/checkpointer.js';
 import type { ClassifyText } from '../../agent/moderation.js';
@@ -801,108 +801,36 @@ async function insertPlanWithCurrentAndNextStep(userId: string): Promise<{ planI
   return { planId, stepId };
 }
 
-// Spec 2.12 AC8: `start_step` success triggers one direct, non-agentic model
-// call that produces a short chat acknowledgment, appended to the plan
-// thread and included in the response — fully fail-open on any
-// failure/flag/timeout (the step itself has already started either way).
-describe('createPlansRouter POST /:planId/steps/:stepId/start (Spec 2.12 AC8: chat acknowledgment)', () => {
-  it('returns the acknowledgment and appends it to the plan thread on success', async () => {
+// Perf fix (user-reported, live): `/start` is now the DB write alone — the
+// Spec 2.12 AC8 chat acknowledgment (one direct, non-agentic model call)
+// moved to its own `/start-ack` endpoint below, fired by the frontend right
+// after this one responds rather than before it.
+describe('createPlansRouter POST /:planId/steps/:stepId/start', () => {
+  // Perf fix (user-reported, live): the ordering this split exists to
+  // produce — `/start` resolves (and the step is marked started) without
+  // ever invoking the model, and the acknowledgment (with its one model
+  // call) only exists once a separate, later `/start-ack` request is made.
+  it('answers without ever invoking the model; the acknowledgment only arrives via a later /start-ack request', async () => {
     const userId = await createTestUser();
     try {
       const { planId, stepId } = await insertPlanWithCurrentStep(userId);
       const updateState = vi.fn().mockResolvedValue(undefined);
       const agent = fakeAgent({ updateState });
-      const model = { invoke: vi.fn().mockResolvedValue(new AIMessage('Nice work getting started!')) } as unknown as BaseChatModel;
-
-      const res = await request(buildTestApp(agent, userId, { model, classify: fakeModeration('pass') }))
-        .post(`/api/plans/${planId}/steps/${stepId}/start`)
-        .send();
-
-      expect(res.status).toBe(200);
-      expect(res.body.chatMessage).toMatchObject({ role: 'assistant', kind: 'message', content: 'Nice work getting started!' });
-      expect(updateState).toHaveBeenCalledWith(
-        { configurable: { thread_id: `plan:${planId}` } },
-        expect.objectContaining({ messages: expect.any(Array) }),
-      );
-    } finally {
-      await cleanUp(userId);
-    }
-  });
-
-  // I/O matrix: "Model call fails/flags/times out → start still returns
-  // success, no chat message is added, no error shown" — one row per
-  // distinct failure branch (security-relevant: the moderation/guilt-
-  // language checks are what keep an unsafe or guilt-laden reply out of the
-  // thread), table-driven into one test per CLAUDE.md's testing policy.
-  it.each([
-    [
-      'model call throws (covers timeout)',
-      (): BaseChatModel => ({ invoke: vi.fn().mockRejectedValue(new Error('boom')) }) as unknown as BaseChatModel,
-      undefined,
-    ],
-    [
-      'model reply flagged by moderation',
-      (): BaseChatModel => ({ invoke: vi.fn().mockResolvedValue(new AIMessage('unsafe reply')) }) as unknown as BaseChatModel,
-      { dangerous: true },
-    ],
-    [
-      'model reply contains guilt language',
-      (): BaseChatModel => ({ invoke: vi.fn().mockResolvedValue(new AIMessage('You missed your check-in again.')) }) as unknown as BaseChatModel,
-      undefined,
-    ],
-  ] as const)('%s -> step still starts, no chat message, no error', async (_name, buildModel, moderationFlags) => {
-    const userId = await createTestUser();
-    try {
-      const { planId, stepId } = await insertPlanWithCurrentStep(userId);
-      const updateState = vi.fn().mockResolvedValue(undefined);
-      const agent = fakeAgent({ updateState });
-      const model = buildModel();
-      const classify = moderationFlags ? vi.fn().mockResolvedValue(moderationFlags) : fakeModeration('pass');
-
-      const res = await request(buildTestApp(agent, userId, { model, classify })).post(`/api/plans/${planId}/steps/${stepId}/start`).send();
-
-      expect(res.status).toBe(200);
-      expect(res.body.chatMessage).toBeUndefined();
-      expect(updateState).not.toHaveBeenCalled();
-
-      const [updatedStep] = await db.select().from(planSteps).where(eq(planSteps.id, stepId));
-      expect(updatedStep!.startedAt).not.toBeNull();
-    } finally {
-      await cleanUp(userId);
-    }
-  });
-
-  // Bug fix (user-reported, live): "consecutive start messages must not
-  // repeat each other" — the prompt sent to the model must quote this
-  // thread's own last start acknowledgments (never an untagged, genuine
-  // chat reply) and carry an explicit no-repeat instruction.
-  it('prompts the model with this thread\'s own recent start acknowledgments and a no-repeat rule', async () => {
-    const userId = await createTestUser();
-    try {
-      const { planId, stepId } = await insertPlanWithCurrentStep(userId);
-      const priorMessages = [
-        new AIMessage({ content: "You've started X — that's a meaningful step.", additional_kwargs: { stepStartAck: true } }),
-        new AIMessage({ content: "You've started Y — keep going at your own pace.", additional_kwargs: { stepStartAck: true } }),
-        // Untagged — a genuine chat reply, never mistaken for a start ack.
-        new AIMessage('A genuine chat reply, not a start acknowledgment.'),
-      ];
-      const getState = vi.fn().mockResolvedValue({ values: { messages: priorMessages } });
-      const updateState = vi.fn().mockResolvedValue(undefined);
-      const agent = fakeAgent({ getState, updateState });
-      const invoke = vi.fn().mockResolvedValue(new AIMessage('Fresh wording this time.'));
+      const invoke = vi.fn().mockResolvedValue(new AIMessage('Nice work getting started!'));
       const model = { invoke } as unknown as BaseChatModel;
+      const app = buildTestApp(agent, userId, { model, classify: fakeModeration('pass') });
 
-      const res = await request(buildTestApp(agent, userId, { model, classify: fakeModeration('pass') }))
-        .post(`/api/plans/${planId}/steps/${stepId}/start`)
-        .send();
+      const startRes = await request(app).post(`/api/plans/${planId}/steps/${stepId}/start`).send();
+      expect(startRes.status).toBe(200);
+      expect(startRes.body.chatMessage).toBeUndefined();
+      expect(invoke).not.toHaveBeenCalled();
+      const [startedStep] = await db.select().from(planSteps).where(eq(planSteps.id, stepId));
+      expect(startedStep!.startedAt).not.toBeNull();
 
-      expect(res.status).toBe(200);
-      const [[invokedMessages]] = invoke.mock.calls as [[{ content: string }[]]];
-      const prompt = invokedMessages[0]!.content;
-      expect(prompt).toContain("You've started X — that's a meaningful step.");
-      expect(prompt).toContain("You've started Y — keep going at your own pace.");
-      expect(prompt).not.toContain('A genuine chat reply');
-      expect(prompt).toMatch(/do not reuse their opener or wording/i);
+      const ackRes = await request(app).post(`/api/plans/${planId}/steps/${stepId}/start-ack`).send();
+      expect(ackRes.status).toBe(200);
+      expect(ackRes.body.chatMessage).toMatchObject({ role: 'assistant', kind: 'message', content: 'Nice work getting started!' });
+      expect(invoke).toHaveBeenCalledTimes(1);
     } finally {
       await cleanUp(userId);
     }
@@ -931,101 +859,257 @@ describe('createPlansRouter POST /:planId/steps/:stepId/start (Spec 2.12 AC8: ch
   });
 });
 
-// Story 4.5 (AC3): `complete_step` on the plan's final step triggers the
-// same one-direct-model-call pattern as `start_step`'s own acknowledgment
-// (`buildStartStepAckMessage`) — fully fail-open: the plan completes either
-// way, a model failure just omits `chatMessage` (the UI's own fixed
-// `stepActions.planCompletedHint` is the fallback either way).
-describe('createPlansRouter POST /:planId/steps/:stepId/complete (Story 4.5 AC3: completion acknowledgment)', () => {
+// Spec 2.12 AC8: this route produces the short chat acknowledgment (one
+// direct, non-agentic model call), appended to the plan thread and included
+// in the response — fully fail-open on any failure/flag/timeout (`/start`
+// above already succeeded either way, independent of this route).
+describe('createPlansRouter POST /:planId/steps/:stepId/start-ack (Spec 2.12 AC8: chat acknowledgment)', () => {
+  it('returns the acknowledgment and appends it to the plan thread on success', async () => {
+    const userId = await createTestUser();
+    try {
+      const { planId, stepId } = await insertPlanWithCurrentStep(userId);
+      const updateState = vi.fn().mockResolvedValue(undefined);
+      const agent = fakeAgent({ updateState });
+      const model = { invoke: vi.fn().mockResolvedValue(new AIMessage('Nice work getting started!')) } as unknown as BaseChatModel;
+
+      const res = await request(buildTestApp(agent, userId, { model, classify: fakeModeration('pass') }))
+        .post(`/api/plans/${planId}/steps/${stepId}/start-ack`)
+        .send();
+
+      expect(res.status).toBe(200);
+      expect(res.body.chatMessage).toMatchObject({ role: 'assistant', kind: 'message', content: 'Nice work getting started!' });
+      expect(updateState).toHaveBeenCalledWith(
+        { configurable: { thread_id: `plan:${planId}` } },
+        expect.objectContaining({ messages: expect.any(Array) }),
+      );
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+
+  // I/O matrix: "Model call fails/flags/times out → no chat message is
+  // added, no error shown" — one row per distinct failure branch (security-
+  // relevant: the moderation/guilt-language checks are what keep an unsafe
+  // or guilt-laden reply out of the thread), table-driven into one test per
+  // CLAUDE.md's testing policy.
   it.each([
     [
-      'model call succeeds',
-      (): BaseChatModel => ({ invoke: vi.fn().mockResolvedValue(new AIMessage("You've finished your whole plan — nice work.")) }) as unknown as BaseChatModel,
-      true,
+      'model call throws (covers timeout)',
+      (): BaseChatModel => ({ invoke: vi.fn().mockRejectedValue(new Error('boom')) }) as unknown as BaseChatModel,
+      undefined,
     ],
     [
-      'model call fails (covers timeout/moderation/guilt-language alike — same fail-open path)',
-      (): BaseChatModel => ({ invoke: vi.fn().mockRejectedValue(new Error('boom')) }) as unknown as BaseChatModel,
-      false,
+      'model reply flagged by moderation',
+      (): BaseChatModel => ({ invoke: vi.fn().mockResolvedValue(new AIMessage('unsafe reply')) }) as unknown as BaseChatModel,
+      { dangerous: true },
     ],
-  ] as const)('%s -> the plan completes either way, chat message present = %s', async (_name, buildModel, expectMessage) => {
+    [
+      'model reply contains guilt language',
+      (): BaseChatModel => ({ invoke: vi.fn().mockResolvedValue(new AIMessage('You missed your check-in again.')) }) as unknown as BaseChatModel,
+      undefined,
+    ],
+  ] as const)('%s -> no chat message, no error', async (_name, buildModel, moderationFlags) => {
     const userId = await createTestUser();
     try {
       const { planId, stepId } = await insertPlanWithCurrentStep(userId);
       const updateState = vi.fn().mockResolvedValue(undefined);
       const agent = fakeAgent({ updateState });
       const model = buildModel();
+      const classify = moderationFlags ? vi.fn().mockResolvedValue(moderationFlags) : fakeModeration('pass');
 
-      const res = await request(buildTestApp(agent, userId, { model, classify: fakeModeration('pass') }))
-        .post(`/api/plans/${planId}/steps/${stepId}/complete`)
+      const res = await request(buildTestApp(agent, userId, { model, classify }))
+        .post(`/api/plans/${planId}/steps/${stepId}/start-ack`)
         .send();
 
       expect(res.status).toBe(200);
-      expect(res.body.planCompleted).toBe(true);
-      if (expectMessage) {
-        expect(res.body.chatMessage).toMatchObject({ role: 'assistant', kind: 'message' });
-        expect(updateState).toHaveBeenCalledWith(
-          { configurable: { thread_id: `plan:${planId}` } },
-          expect.objectContaining({ messages: expect.any(Array) }),
-        );
-      } else {
-        expect(res.body.chatMessage).toBeUndefined();
-        expect(updateState).not.toHaveBeenCalled();
-      }
+      expect(res.body.chatMessage).toBeUndefined();
+      expect(updateState).not.toHaveBeenCalled();
+    } finally {
+      await cleanUp(userId);
+    }
+  });
 
-      const [plan] = await db.select({ status: plans.status }).from(plans).where(eq(plans.id, planId));
-      expect(plan!.status).toBe('completed');
+  // Bug fix (user-reported, live): "consecutive start messages must not
+  // repeat each other" — the prompt sent to the model must quote this
+  // thread's own last start acknowledgments (never an untagged, genuine
+  // chat reply) and carry an explicit no-repeat instruction.
+  it('prompts the model with this thread\'s own recent start acknowledgments and a no-repeat rule', async () => {
+    const userId = await createTestUser();
+    try {
+      const { planId, stepId } = await insertPlanWithCurrentStep(userId);
+      const priorMessages = [
+        new AIMessage({ content: "You've started X — that's a meaningful step.", additional_kwargs: { stepStartAck: true } }),
+        new AIMessage({ content: "You've started Y — keep going at your own pace.", additional_kwargs: { stepStartAck: true } }),
+        // Untagged — a genuine chat reply, never mistaken for a start ack.
+        new AIMessage('A genuine chat reply, not a start acknowledgment.'),
+      ];
+      const getState = vi.fn().mockResolvedValue({ values: { messages: priorMessages } });
+      const updateState = vi.fn().mockResolvedValue(undefined);
+      const agent = fakeAgent({ getState, updateState });
+      const invoke = vi.fn().mockResolvedValue(new AIMessage('Fresh wording this time.'));
+      const model = { invoke } as unknown as BaseChatModel;
+
+      const res = await request(buildTestApp(agent, userId, { model, classify: fakeModeration('pass') }))
+        .post(`/api/plans/${planId}/steps/${stepId}/start-ack`)
+        .send();
+
+      expect(res.status).toBe(200);
+      const [[invokedMessages]] = invoke.mock.calls as [[{ content: string }[]]];
+      const prompt = invokedMessages[0]!.content;
+      expect(prompt).toContain("You've started X — that's a meaningful step.");
+      expect(prompt).toContain("You've started Y — keep going at your own pace.");
+      expect(prompt).not.toContain('A genuine chat reply');
+      expect(prompt).toMatch(/do not reuse their opener or wording/i);
     } finally {
       await cleanUp(userId);
     }
   });
 });
 
-// User-requested follow-up (Spec 2.12 AC8 / Story 4.5 AC3): "also send an
-// encouraging message when the user completes a task, not just when they
-// start one" — the same one-direct-model-call, fully fail-open pattern as
-// `start_step`'s own acknowledgment, but fired on a *non-final* step
-// completion (the final step keeps its own distinct whole-plan message,
-// covered by the describe block above).
-describe('createPlansRouter POST /:planId/steps/:stepId/complete (user-requested: per-step completion acknowledgment)', () => {
+// Story 4.6 (perf fix, mirrors `/start` exactly): `/complete` is now the DB
+// write alone — the completion chat acknowledgment (one direct, non-agentic
+// model call) moved to its own `/complete-ack` endpoint below, fired by the
+// frontend right after this one responds rather than before it.
+describe('createPlansRouter POST /:planId/steps/:stepId/complete', () => {
+  // Story 4.6: the ordering this split exists to produce — `/complete`
+  // resolves (and the step/plan are updated) without ever invoking the
+  // model; the acknowledgment (with its one model call) only exists once a
+  // separate, later `/complete-ack` request is made. Covers both the
+  // non-final (per-step) and final (whole-plan) completion case — in
+  // neither case does `/complete` itself touch the model.
+  it.each([
+    ['non-final step', insertPlanWithCurrentAndNextStep, false],
+    ['final step', insertPlanWithCurrentStep, true],
+  ] as const)(
+    '%s: answers without ever invoking the model; the acknowledgment only arrives via a later /complete-ack request',
+    async (_name, insertPlan, expectPlanCompleted) => {
+      const userId = await createTestUser();
+      try {
+        const { planId, stepId } = await insertPlan(userId);
+        const updateState = vi.fn().mockResolvedValue(undefined);
+        const agent = fakeAgent({ updateState });
+        const invoke = vi.fn().mockResolvedValue(new AIMessage('Nice, that one is done.'));
+        const model = { invoke } as unknown as BaseChatModel;
+        const app = buildTestApp(agent, userId, { model, classify: fakeModeration('pass') });
+
+        const completeRes = await request(app).post(`/api/plans/${planId}/steps/${stepId}/complete`).send();
+        expect(completeRes.status).toBe(200);
+        expect(completeRes.body.planCompleted).toBe(expectPlanCompleted);
+        expect(completeRes.body.chatMessage).toBeUndefined();
+        expect(invoke).not.toHaveBeenCalled();
+        const [completedStep] = await db.select().from(planSteps).where(eq(planSteps.id, stepId));
+        expect(completedStep!.status).toBe('completed');
+
+        const ackRes = await request(app).post(`/api/plans/${planId}/steps/${stepId}/complete-ack`).send();
+        expect(ackRes.status).toBe(200);
+        expect(ackRes.body.chatMessage).toMatchObject({ role: 'assistant', kind: 'message', content: 'Nice, that one is done.' });
+        expect(invoke).toHaveBeenCalledTimes(1);
+        // Story 4.6 AC: "when the completed step is the plan's last one, do
+        // not add a second message" — exactly one `updateState` call (one
+        // persisted message), on both the per-step and whole-plan path.
+        expect(updateState).toHaveBeenCalledTimes(1);
+      } finally {
+        await cleanUp(userId);
+      }
+    },
+  );
+});
+
+// Story 4.6: this route produces the short chat acknowledgment (one direct,
+// non-agentic model call) for a successful `complete_step` — the plan's own
+// distinct "whole plan is done" message on the final step (Story 4.5 AC3),
+// or an encouraging per-step one otherwise, fully fail-open (`/complete`
+// above already succeeded either way, independent of this route).
+describe('createPlansRouter POST /:planId/steps/:stepId/complete-ack', () => {
+  it('returns the per-step acknowledgment and appends it to the plan thread on success', async () => {
+    const userId = await createTestUser();
+    try {
+      const { planId, stepId } = await insertPlanWithCurrentAndNextStep(userId);
+      const updateState = vi.fn().mockResolvedValue(undefined);
+      const agent = fakeAgent({ updateState });
+      const model = { invoke: vi.fn().mockResolvedValue(new AIMessage('Nice, that one is done.')) } as unknown as BaseChatModel;
+
+      await request(buildTestApp(agent, userId, { model, classify: fakeModeration('pass') }))
+        .post(`/api/plans/${planId}/steps/${stepId}/complete`)
+        .send();
+      const res = await request(buildTestApp(agent, userId, { model, classify: fakeModeration('pass') }))
+        .post(`/api/plans/${planId}/steps/${stepId}/complete-ack`)
+        .send();
+
+      expect(res.status).toBe(200);
+      expect(res.body.chatMessage).toMatchObject({ role: 'assistant', kind: 'message', content: 'Nice, that one is done.' });
+      expect(updateState).toHaveBeenCalledWith(
+        { configurable: { thread_id: `plan:${planId}` } },
+        expect.objectContaining({ messages: expect.any(Array) }),
+      );
+
+      const [plan] = await db.select({ status: plans.status }).from(plans).where(eq(plans.id, planId));
+      expect(plan!.status).toBe('active');
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+
+  // Story 4.5 AC3 (now reached only via `/complete-ack`): the plan's final
+  // step gets its own distinct whole-plan message, never the per-step one —
+  // and never both (AC: "do not add a second message").
+  it("returns the plan's own completion acknowledgment on the final step, tagged distinctly from a per-step one", async () => {
+    const userId = await createTestUser();
+    try {
+      const { planId, stepId } = await insertPlanWithCurrentStep(userId);
+      const updateState = vi.fn().mockResolvedValue(undefined);
+      const agent = fakeAgent({ updateState });
+      const model = { invoke: vi.fn().mockResolvedValue(new AIMessage("You've finished your whole plan — nice work.")) } as unknown as BaseChatModel;
+      const app = buildTestApp(agent, userId, { model, classify: fakeModeration('pass') });
+
+      await request(app).post(`/api/plans/${planId}/steps/${stepId}/complete`).send();
+      const res = await request(app).post(`/api/plans/${planId}/steps/${stepId}/complete-ack`).send();
+
+      expect(res.status).toBe(200);
+      expect(res.body.chatMessage).toMatchObject({ role: 'assistant', kind: 'message', content: "You've finished your whole plan — nice work." });
+      expect(updateState).toHaveBeenCalledTimes(1);
+      const [[, update]] = updateState.mock.calls as [[unknown, { messages: { additional_kwargs?: Record<string, boolean> }[] }]];
+      expect(update.messages[0]!.additional_kwargs).toMatchObject({ planCompletionAck: true });
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+
+  // I/O matrix: "Model call fails/flags/times out → no chat message is
+  // added, no error shown" — same fail-open branches as `/start-ack`'s own
+  // table-driven test.
   it.each([
     [
-      'model call succeeds',
-      (): BaseChatModel => ({ invoke: vi.fn().mockResolvedValue(new AIMessage('Nice, that one is done.')) }) as unknown as BaseChatModel,
-      true,
+      'model call throws (covers timeout)',
+      (): BaseChatModel => ({ invoke: vi.fn().mockRejectedValue(new Error('boom')) }) as unknown as BaseChatModel,
+      undefined,
     ],
     [
-      'model call fails (covers timeout/moderation/guilt-language alike — same fail-open path)',
-      (): BaseChatModel => ({ invoke: vi.fn().mockRejectedValue(new Error('boom')) }) as unknown as BaseChatModel,
-      false,
+      'model reply flagged by moderation',
+      (): BaseChatModel => ({ invoke: vi.fn().mockResolvedValue(new AIMessage('unsafe reply')) }) as unknown as BaseChatModel,
+      { dangerous: true },
     ],
-  ] as const)('%s -> the step still completes either way, chat message present = %s', async (_name, buildModel, expectMessage) => {
+    [
+      'model reply contains guilt language',
+      (): BaseChatModel => ({ invoke: vi.fn().mockResolvedValue(new AIMessage('You missed your check-in again.')) }) as unknown as BaseChatModel,
+      undefined,
+    ],
+  ] as const)('%s -> no chat message, no error', async (_name, buildModel, moderationFlags) => {
     const userId = await createTestUser();
     try {
       const { planId, stepId } = await insertPlanWithCurrentAndNextStep(userId);
       const updateState = vi.fn().mockResolvedValue(undefined);
       const agent = fakeAgent({ updateState });
       const model = buildModel();
+      const classify = moderationFlags ? vi.fn().mockResolvedValue(moderationFlags) : fakeModeration('pass');
+      const app = buildTestApp(agent, userId, { model, classify });
 
-      const res = await request(buildTestApp(agent, userId, { model, classify: fakeModeration('pass') }))
-        .post(`/api/plans/${planId}/steps/${stepId}/complete`)
-        .send();
+      await request(app).post(`/api/plans/${planId}/steps/${stepId}/complete`).send();
+      const res = await request(app).post(`/api/plans/${planId}/steps/${stepId}/complete-ack`).send();
 
       expect(res.status).toBe(200);
-      expect(res.body.planCompleted).toBe(false);
-      if (expectMessage) {
-        expect(res.body.chatMessage).toMatchObject({ role: 'assistant', kind: 'message', content: 'Nice, that one is done.' });
-        expect(updateState).toHaveBeenCalledWith(
-          { configurable: { thread_id: `plan:${planId}` } },
-          expect.objectContaining({ messages: expect.any(Array) }),
-        );
-      } else {
-        expect(res.body.chatMessage).toBeUndefined();
-        expect(updateState).not.toHaveBeenCalled();
-      }
-
-      const [plan] = await db.select({ status: plans.status }).from(plans).where(eq(plans.id, planId));
-      expect(plan!.status).toBe('active');
+      expect(res.body.chatMessage).toBeUndefined();
+      expect(updateState).not.toHaveBeenCalled();
     } finally {
       await cleanUp(userId);
     }
@@ -1048,10 +1132,10 @@ describe('createPlansRouter POST /:planId/steps/:stepId/complete (user-requested
       const agent = fakeAgent({ getState, updateState });
       const invoke = vi.fn().mockResolvedValue(new AIMessage('Fresh wording this time.'));
       const model = { invoke } as unknown as BaseChatModel;
+      const app = buildTestApp(agent, userId, { model, classify: fakeModeration('pass') });
 
-      const res = await request(buildTestApp(agent, userId, { model, classify: fakeModeration('pass') }))
-        .post(`/api/plans/${planId}/steps/${stepId}/complete`)
-        .send();
+      await request(app).post(`/api/plans/${planId}/steps/${stepId}/complete`).send();
+      const res = await request(app).post(`/api/plans/${planId}/steps/${stepId}/complete-ack`).send();
 
       expect(res.status).toBe(200);
       const [[invokedMessages]] = invoke.mock.calls as [[{ content: string }[]]];
@@ -1062,5 +1146,54 @@ describe('createPlansRouter POST /:planId/steps/:stepId/complete (user-requested
     } finally {
       await cleanUp(userId);
     }
+  });
+});
+
+// Story 4.6: a deterministic unit test for the complete ack builder itself
+// (no HTTP/DB round trip) — the same no-repeat quoting and fail-open
+// guarantee `buildStartStepAckMessage` already has, verified directly.
+describe('buildStepCompletionAckMessage (Story 4.6: deterministic unit test)', () => {
+  it('prompts the model with the given recent acks and an explicit no-repeat rule', async () => {
+    const invoke = vi.fn().mockResolvedValue(new AIMessage('Fresh wording this time.'));
+    const model = { invoke } as unknown as BaseChatModel;
+
+    const message = await buildStepCompletionAckMessage(
+      model,
+      fakeModeration('pass'),
+      'plan:fake-thread',
+      'en',
+      'List a second item',
+      ['Step one is wrapped up.', 'Nice, that one is done.'],
+      () => 0,
+    );
+
+    expect(message).toMatchObject({ role: 'assistant', kind: 'message', content: 'Fresh wording this time.' });
+    const [[invokedMessages]] = invoke.mock.calls as [[{ content: string }[]]];
+    const prompt = invokedMessages[0]!.content;
+    expect(prompt).toContain('Step one is wrapped up.');
+    expect(prompt).toContain('Nice, that one is done.');
+    expect(prompt).toMatch(/do not reuse their opener or wording/i);
+  });
+
+  // Fail-open: any error/timeout, a flagged reply, or guilt-language content
+  // all return `undefined` rather than throwing — table-driven per CLAUDE.md.
+  it.each([
+    ['model call throws', (): BaseChatModel => ({ invoke: vi.fn().mockRejectedValue(new Error('boom')) }) as unknown as BaseChatModel, undefined],
+    [
+      'model reply flagged by moderation',
+      (): BaseChatModel => ({ invoke: vi.fn().mockResolvedValue(new AIMessage('unsafe reply')) }) as unknown as BaseChatModel,
+      { dangerous: true },
+    ],
+    [
+      'model reply contains guilt language',
+      (): BaseChatModel => ({ invoke: vi.fn().mockResolvedValue(new AIMessage('You missed your check-in again.')) }) as unknown as BaseChatModel,
+      undefined,
+    ],
+  ] as const)('%s -> returns undefined, never throws', async (_name, buildModel, moderationFlags) => {
+    const classify = moderationFlags ? vi.fn().mockResolvedValue(moderationFlags) : fakeModeration('pass');
+
+    const message = await buildStepCompletionAckMessage(buildModel(), classify, 'plan:fake-thread', 'en', 'List a second item', []);
+
+    expect(message).toBeUndefined();
   });
 });

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
+import { render, screen, within, fireEvent, cleanup, waitFor } from '@testing-library/react';
 import { IntakeForm } from './IntakeForm';
 import intakeEn from '../../locales/en/intake.json';
 
@@ -134,6 +134,12 @@ describe('IntakeForm (bug fix, live: re-save Save-button state sequence)', () =>
     expect(await screen.findByRole('button', { name: intakeEn.savingButton })).toBeInTheDocument();
     expect(screen.getByLabelText(intakeEn.skillsInterests.label)).not.toBeDisabled();
     expect(screen.getByLabelText(intakeEn.stoppedBeforeText.label)).not.toBeDisabled();
-    expect(screen.getByLabelText(intakeEn.weeklyTimeAvailability.label)).not.toBeDisabled();
+    // UX fix (user-requested): `weeklyTimeAvailability` is now a row of pill
+    // buttons (`PillSelect`, `IntakeForm.tsx`), not a single `<select>` —
+    // the AC this test maps to ("never disables the other fields") now
+    // means none of those buttons gets `disabled`.
+    within(screen.getByRole('radiogroup', { name: intakeEn.weeklyTimeAvailability.label }))
+      .getAllByRole('radio')
+      .forEach((radio) => expect(radio).not.toBeDisabled());
   });
 });

@@ -9,7 +9,7 @@ import { IntakeForm } from './features/intake/IntakeForm';
 import { IdeasPanel } from './features/ideas/IdeasPanel';
 import { PlanWorkspace } from './features/plan-workspace/PlanWorkspace';
 import { SettingsPage } from './features/settings/SettingsPage';
-import { QualityPage } from './features/quality/QualityPage';
+import { EvaluationPage } from './features/evaluation/EvaluationPage';
 import { Sidebar, SidebarMobileMenuButton, useIsDesktop } from './features/sidebar/Sidebar';
 import { useAppliedUiLanguage } from './features/settings/useAppliedUiLanguage';
 
@@ -226,7 +226,7 @@ function signOut(onSignedOut: () => void) {
 export type Route =
   | { kind: 'ideas' }
   | { kind: 'settings' }
-  | { kind: 'quality' }
+  | { kind: 'evaluation' }
   | { kind: 'plan'; ideaId: string; ideaTitle: string | null }
   | { kind: 'bookmarked'; ideaId: string }
   // UX fix (user-reported): the sidebar's "Bookmarked" entry is now one
@@ -237,7 +237,7 @@ export type Route =
 
 function parsePath(pathname: string): Route {
   if (pathname === '/settings') return { kind: 'settings' };
-  if (pathname === '/quality') return { kind: 'quality' };
+  if (pathname === '/evaluation') return { kind: 'evaluation' };
   if (pathname === '/bookmarked') return { kind: 'bookmarkedAll' };
   const planMatch = /^\/plan\/([^/]+)$/.exec(pathname);
   if (planMatch) return { kind: 'plan', ideaId: planMatch[1]!, ideaTitle: null };
@@ -248,7 +248,7 @@ function parsePath(pathname: string): Route {
 
 function pathForRoute(route: Route): string {
   if (route.kind === 'settings') return '/settings';
-  if (route.kind === 'quality') return '/quality';
+  if (route.kind === 'evaluation') return '/evaluation';
   if (route.kind === 'plan') return `/plan/${route.ideaId}`;
   if (route.kind === 'bookmarked') return `/bookmarked/${route.ideaId}`;
   if (route.kind === 'bookmarkedAll') return '/bookmarked';
@@ -552,12 +552,12 @@ export function App() {
                 }}
               />
             </div>
-          ) : route.kind === 'quality' ? (
+          ) : route.kind === 'evaluation' ? (
             // UX fix (user-requested): same width as the ideas/bookmarked
             // grid (`<main>`'s own `max-w-6xl`, no extra wrapper here) —
             // was narrower (`max-w-3xl`, the intake-form width), which read
             // as cramped for this page's own tables/cards.
-            <QualityPage />
+            <EvaluationPage />
           ) : route.kind === 'plan' ? (
             <PlanWorkspace
               ideaId={route.ideaId}

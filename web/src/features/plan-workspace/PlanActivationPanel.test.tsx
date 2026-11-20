@@ -149,3 +149,79 @@ describe('PlanActivationPanel (bug fix, live: review starts automatically, no in
     expect(await screen.findByRole('button', { name: 'Review plan' })).toBeInTheDocument();
   });
 });
+
+/**
+ * User-reported, live: a "Not quite — regenerate" feedback asking for a step
+ * count outside the 3-12 bound used to reach the model anyway and come back
+ * with a bogus placeholder step ("Step 3: x"). Caught client-side now, before
+ * `/activate/reject` is ever called.
+ */
+describe('PlanActivationPanel (guard: regenerate feedback requesting a step count outside 3-12)', () => {
+  async function openRejectDialog(fetchMock: ReturnType<typeof vi.fn>) {
+    vi.stubGlobal('fetch', fetchMock);
+    render(<PlanActivationPanel planId="plan-1" ideaTitle="Resell thrifted clothing" onActivated={() => undefined} />);
+    await screen.findByRole('dialog');
+    fireEvent.click(screen.getByRole('button', { name: 'Not quite — regenerate' }));
+    await screen.findByLabelText('What should change?');
+  }
+
+  it.each([
+    ['2 steps', 'fewer than 3'],
+    ['1 step', 'fewer than 3'],
+    ['13 steps', 'more than 12'],
+    ['20 steps', 'more than 12'],
+  ])('blocks "%s" (%s) with the min/max message and never calls /activate/reject', async (feedbackText) => {
+    const review = fakeReview();
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      const method = init?.method ?? 'GET';
+      if (url.endsWith('/activate') && method === 'POST') {
+        return Promise.resolve(new Response(JSON.stringify(review), { status: 200 }));
+      }
+      if (url.endsWith('/activate') && method === 'GET') {
+        return Promise.resolve(new Response(JSON.stringify({ review: null }), { status: 200 }));
+      }
+      throw new Error(`Unmocked fetch: ${method} ${url}`);
+    });
+    await openRejectDialog(fetchMock);
+
+    fireEvent.change(screen.getByLabelText('What should change?'), { target: { value: `Make it ${feedbackText} please` } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send feedback & regenerate' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Min steps 3, max steps 12.');
+    expect(fetchMock.mock.calls.some(([input, init]) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      return url.endsWith('/activate/reject') && (init as RequestInit | undefined)?.method === 'POST';
+    })).toBe(false);
+  });
+
+  it.each(['3 steps', '12 steps', 'more encouraging'])(
+    'allows "%s" through to /activate/reject (in range, or no step count mentioned)',
+    async (feedbackText) => {
+      const review = fakeReview();
+      let rejectCalls = 0;
+      const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        const method = init?.method ?? 'GET';
+        if (url.endsWith('/activate/reject') && method === 'POST') {
+          rejectCalls += 1;
+          return Promise.resolve(new Response(JSON.stringify(review.plan), { status: 200 }));
+        }
+        if (url.endsWith('/activate') && method === 'POST') {
+          return Promise.resolve(new Response(JSON.stringify(review), { status: 200 }));
+        }
+        if (url.endsWith('/activate') && method === 'GET') {
+          return Promise.resolve(new Response(JSON.stringify({ review: null }), { status: 200 }));
+        }
+        throw new Error(`Unmocked fetch: ${method} ${url}`);
+      });
+      await openRejectDialog(fetchMock);
+
+      fireEvent.change(screen.getByLabelText('What should change?'), { target: { value: `Make it ${feedbackText}` } });
+      fireEvent.click(screen.getByRole('button', { name: 'Send feedback & regenerate' }));
+
+      await waitFor(() => expect(rejectCalls).toBe(1));
+      expect(screen.queryByText('Min steps 3, max steps 12.')).not.toBeInTheDocument();
+    },
+  );
+});

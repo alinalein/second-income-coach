@@ -35,6 +35,29 @@ Tools the model **cannot** call, only the UI through API routes (button flows, A
 
 No nondeterministic tool is ever allowed to mutate state (AD-4). The LLM's output from `generate_ideas`/`create_plan` is validated against the shared Zod schema before the write executes; a validation failure is retried or surfaced as an error, never silently persisted malformed. `start_step`/`complete_step` reject if called on a step that isn't the plan's current one — state-machine enforcement, not just UI enforcement (AD-13).
 
+### What each tool does
+
+Every tool under `src/tools/{llm,plain,mcp}/` — one row each.
+
+| Tool | Kind | Who calls it | Where in the flow | What it does | Writes state |
+|---|---|---|---|---|---|
+| `generate_ideas` | LLM-backed | Model | Ideas | Generates a batch of side-income ideas from the user's intake answers, grounded in live web search. | Yes — `ideas` (+ `idea_translations`) |
+| `create_plan` | LLM-backed | Model | Plan draft | Drafts (or regenerates, with feedback) a step-by-step plan for the selected idea. | Yes — `plans`, `plan_steps` |
+| `web_search` | MCP | `generate_ideas` only (never the model directly) | Ideas | Searches the live web (Tavily) for market/demand evidence and a baseline income rate. | No |
+| `submit_intake` | Plain-code | Model | Intake | Records the user's structured intake answers (skills, time, budget, risk, etc.). | Yes — `intake` |
+| `set_idea_status` | Plain-code | UI only | Ideas | Marks an idea selected, bookmarked, or rejected. | Yes — `ideas` |
+| `get_current_step` | Plain-code | Model | Active plan | Returns the active plan's current step, next step, and completed steps. | No |
+| `start_step` | Plain-code | Model | Active plan | Marks the current step started and records a start time. | Yes — `plan_steps` |
+| `complete_step` | Plain-code | Model | Active plan | Marks the current step complete and advances the plan to the next step. | Yes — `plan_steps` |
+| `record_check_in` | Plain-code | Model | Check-in | Records a daily energy/progress check-in against the active plan. | Yes — `check_ins` |
+| `get_projection` | Plain-code | UI only | Active plan | Computes the plan's projected earnings from its steps and check-ins. | No |
+| `activate_plan` | Plain-code (own `StateGraph`) | UI only | Plan draft → active plan | Reviews a draft plan and activates it once the user confirms, pausing for approval first (AD-14). | Yes — `plans`, `plan_steps` |
+| `set_personality` | Plain-code | UI only | Settings | Sets the agent's reply personality/tone. | Yes — `user_settings` |
+| `set_model` | Plain-code | UI only | Settings | Sets which registry chat model the agent uses. | Yes — `user_settings` |
+| `set_ui_language` | Plain-code | UI only | Settings | Sets the UI chrome language preference. | Yes — `user_settings` |
+| `set_currency` | Plain-code | UI only | Settings | Sets the display currency for money amounts. | Yes — `user_settings` |
+| `record_feedback` | Plain-code | UI only | Feedback | Records a thumbs up/down, plus an optional moderated comment, on an assistant message. | Yes — `message_feedback` |
+
 ## Error and edge-case handling
 
 | Case | What happens | Where |

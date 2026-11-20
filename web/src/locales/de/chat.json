@@ -2,6 +2,7 @@
   "title": "Coach-Chat",
   "loading": "Lädt…",
   "empty": "Sag Hallo, um loszulegen.",
+  "typing": "Tippt…",
   "placeholder": "Nachricht eingeben…",
   "messageAriaLabel": "Nachricht",
   "sendButton": "Senden",

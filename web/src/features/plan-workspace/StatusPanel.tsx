@@ -29,11 +29,33 @@ export interface StatusPanelProps {
    * `start_step` succeeds and produced one (fail-open: omitted entirely on
    * any model-call failure/flag/timeout). */
   onStepStarted?: (message: ChatMessage) => void;
+  /** Perf fix (user-reported, live): forwarded from `StepActions` — fires
+   * the moment `start_step`'s own DB write succeeds, before its (now
+   * separate) chat acknowledgment request has resolved. */
+  onStepStarting?: () => void;
+  /** Perf fix (user-reported, live): forwarded from `StepActions` — fires
+   * once the acknowledgment request settles with no message to show
+   * (fail-open). Never fires when `onStepStarted` does. */
+  onStepStartAckFailed?: () => void;
   /** Bug fix (user-reported, live): forwarded from `StepActions` — fires
    * once, only on the plan's final `complete_step`, so `PlanWorkspace.tsx`
-   * can flip its own cached plan status to `completed` and show the
-   * completion chat message live, instead of only after a reload. */
-  onPlanCompleted?: (message?: ChatMessage) => void;
+   * can flip its own cached plan status to `completed` instead of only
+   * after a reload. Story 4.6: no longer carries the completion chat
+   * message — see `onStepCompletionAck` below. */
+  onPlanCompleted?: () => void;
+  /** Story 4.6: forwarded from `StepActions` — fires the moment
+   * `complete_step`'s own DB write succeeds, before its (separate) chat
+   * acknowledgment request has resolved. Mirrors `onStepStarting`. */
+  onStepCompleting?: () => void;
+  /** Story 4.6: forwarded from `StepActions` — fires with the server's own
+   * completion chat acknowledgment once it arrives (the plan's own
+   * distinct message on the final step, or a per-step one otherwise).
+   * Mirrors `onStepStarted`. */
+  onStepCompletionAck?: (message: ChatMessage) => void;
+  /** Story 4.6: forwarded from `StepActions` — fires once the
+   * acknowledgment request settles with no message to show (fail-open).
+   * Mirrors `onStepStartAckFailed`. */
+  onStepCompletionAckFailed?: () => void;
   /** Story 4.1 (AC, follow-up), item 2: fires whenever a Start/Complete
    * action here succeeds, in addition to this panel's own refetch — lets
    * `PlanWorkspace.tsx` refresh the projection card too, without this file
@@ -84,7 +106,19 @@ function truncatePreview(text: string, maxLength: number): string {
  * while the plan is still `draft` (awaiting review) — the backend rejects
  * the same call too (`PlanNotActiveError`), this is just the UI mirror.
  */
-export function StatusPanel({ planId, ideaTitle, onStepStarted, onPlanCompleted, onPlanActivityChanged, planStatus }: StatusPanelProps) {
+export function StatusPanel({
+  planId,
+  ideaTitle,
+  onStepStarted,
+  onStepStarting,
+  onStepStartAckFailed,
+  onPlanCompleted,
+  onStepCompleting,
+  onStepCompletionAck,
+  onStepCompletionAckFailed,
+  onPlanActivityChanged,
+  planStatus,
+}: StatusPanelProps) {
   const { t, i18n } = useTranslation('plan');
   const [step, setStep] = React.useState<CurrentStepResponse | null>(null);
   const [failed, setFailed] = React.useState(false);
@@ -187,8 +221,15 @@ export function StatusPanel({ planId, ideaTitle, onStepStarted, onPlanCompleted,
         ) : !step ? (
           <p className="text-muted-foreground">{t('statusPanel.loading')}</p>
         ) : step.current ? (
-          <>
-            <div>
+          // UX fix (user-reported, live): reverses an earlier explicit
+          // decision on this exact card ("no transition on the card
+          // itself, only the Start-this-step button disappears") — the
+          // user has now asked the opposite for this same spot ("Mark as
+          // done" swaps in the next step's text instantly, make that
+          // smooth too). Keyed by the step id so each step change mounts
+          // a fresh node and replays `content-fade-in` (`index.css`).
+          <React.Fragment key={step.current.id}>
+            <div className="content-fade-in">
               {/* Spec 2.12 AC7: the day label sits above the step's own
                * title now (was below the description) — the first thing
                * read is "which day", then what the step is.
@@ -235,7 +276,12 @@ export function StatusPanel({ planId, ideaTitle, onStepStarted, onPlanCompleted,
               // anything it shows.
               onStepCompleted={onPlanActivityChanged}
               onStepStarted={onStepStarted}
+              onStepStarting={onStepStarting}
+              onStepStartAckFailed={onStepStartAckFailed}
               onPlanCompleted={onPlanCompleted}
+              onStepCompleting={onStepCompleting}
+              onStepCompletionAck={onStepCompletionAck}
+              onStepCompletionAckFailed={onStepCompletionAckFailed}
             />
             {step.next ? (
               <div className="border-t border-dashed border-border pt-2">
@@ -246,7 +292,7 @@ export function StatusPanel({ planId, ideaTitle, onStepStarted, onPlanCompleted,
                 <p className="text-muted-foreground">{truncatePreview(step.next.description[0]!, NEXT_STEP_PREVIEW_MAX_LENGTH)}</p>
               </div>
             ) : null}
-          </>
+          </React.Fragment>
         ) : step.completion ? (
           // Story 4.5 (AC1): "Plan completed" card (completion date, number
           // of completed steps) instead of "No current step yet" — no

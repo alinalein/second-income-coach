@@ -32,9 +32,13 @@ export const createPlanToolSchema = z.object({
 
 export type CreatePlanToolArgs = z.infer<typeof createPlanToolSchema>;
 
-const MIN_PLAN_STEPS = 3;
+// User-requested: exported (not just a local const) so the "Not quite —
+// regenerate" feedback guard (`PlanActivationPanel.tsx`) can block a
+// request for a step count outside this exact range before it ever reaches
+// the model, instead of duplicating "3"/"12" as a second, driftable copy.
+export const MIN_PLAN_STEPS = 3;
 // User decision 2026-11-18: 3-12 steps; the model picks the count that fits the idea and the user's feedback.
-const MAX_PLAN_STEPS = 12;
+export const MAX_PLAN_STEPS = 12;
 const MIN_STEP_ACTIONS = 1;
 // Story 2.6 AC4: 5 -> 3 (shorter model output, no hard rule weakened).
 const MAX_STEP_ACTIONS = 3;

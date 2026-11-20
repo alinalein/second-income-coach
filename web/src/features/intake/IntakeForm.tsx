@@ -80,6 +80,47 @@ function formFromRecord(record: IntakeResponse): SubmitIntakeRequest {
 
 type FieldErrors = Partial<Record<keyof SubmitIntakeRequest, string>>;
 
+/** UX fix (user-requested): a small fixed set of mutually-exclusive options
+ * (time/budget/risk below) as a row of pill buttons instead of a `<select>`
+ * dropdown — the selected one filled, the rest outlined, same shape as the
+ * reference screenshot. `country` keeps the native `Select` (too many
+ * options for this to read well as pills). */
+function PillSelect<T extends string>({
+  labelId,
+  value,
+  options,
+  getLabel,
+  onChange,
+}: {
+  labelId: string;
+  value: T;
+  options: readonly T[];
+  getLabel: (option: T) => string;
+  onChange: (value: T) => void;
+}) {
+  return (
+    <div role="radiogroup" aria-labelledby={labelId} className="flex flex-wrap gap-2">
+      {options.map((option) => {
+        const selected = option === value;
+        return (
+          <Button
+            key={option}
+            type="button"
+            role="radio"
+            aria-checked={selected}
+            variant={selected ? 'default' : 'outline'}
+            size="sm"
+            className="rounded-full"
+            onClick={() => onChange(option)}
+          >
+            {getLabel(option)}
+          </Button>
+        );
+      })}
+    </div>
+  );
+}
+
 export interface IntakeFormProps {
   /** Called once a submission has been persisted and read back (AC: the app
    * shows chat next). */
@@ -174,19 +215,26 @@ export function IntakeForm({ onSaved }: IntakeFormProps) {
     };
   }, []);
 
+  const setField = React.useCallback(
+    (key: keyof SubmitIntakeRequest, value: string) => {
+      setForm((prev) => ({ ...prev, [key]: value }));
+      // Bug fix (user-reported, live): dismisses "Changes saved"
+      // immediately on the next edit, rather than waiting out the rest of
+      // its timer — cancels the pending auto-dismiss (it would otherwise
+      // still fire later and no-op harmlessly, but there's no reason to
+      // leave it dangling).
+      clearSavedDismissTimeout();
+      setJustSaved(false);
+    },
+    [clearSavedDismissTimeout],
+  );
+
   const handleChange = React.useCallback(
     (key: keyof SubmitIntakeRequest) =>
       (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
-        setForm((prev) => ({ ...prev, [key]: event.target.value }));
-        // Bug fix (user-reported, live): dismisses "Changes saved"
-        // immediately on the next edit, rather than waiting out the rest of
-        // its timer — cancels the pending auto-dismiss (it would otherwise
-        // still fire later and no-op harmlessly, but there's no reason to
-        // leave it dangling).
-        clearSavedDismissTimeout();
-        setJustSaved(false);
+        setField(key, event.target.value);
       },
-    [clearSavedDismissTimeout],
+    [setField],
   );
 
   const handleSubmit = React.useCallback(
@@ -302,42 +350,30 @@ export function IntakeForm({ onSaved }: IntakeFormProps) {
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="intake-weeklyTimeAvailability">{t('weeklyTimeAvailability.label')}</Label>
-            <Select
-              id="intake-weeklyTimeAvailability"
+            <Label id="intake-weeklyTimeAvailability-label">{t('weeklyTimeAvailability.label')}</Label>
+            <PillSelect
+              labelId="intake-weeklyTimeAvailability-label"
               value={form.weeklyTimeAvailability}
-              onChange={handleChange('weeklyTimeAvailability')}
-            >
-              {weeklyTimeAvailabilitySchema.options.map((option) => (
-                <option key={option} value={option}>
-                  {t(`weeklyTimeAvailability.options.${option}`)}
-                </option>
-              ))}
-            </Select>
+              options={weeklyTimeAvailabilitySchema.options}
+              getLabel={(option) => t(`weeklyTimeAvailability.options.${option}`)}
+              onChange={(value) => setField('weeklyTimeAvailability', value)}
+            />
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="intake-startingBudgetRange">{t('startingBudgetRange.label')}</Label>
-            <Select
-              id="intake-startingBudgetRange"
+            <Label id="intake-startingBudgetRange-label">{t('startingBudgetRange.label')}</Label>
+            <PillSelect
+              labelId="intake-startingBudgetRange-label"
               value={form.startingBudgetRange}
-              onChange={handleChange('startingBudgetRange')}
-            >
-              {startingBudgetRangeSchema.options.map((option) => (
-                <option key={option} value={option}>
-                  {t(`startingBudgetRange.options.${option}`)}
-                </option>
-              ))}
-            </Select>
+              options={startingBudgetRangeSchema.options}
+              getLabel={(option) => t(`startingBudgetRange.options.${option}`)}
+              onChange={(value) => setField('startingBudgetRange', value)}
+            />
           </div>
 
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="intake-riskTolerance">{t('riskTolerance.label')}</Label>
-            <Select
-              id="intake-riskTolerance"
-              value={form.riskTolerance}
-              onChange={handleChange('riskTolerance')}
-            >
+            <Select id="intake-riskTolerance" value={form.riskTolerance} onChange={handleChange('riskTolerance')}>
               {riskToleranceSchema.options.map((option) => (
                 <option key={option} value={option}>
                   {t(`riskTolerance.options.${option}`)}

@@ -341,6 +341,61 @@ body::before {
   }
 }
 
+/* UX fix (user-reported, live): closing via the X/Escape/backdrop (or a
+   parent flipping `open` to false) used to disappear instantly — nothing
+   declared what `data-state='closed'` looks like, so there was no actual
+   change for the transition above to animate *through*, and Radix's own
+   exit-animation wait (it keeps the node mounted until a transition/
+   animation genuinely fires) never triggered. Mirroring the open-state
+   rule gives the close path the same 180ms fade instead of an instant cut. */
+.popup-glass-strong[data-state='closed'],
+.popup-glass-dense[data-state='closed'] {
+  opacity: 0;
+}
+
+/* UX fix (user-reported, live): same gap as the two rules above, but for
+   the dark backdrop behind every dialog, not the dialog's own content box.
+   `shadcn-glass-ui`'s `ModalOverlay` (`[data-slot='dialog-overlay']`) ships
+   its own `data-[state=open]:animate-in ... fade-in-0`/`fade-out-0`
+   classes, which also need the uninstalled `tailwindcss-animate` plugin —
+   so with no plugin, the backdrop has no transition of its own at all and
+   pops on/off instantly even once the content above fades smoothly.
+   Targeted by `data-slot`, not a named class, since every dialog in the
+   app renders this one overlay. */
+[data-slot='dialog-overlay'] {
+  transition: opacity 180ms ease-out;
+}
+@starting-style {
+  [data-slot='dialog-overlay'][data-state='open'] {
+    opacity: 0;
+  }
+}
+[data-slot='dialog-overlay'][data-state='closed'] {
+  opacity: 0;
+}
+
+/* UX fix (user-reported, live): a few places swap content in place with
+   no open/close transition to hook into — `PlanActivationPanel`'s
+   review/edit/reject/failed sub-views all swap inside one already-open
+   `Dialog` (`data-state` never leaves `'open'` between them, so the rule
+   above never fires there), and `StatusPanel`'s current-step card swaps
+   in a freshly-completed step's text with no dialog at all. Both key the
+   swapped content by something that changes with it (`phase`, the new
+   step's id) so each swap mounts a fresh node; a plain keyframe (unlike a
+   `transition`, which only animates a *change* on an already-mounted
+   node) plays automatically on every such mount. */
+@keyframes content-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.content-fade-in {
+  animation: content-fade-in 200ms ease-out;
+}
+
 header {
   @apply glass-chrome shadow-[var(--shadow)];
 }

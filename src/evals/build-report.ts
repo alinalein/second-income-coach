@@ -1,7 +1,9 @@
-import { computeModelCosts, totalEstimatedCostUsd, type ModelCallUsageRow, type ModelCostSummary } from './cost.js';
+import { buildCostTotal, computeModelCosts, groupCostTotals, type CostGroups, type ModelCallUsageRow, type ModelCostSummary, type ModelRoleKey } from './cost.js';
+import { EVAL_PRICE_AS_OF, EVAL_PRICE_SOURCE } from './eval-price-table.js';
 import { PENDING_GUARDRAIL_CATEGORIES, type GuardrailSuiteResult, type PendingGuardrailCategory } from './guardrails.js';
-import { EVAL_MODEL_IDS, JUDGE_MODEL_IDS } from './constants.js';
+import { EVAL_MODEL_IDS, EVAL_ONLY_MODEL_ID, JUDGE_MODEL_IDS } from './constants.js';
 import type { MistralJailbreakFlagRateResult, MistralJailbreakFlagRateRow } from './mistral-jailbreak-flag-rate.js';
+import { ackLatencyByModel, deterministicLatencyByModel, type AckLatencyRow } from './latency.js';
 
 /** The shape `trajectory.eval.ts` (Story 6.2, extended by Story 6.3 with
  * `modelCallUsages`) writes to `src/evals/results/trajectory-results.json`.
@@ -28,6 +30,9 @@ export interface ResultRow {
   error?: string;
   langsmithProject?: string;
   langsmithRunId?: string;
+  /** User-requested (2026-11-20): see `trajectory.eval.ts`'s own field of
+   * the same name. */
+  durationMs?: number;
 }
 
 export interface TrajectoryResults {
@@ -41,6 +46,12 @@ export interface TrajectoryResults {
    * this field existed — `buildReport` below renders that absence the same
    * as a live run's own "Pending/error", never as a silent 0. */
   mistralJailbreakFlagRate?: MistralJailbreakFlagRateResult;
+  /** User-requested (2026-11-20, amended): one row per `EVAL_MODEL_IDS`
+   * entry, written by `trajectory.eval.ts`'s own dedicated `it`s as part of
+   * this same run (epics.md Story 7.5: "no separate latency file or
+   * step"). Optional for backward compatibility with a `trajectory-
+   * results.json` written before this field existed. */
+  ackLatencyRows?: AckLatencyRow[];
 }
 
 /** The report's own rendering of AD-23's non-gating metric — `'pending'`
@@ -103,7 +114,30 @@ export interface ReportData {
   cost: {
     perModel: ModelCostSummary[];
     totalEstimatedCostUsd: number;
+    /** Plain English, computed by `buildCostTotal` — what `totalEstimatedCostUsd`
+     * actually covers, e.g. "target models + Sonnet; judges not recorded".
+     * The headline card and the detail "Total (...)" line both show this
+     * exact string, so they can never disagree about what the number means. */
+    totalLabel: string;
     mechanism: string;
+    priceAsOf: string;
+    priceSource: string;
+    groups: CostGroups;
+  };
+  /** User-requested (2026-11-20): per-model latency visibility — "Start
+   * this step" felt slow, and nothing else here measured how much of that
+   * is the model call itself, or how that differs by model. Every entry
+   * covers every `EVAL_MODEL_IDS` id; a model with nothing measured yet
+   * gets `null` fields, never a fabricated number. */
+  latency: {
+    /** The direct `/steps/:stepId/start-ack` model call (`start-step-ack-
+     * latency.eval.ts`'s own dedicated, cheap step) — `null` when that
+     * step hasn't been run for this results file. */
+    ackByModel: { modelId: string; medianMs: number | null; maxMs: number | null; calls: number }[];
+    /** A full deterministic trajectory case's own agent turn — `null` when
+     * no row for that model recorded a `durationMs` (a `trajectory-
+     * results.json` predating that field, or every row errored). */
+    deterministicByModel: { modelId: string; medianMs: number | null }[];
   };
   limitations: Limitation[];
 }
@@ -175,8 +209,19 @@ export function buildReport(trajectoryResults: TrajectoryResults, guardrailResul
   const judgeRegistryOverlap = JUDGE_MODEL_IDS.map((judgeId) => ({ judgeId, alsoRegistryEntry: modelIds.includes(judgeId) }));
   const overlappingJudges = judgeRegistryOverlap.filter((entry) => entry.alsoRegistryEntry).map((entry) => entry.judgeId);
 
-  const cost = computeModelCosts(trajectoryResults.modelCallUsages ?? [], modelIds);
-  const unpricedModelIds = cost.filter((entry) => entry.estimatedCostUsd === null).map((entry) => entry.modelId);
+  const modelRoles: ModelRoleKey[] = [
+    ...modelIds.map((modelId): ModelRoleKey => ({ modelId, role: 'target' })),
+    ...JUDGE_MODEL_IDS.map((modelId): ModelRoleKey => ({ modelId, role: 'judge' })),
+  ];
+  const cost = computeModelCosts(trajectoryResults.modelCallUsages ?? [], modelRoles);
+  const groups = groupCostTotals(cost, EVAL_ONLY_MODEL_ID);
+  // User-requested (2026-11-20, amended): "sum every group that has a
+  // price ... label it exactly what it covers ... never present a partial
+  // sum as the full cost" — only `'measured'` groups are summed, and
+  // `totalLabel` names every excluded group with its own reason.
+  const { totalEstimatedCostUsd, totalLabel } = buildCostTotal(groups);
+  const allGroupsMeasured = groups.targetModels.status === 'measured' && groups.sonnet.status === 'measured' && groups.judges.status === 'measured';
+  const unpricedModelIds = cost.filter((entry) => entry.estimatedCostUsd === null).map((entry) => `${entry.modelId} (${entry.role})`);
 
   const limitations: Limitation[] = [];
 
@@ -197,19 +242,21 @@ export function buildReport(trajectoryResults: TrajectoryResults, guardrailResul
   if (unpricedModelIds.length > 0) {
     limitations.push({
       id: 'unpriced-eval-only-model',
-      summary: `${unpricedModelIds.join(', ')} has no registered price in MODEL_REGISTRY (intentionally excluded as eval-only, AD-20) — token usage is shown, cost is not estimated (AD-21: never a guessed price).`,
+      summary: `${unpricedModelIds.join(', ')} has no price in the eval-only price table (${EVAL_PRICE_SOURCE}, as of ${EVAL_PRICE_AS_OF}) — token usage is shown, cost is not estimated (AD-21: never a guessed price).`,
     });
   }
 
   limitations.push({
     id: 'cost-mechanism-not-built',
-    summary: 'This cost estimate is computed directly from the model registry price list, not the CAP-8 token/cost mechanism (Story 5.2), which is not yet built.',
+    summary: 'This cost estimate is computed directly from an eval-only price table, not the CAP-8 token/cost mechanism (Story 5.2), which is not yet built.',
   });
 
-  limitations.push({
-    id: 'judge-call-cost-excluded',
-    summary: `Judge models (${JUDGE_MODEL_IDS.join(', ')}) also spend real tokens scoring quality cases — this estimate covers target-model-under-test calls only, not the judges' own calls.`,
-  });
+  if (!allGroupsMeasured) {
+    limitations.push({
+      id: 'judge-call-cost-excluded',
+      summary: `The "Estimated cost" total covers ${totalLabel} — see the cost groups above for exactly which calls were recorded and priced this run.`,
+    });
+  }
 
   limitations.push({
     id: 'story-7-4-pending',
@@ -235,8 +282,16 @@ export function buildReport(trajectoryResults: TrajectoryResults, guardrailResul
     mistralJailbreakFlagRate: toMistralJailbreakFlagRateSection(trajectoryResults.mistralJailbreakFlagRate),
     cost: {
       perModel: cost,
-      totalEstimatedCostUsd: totalEstimatedCostUsd(cost),
-      mechanism: 'model-registry-price-list',
+      totalEstimatedCostUsd,
+      totalLabel,
+      mechanism: 'eval-only-price-table',
+      priceAsOf: EVAL_PRICE_AS_OF,
+      priceSource: EVAL_PRICE_SOURCE,
+      groups,
+    },
+    latency: {
+      ackByModel: ackLatencyByModel(modelIds, trajectoryResults.ackLatencyRows),
+      deterministicByModel: deterministicLatencyByModel(trajectoryResults.rows, modelIds),
     },
     limitations,
   };

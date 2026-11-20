@@ -33,3 +33,14 @@ export const EVAL_MODEL_IDS: readonly string[] = [
   ...MODEL_REGISTRY.filter((entry) => entry.category === 'chat').map((entry) => entry.id),
   EVAL_ONLY_MODEL_ID,
 ];
+
+/** User-requested (2026-11-20): how many real `buildStartStepAckMessage`
+ * calls each model gets for the ack-latency median/max — shared by
+ * `trajectory.eval.ts`'s own dedicated `it`s (part of the full `npm run
+ * eval` run) and `measure-latency.ts`'s standalone `npm run eval:latency`
+ * (same measurement, same constant, never two numbers drifting apart). */
+export const ACK_LATENCY_CALLS_PER_MODEL = 5;
+
+/** Any fixed, plausible step title — `buildStartStepAckMessage` only uses
+ * it to name the step in the prompt; it isn't what's being measured. */
+export const ACK_LATENCY_STEP_TITLE = 'Post your first listing';

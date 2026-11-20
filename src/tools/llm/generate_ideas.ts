@@ -74,15 +74,35 @@ export interface GenerateIdeasRunConfig {
 }
 
 /** AD-4: "a validation failure ... is retried ... never silently persisted
- * malformed" — one retry (2 total attempts) before surfacing as a tool
- * error. Applies uniformly whether the failure was a Zod-shape mismatch or
- * a deterministic hard-rule failure (limits, quote verification, vendor/
- * login-wall checks). Round 12 (user-approved — "make generation finish in
- * one attempt"): the *soft* checks (idea-type variety, citation-domain
- * spread/cap) no longer trigger this retry at all — only a genuine hard
- * failure ever consumes the second attempt now, so a normal run finishes on
- * attempt 1. */
-const MAX_DRAFT_ATTEMPTS = 2;
+ * malformed" — applies uniformly whether the failure was a Zod-shape
+ * mismatch or a deterministic hard-rule failure (limits, quote
+ * verification, vendor/login-wall checks). Round 12 (user-approved —
+ * "make generation finish in one attempt"): the *soft* checks (idea-type
+ * variety, citation-domain spread/cap) no longer trigger this retry at
+ * all — only a genuine hard failure ever consumes a retry attempt, so a
+ * normal run finishes on attempt 1.
+ *
+ * Bug fix (user-reported, live): 2 -> 3 — the same slot kept failing both
+ * of its 2 attempts for the rationale-shape guard specifically ("only 2
+ * of 3 ideas" generated), even after that guard's own prompt fix reduced
+ * how often a single attempt fails. Real per-attempt latency is ~10-12s
+ * in every logged case (see `IDEAS_MODEL_NODE_TIMEOUT_MS`'s own doc
+ * comment) — a 3rd attempt costs real time only on the rare slot whose
+ * first two genuinely failed. */
+const MAX_DRAFT_ATTEMPTS = 3;
+
+/**
+ * Bug fix (user-reported, live): rejected rationale bullets kept landing
+ * at *exactly* `RATIONALE_LINE_MAX_LENGTH` (100) characters — including
+ * two separate live cases ending in a stray non-Latin/invisible character
+ * right at that boundary — confirming the model itself writes to that
+ * number as a hard target rather than stopping earlier once a sentence is
+ * done. Telling it to aim for a smaller number instead, while
+ * `RATIONALE_LINE_MAX_LENGTH` stays the real (unchanged) schema/retry-
+ * guard cap, gives it slack to land a complete sentence comfortably under
+ * the real ceiling instead of racing right up to it every time.
+ */
+const RATIONALE_LINE_TARGET_LENGTH = 80;
 
 /**
  * Story 2.2 follow-up fix round 7, fix 2 (observed live, not just
@@ -1095,6 +1115,39 @@ const DEFAULT_IDEAS_PER_BATCH = 2;
 const EXCLUDE_TITLES_LIMIT = 50;
 
 /**
+ * Bug fix (found live, diagnosed from a real `502` — "generate_ideas: one
+ * draft attempt exceeded its 30000ms budget" on every call, server running
+ * a while, not a restart): the query-planning call's own `excludeTitles`
+ * list disproportionately slows it as a user's real history grows — timed
+ * live against this exact model/prompt (one real test account, same
+ * narrow intake every run, so its own history gets more repetitive, not
+ * just longer, the more it's regenerated — the realistic worst case, not
+ * a synthetic one): a 5-title cap held a tight, stable ~12-15s even
+ * against a 37-idea history; a 10-title cap still climbed back to
+ * 38-46s once that same account's history grew denser, and the original,
+ * uncapped list (then 23 titles) ran 23-42s. This is not an input-token-
+ * size effect — "pick angles genuinely distinct from N older, often
+ * similar ones" is a harder task for the model to reason through as N
+ * (and how repetitive N is) grows, and that reasoning cost shows up as
+ * generation latency even though the JSON it eventually emits is the
+ * exact same tiny shape either way. Confirmed not caused by this story's
+ * own 2->3 `MAX_DRAFT_ATTEMPTS`/timeout changes below — those touch
+ * neither this prompt nor `QUERY_PLANNING_TIMEOUT_MS`, and the slowdown
+ * reproduces identically against `HEAD`'s unmodified query-planning call.
+ * Query planning only needs enough recent titles to pick genuinely
+ * different angles, never the full `EXCLUDE_TITLES_LIMIT` (50) the
+ * writing call below still gets in full (its own attempt budget — 110s —
+ * has comfortable headroom this effect never approaches there). Fixed at
+ * the cause (a smaller, separate cap on this one call's own input), not
+ * by raising `QUERY_PLANNING_TIMEOUT_MS` alone — that would keep the
+ * batch slow and still fail once a user's history grows denser again;
+ * that budget is still raised too (its own doc comment), as a margin
+ * over genuine model/provider call-to-call variance, never as the fix on
+ * its own.
+ */
+export const QUERY_PLANNING_EXCLUDE_TITLES_LIMIT = 5;
+
+/**
  * `count`/`excludeTitles` (live-bug fix, post-handoff): a one-shot repair
  * call for just the ideas that failed a hard check asks for `count` (not
  * the full configured batch size) replacements, and must never repeat one
@@ -1244,14 +1297,16 @@ export function buildIdeaWritingPrompt(
       '["skillsInterests","weeklyTimeAvailability","startingBudgetRange","riskTolerance","stoppedBeforeText",' +
       '"failurePattern"] — whichever of these actually shaped this idea.',
     `rationale: an array of 2-3 short strings (not one block of text — a separate array item per bullet, no ` +
-      `markdown bullet markers like "-" or "*" within each one), each at most ~${RATIONALE_LINE_MAX_LENGTH} ` +
-      'characters, in plain, natural language for someone who has never seen this form — never the raw field name or its exact ' +
-      'stored value (never write things like "weeklyTimeAvailability", "under_5h", "startingBudgetRange", ' +
-      '"failurePattern", or "loses_interest_once_routine"). Each bullet must be one complete, self-contained ' +
-      'sentence that ends with a period, exclamation mark, or question mark — if it would run past the ' +
-      `~${RATIONALE_LINE_MAX_LENGTH}-character guideline, shorten the wording so the finished sentence fits; ` +
-      'never stop partway through a sentence just to hit the character count, and never split one sentence ' +
-      'across two bullets. Write only in the reply language specified below — never switch script or language ' +
+      `markdown bullet markers like "-" or "*" within each one), each aiming for around ${RATIONALE_LINE_TARGET_LENGTH} ` +
+      `characters (never more than ${RATIONALE_LINE_MAX_LENGTH}, but write toward the shorter target below so you ` +
+      'finish the sentence comfortably instead of racing right up to the hard limit), in plain, natural language for ' +
+      'someone who has never seen this form — never the raw field name or its exact stored value (never write things ' +
+      'like "weeklyTimeAvailability", "under_5h", "startingBudgetRange", "failurePattern", or ' +
+      '"loses_interest_once_routine"). Each bullet must be one complete, self-contained sentence that ends with a ' +
+      'period, exclamation mark, or question mark — if your draft of it would run long, shorten the wording (use ' +
+      'fewer or simpler words) so the finished sentence still fits within the target; never stop partway through a ' +
+      'sentence just to hit a character count, and never split one sentence across two bullets. Write only in the ' +
+      'reply language specified below — never switch script or language ' +
       'mid-bullet. Item 1: why this idea fits this person specifically ' +
       '(e.g. "since you only have a few hours a week" or "because starting over completely once put you off ' +
       'before"), referencing the citedIntakeFields reasoning. Item 2: one concrete first step they could take ' +
@@ -1457,11 +1512,24 @@ export function sanitizeRawDraftForSchema(raw: unknown): unknown {
   return { ...raw, rationale };
 }
 
-/** Story 2.6 (third speed round): the one planning call's own bounded
+/**
+ * Story 2.6 (third speed round): the one planning call's own bounded
  * budget — generous for "one short structured-output call," unrelated to
  * `DRAFT_ATTEMPT_TIMEOUT_MS` (that one covers a per-idea search+write
- * unit). A new timeout, not a raised one — this step didn't exist before. */
-const QUERY_PLANNING_TIMEOUT_MS = 30_000;
+ * unit). A new timeout, not a raised one — this step didn't exist before.
+ *
+ * Bug fix (found live, diagnosed from a real `502`): 30s -> 60s, paired
+ * with `QUERY_PLANNING_EXCLUDE_TITLES_LIMIT` above (the actual cause) —
+ * this call's own typical latency measured live at ~8-18s even after that
+ * cap, but the model/provider shows real call-to-call variance on top of
+ * that (an 8-sample, zero-`excludeTitles` baseline alone ranged 7.8-15.5s;
+ * one capped-titles real run still briefly touched the old 30s ceiling).
+ * 60s keeps this a defensive cap for a genuinely hung call, not the
+ * expected duration — comfortable margin over the measured worst case,
+ * same "margin over real latency" standard `DRAFT_ATTEMPT_TIMEOUT_MS`/
+ * `IDEAS_MODEL_NODE_TIMEOUT_MS` already follow, still far short of either.
+ */
+const QUERY_PLANNING_TIMEOUT_MS = 60_000;
 
 /** Story 2.6 (third speed round): bounds the shared first-round search
  * round (the discovery queries plus every idea's own first rate-query
@@ -1736,9 +1804,21 @@ export async function handleGenerateIdeas(
 
       // Step 1: query planning — one short model call turns the intake
       // into this batch's search queries. No tools, no loop.
+      // Bug fix (found live): only the most recent `QUERY_PLANNING_
+      // EXCLUDE_TITLES_LIMIT` titles go into this specific call's own
+      // prompt (never the full `existingTitles` — that stays unchanged for
+      // the writing call below) — see that constant's own doc comment for
+      // the measured cause.
       const planStart = performance.now();
       const plan = await withDraftAttemptTimeout(
-        (signal) => planQueries(initialIntakeRow, parsedArgs.replyLanguage, ideasPerBatch, existingTitles, signal),
+        (signal) =>
+          planQueries(
+            initialIntakeRow,
+            parsedArgs.replyLanguage,
+            ideasPerBatch,
+            existingTitles.slice(0, QUERY_PLANNING_EXCLUDE_TITLES_LIMIT),
+            signal,
+          ),
         deps.queryPlanningTimeoutMs ?? QUERY_PLANNING_TIMEOUT_MS,
         config?.signal,
       );

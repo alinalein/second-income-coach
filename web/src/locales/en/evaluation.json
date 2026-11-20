@@ -1,5 +1,5 @@
 {
-  "title": "Quality & Decisions",
+  "title": "Evaluation & Decisions",
   "loading": "Loading…",
   "error": "Couldn't load this page's data. Please try again.",
   "contentLanguageNotice": "The report and decision content below is in English, regardless of your language setting.",
@@ -22,6 +22,7 @@
     },
     "judgeScores": {
       "heading": "Judge quality scores",
+      "description": "Each row is a real run from the model under test, given a deliberately messy or indirect message (no fixed reference answer here, unlike the Model accuracy table above) — 2 judge models each grade whether that run's steps make sense and reach the goal.",
       "judgeModelsLabel": "Judge models",
       "model": "Model",
       "case": "Case",
@@ -29,7 +30,9 @@
       "score": "Score",
       "errorLabel": "Error",
       "yes": "Yes",
-      "no": "No"
+      "no": "No",
+      "conclusion": "{{yesCount}} of {{judgedCount}} judge calls scored the sampled quality cases as acceptable (\"Yes\").",
+      "conclusionErrors": "{{errorCount}} judge call(s) failed and are excluded from that count."
     },
     "mistralFlagRate": {
       "heading": "Mistral jailbreak flag rate",
@@ -39,21 +42,58 @@
     "cost": {
       "heading": "Estimated cost",
       "model": "Model",
+      "role": "Role",
       "input": "Input tokens",
       "output": "Output tokens",
       "cost": "Estimated cost",
-      "total": "Total estimated cost",
+      "total": "Total",
       "mechanism": "Mechanism",
-      "unpriced": "Not priced"
+      "group": "Group",
+      "groupTargetModels": "Target models",
+      "groupSonnet": "Sonnet (eval-only)",
+      "groupJudges": "Judges"
     },
     "limitations": {
       "heading": "Known limitations"
+    },
+    "latency": {
+      "heading": "Latency",
+      "description": "Per model: the one direct start-step acknowledgment model call (5 real calls).",
+      "descriptionWithTrajectory": "Per model: the one direct start-step acknowledgment model call (5 real calls) versus a full deterministic trajectory case's own agent turn.",
+      "model": "Model",
+      "ackMedian": "Start-step ack (median)",
+      "ackMax": "Start-step ack (max)",
+      "calls": "Calls",
+      "trajectoryMedian": "Trajectory case (median)",
+      "notMeasured": "Not measured"
     }
   },
   "decisions": {
     "heading": "Key decisions",
     "reason": "Why",
     "tradeoff": "Trade-off"
+  },
+  "tools": {
+    "heading": "Tools",
+    "agentTools": {
+      "heading": "Which tools each agent can call",
+      "whereUserIs": "Where the user is",
+      "agentThread": "Agent (thread)",
+      "toolsModelCanCall": "Tools the model can call"
+    },
+    "toolDetails": {
+      "heading": "What each tool does",
+      "tool": "Tool",
+      "kind": "Kind",
+      "whoCallsIt": "Who calls it",
+      "whereInFlow": "Where in the flow",
+      "whatItDoes": "What it does",
+      "writesState": "Writes state"
+    },
+    "diagram": {
+      "heading": "One chat turn (middleware lifecycle)",
+      "caption": "What the guardrail tests cover: input moderation before the model, tool calls, output checks before the reply."
+    }
   },
   "reflection": {
     "heading": "Reflection",

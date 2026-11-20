@@ -1,5 +1,5 @@
 {
-  "title": "Qualität & Entscheidungen",
+  "title": "Evaluierung & Entscheidungen",
   "loading": "Wird geladen…",
   "error": "Die Daten für diese Seite konnten nicht geladen werden. Bitte versuche es erneut.",
   "contentLanguageNotice": "Der Bericht und die Entscheidungsinhalte unten sind auf Englisch, unabhängig von deiner Spracheinstellung.",
@@ -22,6 +22,7 @@
     },
     "judgeScores": {
       "heading": "Qualitätsbewertungen der Judges",
+      "description": "Jede Zeile ist ein echter Durchlauf des getesteten Modells zu einer bewusst unordentlichen oder indirekten Nachricht (anders als bei der Modellgenauigkeit oben gibt es hier keine feste Referenzantwort) — 2 Judge-Modelle bewerten jeweils, ob die Schritte dieses Durchlaufs Sinn ergeben und das Ziel erreichen.",
       "judgeModelsLabel": "Judge-Modelle",
       "model": "Modell",
       "case": "Fall",
@@ -29,7 +30,9 @@
       "score": "Bewertung",
       "errorLabel": "Fehler",
       "yes": "Ja",
-      "no": "Nein"
+      "no": "Nein",
+      "conclusion": "{{yesCount}} von {{judgedCount}} Judge-Aufrufen bewerteten die ausgewählten Qualitätsfälle als akzeptabel (\"Ja\").",
+      "conclusionErrors": "{{errorCount}} Judge-Aufruf(e) sind fehlgeschlagen und nicht in dieser Zahl enthalten."
     },
     "mistralFlagRate": {
       "heading": "Mistral-Jailbreak-Erkennungsrate",
@@ -39,21 +42,58 @@
     "cost": {
       "heading": "Geschätzte Kosten",
       "model": "Modell",
+      "role": "Rolle",
       "input": "Input-Tokens",
       "output": "Output-Tokens",
       "cost": "Geschätzte Kosten",
-      "total": "Gesamte geschätzte Kosten",
+      "total": "Gesamt",
       "mechanism": "Mechanismus",
-      "unpriced": "Kein Preis hinterlegt"
+      "group": "Gruppe",
+      "groupTargetModels": "Zielmodelle",
+      "groupSonnet": "Sonnet (nur Evaluierung)",
+      "groupJudges": "Judges"
     },
     "limitations": {
       "heading": "Bekannte Einschränkungen"
+    },
+    "latency": {
+      "heading": "Latenz",
+      "description": "Pro Modell: der eine direkte Modellaufruf für die Start-Bestätigung (5 echte Aufrufe).",
+      "descriptionWithTrajectory": "Pro Modell: der eine direkte Modellaufruf für die Start-Bestätigung (5 echte Aufrufe) im Vergleich zu einem vollständigen deterministischen Trajectory-Fall (eigener Agenten-Durchlauf).",
+      "model": "Modell",
+      "ackMedian": "Start-Bestätigung (Median)",
+      "ackMax": "Start-Bestätigung (Max)",
+      "calls": "Aufrufe",
+      "trajectoryMedian": "Trajectory-Fall (Median)",
+      "notMeasured": "Nicht gemessen"
     }
   },
   "decisions": {
     "heading": "Wichtige Entscheidungen",
     "reason": "Begründung",
     "tradeoff": "Kompromiss"
+  },
+  "tools": {
+    "heading": "Tools",
+    "agentTools": {
+      "heading": "Welche Tools jeder Agent aufrufen kann",
+      "whereUserIs": "Wo sich die Nutzerin befindet",
+      "agentThread": "Agent (Thread)",
+      "toolsModelCanCall": "Tools, die das Modell aufrufen kann"
+    },
+    "toolDetails": {
+      "heading": "Was jedes Tool macht",
+      "tool": "Tool",
+      "kind": "Art",
+      "whoCallsIt": "Wer es aufruft",
+      "whereInFlow": "Wo im Ablauf",
+      "whatItDoes": "Was es tut",
+      "writesState": "Schreibt Zustand"
+    },
+    "diagram": {
+      "heading": "Ein Chat-Zug (Middleware-Lebenszyklus)",
+      "caption": "Was die Guardrail-Tests abdecken: Input-Moderation vor dem Modell, Tool-Aufrufe, Output-Prüfung vor der Antwort."
+    }
   },
   "reflection": {
     "heading": "Reflexion",

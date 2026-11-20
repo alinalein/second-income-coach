@@ -1,6 +1,13 @@
 import * as React from 'react';
 import { useTranslation } from 'react-i18next';
-import { startStepResponseSchema, completeStepResponseSchema, type PlanStepResponse, type ChatMessage } from '@app/shared';
+import {
+  startStepResponseSchema,
+  startStepAckResponseSchema,
+  completeStepResponseSchema,
+  completeStepAckResponseSchema,
+  type PlanStepResponse,
+  type ChatMessage,
+} from '@app/shared';
 import { Button } from '../../components/ui/button';
 
 export interface StepActionsProps {
@@ -9,10 +16,26 @@ export interface StepActionsProps {
   /** Re-fetches `get_current_step` once an action succeeds, so the
    * newly-current/next step shows without a page reload. */
   onStepChanged: () => void;
-  /** Spec 2.12 AC8: fires once, only on a successful `start`, with the
-   * server's own chat acknowledgment — separate from `onStepChanged` so
-   * `complete()` (which never produces one) can't accidentally trigger it. */
+  /** Spec 2.12 AC8: fires once the chat-acknowledgment request (see
+   * `onStepStarting` below) settles with a message — separate from
+   * `onStepChanged` so `complete()` (which never produces one) can't
+   * accidentally trigger it. */
   onStepStarted?: (message: ChatMessage) => void;
+  /** Perf fix (user-reported, live): "Start this step" used to wait on the
+   * acknowledgment's own direct model call before responding at all (~2-3s
+   * on the default model) — the DB write (`POST .../start`) now responds on
+   * its own, and this fires the instant that succeeds, before the
+   * acknowledgment (`POST .../start-ack`, fired right after, never
+   * awaited) has resolved. Lets the chat show a typing indicator
+   * immediately instead of staying silent for however long that second,
+   * independent request takes. */
+  onStepStarting?: () => void;
+  /** Perf fix (user-reported, live): fires once the acknowledgment request
+   * settles with no message to show — any of its fail-open branches
+   * (moderation/guilt-language flag, timeout) or the request itself
+   * failing. Exactly one of this and `onStepStarted` fires per `start()`
+   * call that gets past the DB write. */
+  onStepStartAckFailed?: () => void;
   /** Bug fix (user-reported, live): fires once, only on a successful
    * `complete()` — never `start()`, which never changes the completed-step
    * count the projection is actually computed from. `StatusPanel.tsx` used
@@ -25,12 +48,28 @@ export interface StepActionsProps {
   /** Bug fix (user-reported, live): fires once, only when `complete()`
    * succeeds on the plan's final step (`planCompleted`) — the parent needs
    * this (not just `onStepChanged`) to flip its own cached plan status to
-   * `completed` immediately and show the server's completion chat message
-   * live, same as `onStepStarted` does for a step start. Without it, the
-   * workspace kept showing the plan as `active` (stale projection-card
-   * framing, sidebar badge, energy pop-up) and the completion message only
-   * appeared after a full reload. */
-  onPlanCompleted?: (message?: ChatMessage) => void;
+   * `completed` immediately, same timing as before. Story 4.6: no longer
+   * carries the completion chat message — that now arrives separately,
+   * via `onStepCompletionAck` below, same split as the start flow. */
+  onPlanCompleted?: () => void;
+  /** Story 4.6 (mirrors `onStepStarting` exactly): fires the instant
+   * `complete()`'s own DB write succeeds, before the acknowledgment
+   * (`POST .../complete-ack`, fired right after, never awaited) has
+   * resolved — lets the chat show a typing indicator immediately instead
+   * of staying silent for however long that second, independent request
+   * takes. Fires for both a per-step and a final-step completion. */
+  onStepCompleting?: () => void;
+  /** Story 4.6 (mirrors `onStepStarted` exactly): fires once the
+   * acknowledgment request settles with a message to show — the plan's own
+   * distinct completion message on the final step, or a per-step one
+   * otherwise (never both; the final step's own message is the only one
+   * produced for that step). */
+  onStepCompletionAck?: (message: ChatMessage) => void;
+  /** Story 4.6 (mirrors `onStepStartAckFailed` exactly): fires once the
+   * acknowledgment request settles with no message to show. Exactly one of
+   * this and `onStepCompletionAck` fires per `complete()` call that gets
+   * past the DB write. */
+  onStepCompletionAckFailed?: () => void;
   /** Bug fix (user-reported, live): true while the plan itself isn't
    * `active` yet (still `draft`, awaiting `PlanActivationPanel`'s review) —
    * both buttons are disabled; the route rejects the call either way
@@ -80,7 +119,20 @@ type Phase = 'idle' | 'busy' | 'failed';
  * `phase === 'busy'` still disables both buttons during the in-flight
  * request (prevents a double-submit), just without changing either label.
  */
-export function StepActions({ planId, step, onStepChanged, onStepStarted, onStepCompleted, onPlanCompleted, disabled = false }: StepActionsProps) {
+export function StepActions({
+  planId,
+  step,
+  onStepChanged,
+  onStepStarted,
+  onStepStarting,
+  onStepStartAckFailed,
+  onStepCompleted,
+  onPlanCompleted,
+  onStepCompleting,
+  onStepCompletionAck,
+  onStepCompletionAckFailed,
+  disabled = false,
+}: StepActionsProps) {
   const { t } = useTranslation('plan');
   const [phase, setPhase] = React.useState<Phase>('idle');
   const [planCompleted, setPlanCompleted] = React.useState(false);
@@ -108,11 +160,33 @@ export function StepActions({ planId, step, onStepChanged, onStepStarted, onStep
         const body: unknown = await res.json();
         const parsed = startStepResponseSchema.safeParse(body);
         setPhase(parsed.success ? 'idle' : 'failed');
-        // Spec 2.12 AC8: `chatMessage` is present only when the server's own
-        // direct model call produced one (fail-open — absent on any
-        // failure/flag/timeout, never an error on its own).
-        if (parsed.success && parsed.data.chatMessage) onStepStarted?.(parsed.data.chatMessage);
         onStepChanged();
+        if (!parsed.success) return;
+
+        // Perf fix (user-reported, live): the chat acknowledgment is a
+        // second, independent request — fired right after the DB write
+        // above succeeds, never awaited before responding to the click, so
+        // "Start this step" itself only ever waits on the DB write. Fully
+        // fail-open, same as before this split: any non-success response,
+        // a parse failure, or the fetch itself failing all just mean no
+        // message to show, never a failure of the start action itself
+        // (which already succeeded).
+        onStepStarting?.();
+        fetch(`/api/plans/${planId}/steps/${step.id}/start-ack`, { method: 'POST', credentials: 'include' })
+          .then(async (ackRes) => {
+            if (!ackRes.ok) {
+              onStepStartAckFailed?.();
+              return;
+            }
+            const ackBody: unknown = await ackRes.json();
+            const ackParsed = startStepAckResponseSchema.safeParse(ackBody);
+            if (ackParsed.success && ackParsed.data.chatMessage) {
+              onStepStarted?.(ackParsed.data.chatMessage);
+            } else {
+              onStepStartAckFailed?.();
+            }
+          })
+          .catch(() => onStepStartAckFailed?.());
       })
       .catch(() => setPhase('failed'));
   }
@@ -140,9 +214,34 @@ export function StepActions({ planId, step, onStepChanged, onStepStarted, onStep
         }
         setPlanCompleted(parsed.data.planCompleted);
         setPhase('idle');
-        if (parsed.data.planCompleted) onPlanCompleted?.(parsed.data.chatMessage);
+        if (parsed.data.planCompleted) onPlanCompleted?.();
         onStepChanged();
         onStepCompleted?.();
+
+        // Story 4.6 (mirrors `start()`'s own split exactly): the chat
+        // acknowledgment is a second, independent request — fired right
+        // after the DB write above succeeds, never awaited before
+        // responding to the click, so "Mark as done" itself only ever
+        // waits on the DB write. Fully fail-open: any non-success response,
+        // a parse failure, or the fetch itself failing all just mean no
+        // message to show, never a failure of the complete action itself
+        // (which already succeeded).
+        onStepCompleting?.();
+        fetch(`/api/plans/${planId}/steps/${step.id}/complete-ack`, { method: 'POST', credentials: 'include' })
+          .then(async (ackRes) => {
+            if (!ackRes.ok) {
+              onStepCompletionAckFailed?.();
+              return;
+            }
+            const ackBody: unknown = await ackRes.json();
+            const ackParsed = completeStepAckResponseSchema.safeParse(ackBody);
+            if (ackParsed.success && ackParsed.data.chatMessage) {
+              onStepCompletionAck?.(ackParsed.data.chatMessage);
+            } else {
+              onStepCompletionAckFailed?.();
+            }
+          })
+          .catch(() => onStepCompletionAckFailed?.());
       })
       .catch(() => setPhase('failed'));
   }

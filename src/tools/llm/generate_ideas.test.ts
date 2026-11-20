@@ -15,6 +15,7 @@ import {
   handleGenerateIdeas,
   looksLikeSearchServiceErrorText,
   occupationMatchesIdea,
+  QUERY_PLANNING_EXCLUDE_TITLES_LIMIT,
   sourceEvidenceLooksBlockedOrHidden,
   truncateAtWordBoundary,
   type GenerateIdeasDeps,
@@ -693,9 +694,9 @@ describe('handleGenerateIdeas (bug fix: per-slot retry reason, partial-batch suc
 
         expect(result).toHaveLength(1);
         expect(result[0]!.title).toBe('Good');
-        // 2 attempts for the dropped slot + 1 for the one that succeeded on
-        // its first attempt.
-        expect(writeIdea).toHaveBeenCalledTimes(3);
+        // MAX_DRAFT_ATTEMPTS (3) attempts for the dropped slot + 1 for the
+        // one that succeeded on its first attempt.
+        expect(writeIdea).toHaveBeenCalledTimes(4);
         const rows = await db.select().from(ideas).where(eq(ideas.userId, userId));
         expect(rows).toHaveLength(1);
       },
@@ -746,9 +747,10 @@ describe('handleGenerateIdeas (Story 2.5 + third speed round: a login-walled sha
 
       await expect(handleGenerateIdeas(deps, configFor(userId), { replyLanguage: 'en' })).rejects.toThrow();
 
-      // Both attempts for the one idea run (the shared discovery search is
-      // never refetched between them), and both fail the same way.
-      expect(writeIdea).toHaveBeenCalledTimes(2);
+      // All MAX_DRAFT_ATTEMPTS (3) attempts for the one idea run (the
+      // shared discovery search is never refetched between them), and
+      // every one fails the same way.
+      expect(writeIdea).toHaveBeenCalledTimes(3);
       const rows = await db.select().from(ideas).where(eq(ideas.userId, userId));
       expect(rows).toHaveLength(0);
     } finally {
@@ -1016,11 +1018,11 @@ describe('handleGenerateIdeas (round 12: soft rules never block — a hard-valid
   // retrieved source is login-walled" in the corrupted-batch table above) —
   // it can't support the number it's cited for at all, a correctness
   // problem, not a confidence one.
-  it('a hard-rule failure (e.g. a vendor-pricing-page citation) still blocks on both attempts — never degrades', async () => {
+  it('a hard-rule failure (e.g. a vendor-pricing-page citation) still blocks on every attempt — never degrades', async () => {
     // Single-idea batch: this invariant is a per-slot property under the
     // new per-idea design, so one slot proves it deterministically (5
-    // parallel slots each exhausting 2 attempts would too, just less
-    // predictably ordered).
+    // parallel slots each exhausting MAX_DRAFT_ATTEMPTS attempts would
+    // too, just less predictably ordered).
     const userId = await createTestUser();
     try {
       const intakeRow = await upsertIntake(db, userId, intakeArgs({ startingBudgetRange: 'under_100' }));
@@ -1033,7 +1035,7 @@ describe('handleGenerateIdeas (round 12: soft rules never block — a hard-valid
 
       await expect(handleGenerateIdeas(deps, configFor(userId), { replyLanguage: 'en' })).rejects.toThrow();
 
-      expect(writeIdea).toHaveBeenCalledTimes(2);
+      expect(writeIdea).toHaveBeenCalledTimes(3);
       const rows = await db.select().from(ideas).where(eq(ideas.userId, userId));
       expect(rows).toHaveLength(0);
     } finally {
@@ -1124,7 +1126,7 @@ describe('handleGenerateIdeas (round 9: an already-aborted external signal stops
 // I/O matrix: "Nested LLM output fails Zod" -> "Never written; retried or
 // surfaced as error" (AD-4).
 describe('handleGenerateIdeas (I/O matrix: nested LLM output fails Zod)', () => {
-  it('retries once, then throws and writes zero rows when output never passes Zod validation', async () => {
+  it('retries twice, then throws and writes zero rows when output never passes Zod validation', async () => {
     const userId = await createTestUser();
     try {
       await upsertIntake(db, userId, intakeArgs());
@@ -1133,7 +1135,7 @@ describe('handleGenerateIdeas (I/O matrix: nested LLM output fails Zod)', () => 
 
       await expect(handleGenerateIdeas(deps, configFor(userId), { replyLanguage: 'en' })).rejects.toThrow();
 
-      expect(writeIdea).toHaveBeenCalledTimes(2);
+      expect(writeIdea).toHaveBeenCalledTimes(3);
       const rows = await db.select().from(ideas).where(eq(ideas.userId, userId));
       expect(rows).toHaveLength(0);
     } finally {
@@ -1291,6 +1293,80 @@ describe('handleGenerateIdeas (review fix: excludeTitles is capped, not unbounde
 
       const excludeTitles = writeIdea.mock.calls[0]?.[5] as string[] | undefined;
       expect(excludeTitles).toHaveLength(50);
+    } finally {
+      await cleanUp(userId);
+    }
+  });
+});
+
+// Story 2.6 speed budget (bug fix, found live from a real `502`:
+// "generate_ideas: one draft attempt exceeded its 30000ms budget"): the
+// query-planning call's own `excludeTitles` grew with every idea a user
+// ever generated (`existingTitles`, unbounded except by
+// `EXCLUDE_TITLES_LIMIT`'s 50) — long enough, it pushed that one call's
+// real latency past its 30s budget. A test seeded with an empty DB never
+// saw this (0 titles is always fast), which is exactly why it shipped
+// unnoticed. `QUERY_PLANNING_EXCLUDE_TITLES_LIMIT` caps what this one
+// call's own prompt ever receives, independent of how many rows actually
+// exist — these three row counts (0, a normal few, and a heavy user's
+// many) must all produce the same bounded prompt.
+describe('handleGenerateIdeas (Story 2.6 speed budget: query-planning excludeTitles stays bounded)', () => {
+  // The test's own short intake fixture plus at most
+  // `QUERY_PLANNING_EXCLUDE_TITLES_LIMIT` titles (each well under 100
+  // chars here) — a generous, fixed ceiling independent of how many idea
+  // rows actually exist in the DB; the regression this guards against is
+  // exactly that growing without bound as rowCount grows.
+  const PLANNING_PROMPT_LENGTH_BOUND = 2000;
+
+  it.each([
+    ['an empty DB (the case every other test already covers)', 0],
+    ['5 existing ideas', 5],
+    ['200 existing ideas (a heavy, long-running user)', 200],
+  ] as const)('with %s, the planning call gets at most the capped titles and a bounded prompt', async (_label, rowCount) => {
+    const userId = await createTestUser();
+    try {
+      const intakeRow = await upsertIntake(db, userId, intakeArgs());
+      if (rowCount > 0) {
+        await db.insert(ideas).values(
+          Array.from({ length: rowCount }, (_, i) => ({
+            userId,
+            status: 'suggested' as const,
+            title: `Existing idea number ${i + 1} about something fairly ordinary`,
+            rationale: 'Fits your week.\nStart today.',
+            citedIntakeFields: ['weeklyTimeAvailability', 'riskTolerance', 'startingBudgetRange'],
+            ideaType: 'service' as const,
+            weeklyTimeCommitment: '5_to_10h' as const,
+            startupCostAmountMinorUnits: 0,
+            startupCostCurrency: 'EUR' as const,
+            riskLevel: 'low' as const,
+            baselineRateQuote: DEFAULT_RATE_QUOTE,
+            baselineRateLowAmountMinorUnits: 2500,
+            baselineRateHighAmountMinorUnits: 2500,
+            isVendorSource: false,
+            rateUnit: 'hour' as const,
+            baselineRateCurrency: 'EUR' as const,
+            baselineRateCitation: 'https://a.example.com/rates',
+            sourceTrustTier: 'tier_3' as const,
+            isRateUnverified: false,
+          })),
+        );
+      }
+
+      const planQueries = vi.fn().mockImplementation(async (_intakeRow: unknown, _lang: unknown, count: number) => ({
+        discoveryQueries: ['demand query'],
+        ideaSeeds: Array.from({ length: count }, (_, i) => ({ angle: `angle ${i + 1}`, rateQuery: `rate query ${i + 1}` })),
+      }) satisfies QueryPlan);
+      const writeIdea = poolWriteIdeaMock(fiveValidDrafts(intakeRow, 'New'));
+      const deps = baseDeps({ planQueries, writeIdea });
+
+      await handleGenerateIdeas(deps, configFor(userId), { replyLanguage: 'en' });
+
+      const excludeTitles = planQueries.mock.calls[0]?.[3] as string[] | undefined;
+      expect(excludeTitles).toBeDefined();
+      expect(excludeTitles!.length).toBeLessThanOrEqual(QUERY_PLANNING_EXCLUDE_TITLES_LIMIT);
+
+      const prompt = buildQueryPlanningPrompt(intakeRow, 'en', 5, excludeTitles);
+      expect(prompt.length).toBeLessThanOrEqual(PLANNING_PROMPT_LENGTH_BOUND);
     } finally {
       await cleanUp(userId);
     }

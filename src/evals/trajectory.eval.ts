@@ -14,9 +14,19 @@ import { loadEvalEnv } from './env.js';
 import { buildEvalAgent, runFixtureTurn } from './harness.js';
 import { createJudgeModels } from './judges.js';
 import { sumUsage } from './usage.js';
-import { EVAL_MODEL_IDS, JUDGE_MODEL_IDS, TRAJECTORY_ACCURACY_TARGET, type JudgeModelId } from './constants.js';
+import {
+  ACK_LATENCY_CALLS_PER_MODEL,
+  ACK_LATENCY_STEP_TITLE,
+  EVAL_MODEL_IDS,
+  JUDGE_MODEL_IDS,
+  TRAJECTORY_ACCURACY_TARGET,
+  type JudgeModelId,
+} from './constants.js';
 import type { ModelCallUsageRow } from './cost.js';
 import { runMistralJailbreakFlagRate, type MistralJailbreakFlagRateResult } from './mistral-jailbreak-flag-rate.js';
+import { median, type AckLatencyRow } from './latency.js';
+import { createChatModel } from '../agent/model.js';
+import { buildStartStepAckMessage } from '../api/routes/plans.js';
 
 /**
  * Story 6.2 (AC1): the committed, versioned fixture shape every file under
@@ -120,7 +130,26 @@ function loadFixtures(): Fixture[] {
 
 const fixtures = loadFixtures();
 const env = loadEvalEnv();
-const judgeModels = createJudgeModels(env);
+
+/** Set by `runQualityCase` right before it invokes a judge, cleared right
+ * after — tags each `JudgeCallUsage` the `createJudgeModels` callback below
+ * reports with the (caseId) it belongs to. Safe only because judge calls
+ * run sequentially within this one `describe` (same precedent as
+ * `getOrGenerateQualityTrajectory`'s own memoization doc comment) — never a
+ * concurrent-call race. */
+let currentJudgeCaseId: string | undefined;
+
+const judgeModels = createJudgeModels(env, (usage) => {
+  if (currentJudgeCaseId === undefined) return;
+  modelCallUsages.push({
+    modelId: usage.judgeId,
+    caseId: currentJudgeCaseId,
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    complete: usage.complete,
+    role: 'judge',
+  });
+});
 
 /** One scored row per (model, case) for a deterministic case, or per
  * (model, case, judge) for a quality case (AC3/AC4: "results record which
@@ -137,9 +166,21 @@ interface ResultRow {
   error?: string;
   langsmithProject?: string;
   langsmithRunId?: string;
+  /** User-requested (2026-11-20): wall-clock ms of this row's own real
+   * agent turn (`runFixtureTurn`) — deterministic cases only. Absent on a
+   * construction/invoke error (never a 0 — timing never started), so a
+   * failed row only ever drops out of the latency median, never skews it
+   * toward 0. */
+  durationMs?: number;
 }
 
 const resultRows: ResultRow[] = [];
+
+/** User-requested (2026-11-20, amended): per-model latency visibility,
+ * part of this same suite's own run (epics.md Story 7.5: "no separate
+ * latency file or step") — populated by the dedicated `it`s below, one per
+ * `EVAL_MODEL_IDS` entry. */
+const ackLatencyRows: AckLatencyRow[] = [];
 
 /** AD-23's non-gating metric — populated by the dedicated `it` below, which
  * runs regardless of the deterministic/quality matrix above (real network
@@ -164,8 +205,13 @@ async function runDeterministicCase(modelId: string, fixture: Fixture): Promise<
     // this (model, case) from the results file.
     const evalAgent = buildEvalAgent(modelId, env);
     const threadId = `discovery:eval-${fixture.id}-${modelId}`;
+    // User-requested (2026-11-20): timed around the one real agent turn,
+    // not the evaluator call below (the evaluator is local comparison
+    // logic, not a cost/latency this report means to characterize).
+    const startedAt = performance.now();
     const outputs = await runFixtureTurn(evalAgent, threadId, [new HumanMessage(fixture.input[0]!.content)]);
-    modelCallUsages.push({ modelId, caseId: fixture.id, ...sumUsage(outputs) });
+    const durationMs = performance.now() - startedAt;
+    modelCallUsages.push({ modelId, caseId: fixture.id, ...sumUsage(outputs), role: 'target' });
     // Boundaries: "createTrajectoryMatchEvaluator with toolArgsMatchMode:
     // 'exact'" — trajectoryMatchMode left at its library default (strict),
     // no judge model involved (AC2). `toolArgsMatchOverrides` narrows that
@@ -183,6 +229,7 @@ async function runDeterministicCase(modelId: string, fixture: Fixture): Promise<
       comment: result.comment,
       langsmithProject: env.LANGSMITH_PROJECT,
       langsmithRunId: evalAgent.getLastRunId(),
+      durationMs,
     };
   } catch (error) {
     return { ...base, score: null, error: error instanceof Error ? error.message : String(error) };
@@ -213,7 +260,7 @@ function getOrGenerateQualityTrajectory(modelId: string, fixture: Fixture): Prom
       const evalAgent = buildEvalAgent(modelId, env);
       const threadId = `discovery:eval-${fixture.id}-${modelId}`;
       const outputs = await runFixtureTurn(evalAgent, threadId, [new HumanMessage(fixture.input[0]!.content)]);
-      modelCallUsages.push({ modelId, caseId: fixture.id, ...sumUsage(outputs) });
+      modelCallUsages.push({ modelId, caseId: fixture.id, ...sumUsage(outputs), role: 'target' });
       return { outputs, langsmithRunId: evalAgent.getLastRunId() };
     } catch (error) {
       return { error: error instanceof Error ? error.message : String(error) };
@@ -271,11 +318,21 @@ async function runQualityCase(modelId: string, fixture: Fixture, judgeId: JudgeM
     // case, built via `createChatModel`/`createJudgeModels` (OpenRouter),
     // passed as `judge` — never the `model: "provider:id"` string form.
     const evaluator = createTrajectoryLLMAsJudge({ prompt: TRAJECTORY_ACCURACY_PROMPT, judge: judgeModels[judgeId] });
-    const result = await withTimeout(
-      evaluator({ outputs: generation.outputs }),
-      QUALITY_JUDGE_CALL_TIMEOUT_MS,
-      `judge call (${judgeId}) timed out after ${QUALITY_JUDGE_CALL_TIMEOUT_MS}ms`,
-    );
+    // User-requested (2026-11-20): tags the judge-call usage row the
+    // `createJudgeModels` callback pushes with this case's own id — cleared
+    // in `finally` so a later, unrelated judge call (or none at all, e.g.
+    // another model's own agent turn) never gets mis-tagged with this case.
+    currentJudgeCaseId = fixture.id;
+    let result: Awaited<ReturnType<typeof evaluator>>;
+    try {
+      result = await withTimeout(
+        evaluator({ outputs: generation.outputs }),
+        QUALITY_JUDGE_CALL_TIMEOUT_MS,
+        `judge call (${judgeId}) timed out after ${QUALITY_JUDGE_CALL_TIMEOUT_MS}ms`,
+      );
+    } finally {
+      currentJudgeCaseId = undefined;
+    }
     return {
       ...base,
       score: result.score,
@@ -359,6 +416,45 @@ describe('trajectory eval suite (Story 6.2, AD-23)', () => {
     mistralJailbreakFlagRateResult = await runMistralJailbreakFlagRate(process.env.MISTRAL_API_KEY);
   });
 
+  // User-requested (2026-11-20, amended, epics.md Story 7.5): per-model
+  // latency for the one direct `/steps/:stepId/start-ack` model call
+  // (`buildStartStepAckMessage`, imported verbatim from `plans.ts`, never a
+  // re-implementation) — part of this same `npm run eval` run, never a
+  // separate file/step. Verification: filtering on "start-step ack
+  // latency" (`-t`) runs just this measurement (4 models x 5 calls, tiny
+  // cost) without the full matrix above.
+  for (const modelId of EVAL_MODEL_IDS) {
+    it(`${modelId} :: start-step ack latency (${ACK_LATENCY_CALLS_PER_MODEL} calls)`, async () => {
+      const model = createChatModel(env, modelId);
+      const callDurationsMs: number[] = [];
+      let missingMessageCount = 0;
+
+      for (let callIndex = 0; callIndex < ACK_LATENCY_CALLS_PER_MODEL; callIndex += 1) {
+        const threadId = `discovery:eval-ack-latency-${modelId}-${callIndex}`;
+        const startedAt = performance.now();
+        // Pass-through classify — same Boundary precedent as `buildEvalAgent`
+        // above: only `OPENROUTER_API_KEY` is required to run evals
+        // (`env.ts`'s own doc comment), and this measures the model call's
+        // own latency (the dominant, user-reported cost), not Mistral's
+        // moderation call (already known to be ~0.2-0.5s, not the
+        // bottleneck). `buildStartStepAckMessage` never throws (fully
+        // fail-open, its own doc comment) — a `catch` here would be dead
+        // code.
+        const message = await buildStartStepAckMessage(model, async () => ({}), threadId, 'en', ACK_LATENCY_STEP_TITLE, []);
+        callDurationsMs.push(performance.now() - startedAt);
+        if (!message) missingMessageCount += 1;
+      }
+
+      ackLatencyRows.push({
+        modelId,
+        callDurationsMs,
+        medianMs: median(callDurationsMs),
+        maxMs: callDurationsMs.length > 0 ? Math.max(...callDurationsMs) : null,
+        missingMessageCount,
+      });
+    });
+  }
+
   // Runs last (Vitest executes `it`s within one `describe` in declaration
   // order): writes the one results file only once every case/model/judge
   // combination above has already pushed its row — an interrupted run
@@ -394,6 +490,7 @@ describe('trajectory eval suite (Story 6.2, AD-23)', () => {
           rows: resultRows,
           modelCallUsages,
           mistralJailbreakFlagRate: mistralJailbreakFlagRateResult,
+          ackLatencyRows,
         },
         null,
         2,

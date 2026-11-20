@@ -1048,6 +1048,19 @@ export function IdeasPanel({
   // `postIdeaStatus`'s own doc comment.
   const [exitingIdeaIds, setExitingIdeaIds] = React.useState<ReadonlySet<string>>(new Set());
 
+  // UX fix (user-reported, live): "the screen kind of jumps before the
+  // scrollbar disappears" — once a card's own fade finishes and it's
+  // actually spliced out of `visibleIdeas` below, CSS Grid reflows the
+  // remaining cards into fewer rows in the very same paint (e.g. a bottom
+  // row's last card going away drops the grid a whole row-height at
+  // once). `gridRef`/`gridCollapseRef` do a FLIP: right before the
+  // removal, `postIdeaStatus` records the grid's current (taller) height;
+  // the layout effect below then pins the grid at that height for one
+  // paint and animates it down to its new natural height instead of
+  // snapping straight to it.
+  const gridRef = React.useRef<HTMLDivElement | null>(null);
+  const gridCollapseRef = React.useRef<number | null>(null);
+
   // Story 2.6 AC5: lifted up from `IdeaCard` — one `useViewerCountry()`
   // call (one `/api/intake` fetch) for the whole grid instead of one per
   // card, passed down as a prop. Same value every card already got from its
@@ -1300,7 +1313,10 @@ export function IdeasPanel({
             next.delete(ideaId);
             return next;
           });
-          if (!exitCancelled) applyStatusChange();
+          if (!exitCancelled) {
+            gridCollapseRef.current = gridRef.current?.getBoundingClientRect().height ?? null;
+            applyStatusChange();
+          }
         }, EXIT_TRANSITION_MS);
       } else {
         applyStatusChange();
@@ -1580,6 +1596,54 @@ export function IdeasPanel({
     if (onlyBookmarked) return ideas.filter((idea) => idea.status === 'bookmarked' && !idea.hasPlan);
     return ideas.filter((idea) => idea.status === 'suggested');
   }, [ideas, onlyIdeaId, onlyBookmarked]);
+
+  // UX fix (user-reported, live), continued from `gridCollapseRef`'s own
+  // doc comment above: runs synchronously after `visibleIdeas` shrinks
+  // (a layout effect, so this happens before the browser paints the now-
+  // fewer rows) — pins the grid at its still-recorded old (taller)
+  // height, forces that pinned layout to actually paint once, then
+  // transitions down to the real new height on the next frame instead of
+  // ever showing the shorter layout instantly. Still looked jumpy without
+  // the grid's own `content-start` class (above): a CSS Grid container's
+  // default `align-content: normal` computes to `stretch`, so pinning the
+  // container taller than its (now shorter) content made the remaining
+  // row's cards grow to fill the extra space instead of leaving it as
+  // blank space to shrink — `content-start` stops that.
+  React.useLayoutEffect(() => {
+    const oldHeight = gridCollapseRef.current;
+    gridCollapseRef.current = null;
+    const el = gridRef.current;
+    if (oldHeight === null || !el) return;
+
+    const newHeight = el.getBoundingClientRect().height;
+    if (newHeight >= oldHeight) return;
+
+    el.style.transition = 'none';
+    el.style.height = `${oldHeight}px`;
+    el.style.overflow = 'hidden';
+    // Force the pinned height to actually apply before switching to the
+    // animated target — without this the browser can coalesce both style
+    // writes into one paint and skip straight to `newHeight`.
+    void el.getBoundingClientRect();
+    el.style.transition = 'height 200ms ease-in-out';
+
+    const frame = requestAnimationFrame(() => {
+      el.style.height = `${newHeight}px`;
+    });
+
+    const handleTransitionEnd = (event: TransitionEvent) => {
+      if (event.target !== el || event.propertyName !== 'height') return;
+      el.style.transition = '';
+      el.style.height = '';
+      el.style.overflow = '';
+    };
+    el.addEventListener('transitionend', handleTransitionEnd);
+
+    return () => {
+      cancelAnimationFrame(frame);
+      el.removeEventListener('transitionend', handleTransitionEnd);
+    };
+  }, [visibleIdeas]);
   // UX fix (user-reported): "Generate new ideas" is a "New ideas"-view-only
   // action (it replaces the `suggested` batch) — the "Bookmarked" views
   // (`onlyBookmarked`/`onlyIdeaId`) never show it.
@@ -1686,7 +1750,10 @@ export function IdeasPanel({
             <p className="text-sm text-muted-foreground">{t('empty')}</p>
           ) : null}
           {visibleIdeas.length > 0 ? (
-            <div className="grid grid-cols-1 items-stretch gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div
+              ref={gridRef}
+              className="grid grid-cols-1 content-start items-stretch gap-4 sm:grid-cols-2 lg:grid-cols-3"
+            >
               {visibleIdeas.map((idea) => {
                 const cardTranslation = translations.get(translationKey(idea.id, i18n.language));
                 return (

@@ -86,6 +86,46 @@ describe('runGenerateReport', () => {
     expect(fs.existsSync(publishedResultsPath)).toBe(false);
   });
 
+  // User-requested (2026-11-20, amended, epics.md Story 7.5): latency is
+  // part of the one `trajectoryResultsPath` file, never a separate one —
+  // `ackLatencyRows` present on it reaches the report JSON; the committed
+  // sample fixture (predating that field) renders "not measured" instead
+  // of crashing.
+  it('carries ackLatencyRows from trajectoryResultsPath into the report JSON; its absence renders "not measured"', () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'eval-report-test-'));
+
+    const withAckLatencyPath = path.join(tmpDir, 'trajectory-results-with-ack-latency.json');
+    fs.writeFileSync(
+      withAckLatencyPath,
+      JSON.stringify({
+        ...JSON.parse(sampleTrajectoryResultsRaw),
+        ackLatencyRows: [{ modelId: 'openai/gpt-6-luna', callDurationsMs: [500, 600], medianMs: 550, maxMs: 600, missingMessageCount: 0 }],
+      }),
+    );
+    const withAckLatency = runGenerateReport({
+      trajectoryResultsPath: withAckLatencyPath,
+      outDir: tmpDir,
+      publishedResultsPath: path.join(tmpDir, 'published', 'eval-results.json'),
+      runGuardrailSuites: () => fakeGuardrailResults,
+    });
+    const jsonWithAckLatency = JSON.parse(fs.readFileSync(withAckLatency.reportJsonPath, 'utf8'));
+    expect(jsonWithAckLatency.latency.ackByModel.find((entry: { modelId: string }) => entry.modelId === 'openai/gpt-6-luna')).toEqual({
+      modelId: 'openai/gpt-6-luna',
+      medianMs: 550,
+      maxMs: 600,
+      calls: 2,
+    });
+
+    const withoutAckLatency = runGenerateReport({
+      trajectoryResultsPath: fixturePath,
+      outDir: tmpDir,
+      publishedResultsPath: path.join(tmpDir, 'published', 'eval-results.json'),
+      runGuardrailSuites: () => fakeGuardrailResults,
+    });
+    const jsonWithoutAckLatency = JSON.parse(fs.readFileSync(withoutAckLatency.reportJsonPath, 'utf8'));
+    expect(jsonWithoutAckLatency.latency.ackByModel.every((entry: { medianMs: unknown }) => entry.medianMs === null)).toBe(true);
+  });
+
   it('writes the published file, schema-valid, only once the run is complete (all models, consistent case counts, AD-23 recorded)', () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'eval-report-test-'));
     const completeResultsPath = path.join(tmpDir, 'trajectory-results.json');

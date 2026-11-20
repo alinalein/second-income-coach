@@ -109,9 +109,23 @@ export interface ChatThreadProps {
    * history read (it was persisted server-side too), so it must never be
    * appended twice. */
   incomingMessage?: ChatMessageType;
+  /** Perf fix (user-reported, live): true while an `incomingMessage` is
+   * expected but not here yet (`start_step`'s own chat acknowledgment is
+   * now a second, independent request, fired after the status panel
+   * already shows "started") — shows a typing indicator in its place
+   * instead of the chat staying silent for however long that request
+   * takes. Never tied to `sending` (this component's own send flow) —
+   * those two loading states are otherwise unrelated. */
+  awaitingExternalReply?: boolean;
 }
 
-export function ChatThread({ endpoint = DEFAULT_CHAT_ENDPOINT, footerItems = [], inputExtra, incomingMessage }: ChatThreadProps = {}) {
+export function ChatThread({
+  endpoint = DEFAULT_CHAT_ENDPOINT,
+  footerItems = [],
+  inputExtra,
+  incomingMessage,
+  awaitingExternalReply = false,
+}: ChatThreadProps = {}) {
   const { t } = useTranslation('chat');
   const [messages, setMessages] = React.useState<ChatMessageType[]>([]);
   const [historyLoaded, setHistoryLoaded] = React.useState(false);
@@ -186,13 +200,16 @@ export function ChatThread({ endpoint = DEFAULT_CHAT_ENDPOINT, footerItems = [],
   // the user has scrolled up." No jump to a computed position — just the
   // bottom, instant under reduced motion, otherwise a short smooth scroll.
   // Re-runs on `displayedStep` too, since the progress label toggling on/off
-  // also changes the scroll region's content height.
+  // also changes the scroll region's content height. Perf fix (user-
+  // reported, live): also re-runs on `awaitingExternalReply` — the typing
+  // indicator it shows/hides changes the scroll region's content height the
+  // same way.
   React.useEffect(() => {
     if (!isNearBottomRef.current) return;
     const node = scrollRegionRef.current;
     if (!node) return;
     node.scrollTo({ top: node.scrollHeight, behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
-  }, [messages, displayedStep]);
+  }, [messages, displayedStep, awaitingExternalReply]);
 
   // Review follow-up: crossfades `displayedStep` toward `currentStep`
   // instead of swapping instantly — fades the current label out, then swaps
@@ -371,6 +388,23 @@ export function ChatThread({ endpoint = DEFAULT_CHAT_ENDPOINT, footerItems = [],
             messages.map((message) => (
               <ChatMessage key={message.id} message={message} animate={animatedIds.has(message.id)} footerItems={footerItems} />
             ))
+          )}
+          {/* Perf fix (user-reported, live): shown the instant `start_step`'s
+           * own DB write succeeds, replaced by the real acknowledgment (or
+           * silently removed, fail-open) once the now-separate second
+           * request settles — same bubble shape as a real assistant message
+           * (`ChatMessage.tsx`'s own `justify-start`/`rounded-xl` styling)
+           * so it reads as "the assistant is about to reply", not a generic
+           * loading state. */}
+          {awaitingExternalReply && (
+            <div className="flex justify-start" aria-live="polite" role="status">
+              <div className="flex items-center gap-1 rounded-xl border border-border bg-card px-4 py-3">
+                <span className="sr-only">{t('typing')}</span>
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:-0.3s]" aria-hidden="true" />
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:-0.15s]" aria-hidden="true" />
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground" aria-hidden="true" />
+              </div>
+            </div>
           )}
           {sending && displayedStep && (
             <p

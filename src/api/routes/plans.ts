@@ -13,7 +13,9 @@ import {
   recordCheckInRequestSchema,
   checkInResponseSchema,
   startStepResponseSchema,
+  startStepAckResponseSchema,
   completeStepResponseSchema,
+  completeStepAckResponseSchema,
   chatMessageSchema,
   projectionResponseSchema,
   checkInStatusResponseSchema,
@@ -42,7 +44,7 @@ import {
   PlanNotDraftError,
   type ActivatePlanGraph,
 } from '../../tools/plain/activate_plan.js';
-import { ideas, plans } from '../../db/schema/index.js';
+import { ideas, plans, planSteps } from '../../db/schema/index.js';
 import { createStrictRateLimiter } from '../middleware/rateLimit.js';
 import { detectUserReplyLanguage } from './ideas.js';
 
@@ -291,8 +293,12 @@ async function getRecentAckTexts(agent: CoachAgent, threadId: string, limit: num
  * fail-open — any error, timeout, or moderation/guilt-language flag returns
  * `undefined` rather than throwing, so the step-start response itself is
  * never affected by this best-effort extra.
+ *
+ * Exported for `src/evals/start-step-ack-latency.eval.ts` — "the same
+ * function the route uses" (user-requested), not a re-implementation of its
+ * timing/prompt/moderation behavior.
  */
-async function buildStartStepAckMessage(
+export async function buildStartStepAckMessage(
   model: BaseChatModel,
   classify: ClassifyText,
   threadId: string,
@@ -416,8 +422,11 @@ export function buildStepCompletionAckPrompt(
  * or moderation/guilt-language flag returns `undefined` rather than
  * throwing, so completion itself is never affected by this best-effort
  * extra.
+ *
+ * Exported (Story 4.6, same precedent as `buildStartStepAckMessage` above)
+ * so it can be unit-tested directly, without a real HTTP/DB round trip.
  */
-async function buildStepCompletionAckMessage(
+export async function buildStepCompletionAckMessage(
   model: BaseChatModel,
   classify: ClassifyText,
   threadId: string,
@@ -909,6 +918,14 @@ export function createPlansRouter({ env, db, agent, model, createDraft, activate
    * (user-reported, live): also 409s when the plan itself isn't `active`
    * yet (`PlanNotActiveError`) — a `draft` plan awaiting review must not
    * let its current step be started/completed early.
+   *
+   * Perf fix (user-reported, live): used to also run the AC8 chat
+   * acknowledgment inline (language detection + the direct model call +
+   * moderation), making this one response wait on all of it — ~2-3s on the
+   * default model for what the status panel only needs the plain DB write
+   * for. The acknowledgment is now `POST .../start-ack` below, fired by the
+   * frontend right after this response lands instead of before it — this
+   * route is the DB write alone.
    */
   router.post('/:planId/steps/:stepId/start', async (req, res) => {
     const userId = req.session.userId!;
@@ -927,41 +944,7 @@ export function createPlansRouter({ env, db, agent, model, createDraft, activate
       }
 
       const result = await startStep(db, planId, stepIdParse.data);
-
-      // Spec 2.12 AC8: one direct model call produces a short, motivating
-      // start-of-step acknowledgment, appended live to the plan thread —
-      // fully fail-open (see `buildStartStepAckMessage`'s own doc comment),
-      // so nothing here can turn a successful start into an error response.
-      // Review fix: the reply language is detected from the *discovery*
-      // thread (same `detectUserReplyLanguage` call this file's own
-      // plan-creation welcome message already uses, Code Map line 221), not
-      // the plan thread itself — a user who hasn't yet typed anything into
-      // this specific plan's chat would otherwise always fall back to 'en'
-      // even though their discovery answers were in German.
-      const threadId = buildPlanThreadId(planId);
-      const replyLanguage = await detectUserReplyLanguage(agent, buildDiscoveryThreadId(userId));
-      // Bug fix (user-reported, live): this thread's own previous start
-      // acknowledgments, quoted back to the model as a no-repeat rule
-      // (`buildStartStepAckMessage`'s own doc comment).
-      const recentAckMessages = await getRecentAckTexts(agent, threadId, START_STEP_ACK_HISTORY_LIMIT, STEP_START_ACK_KWARG);
-      let chatMessage = await buildStartStepAckMessage(model, classify, threadId, replyLanguage, result.step.title, recentAckMessages);
-      if (chatMessage) {
-        try {
-          await agent.updateState(
-            { configurable: { thread_id: threadId } },
-            { messages: [new AIMessage({ id: chatMessage.id, content: chatMessage.content, additional_kwargs: { [STEP_START_ACK_KWARG]: true } })] },
-          );
-        } catch (error) {
-          // Fail open, same as every other branch of this best-effort
-          // extra — the step itself already started successfully above;
-          // never persisting the acknowledgment is reason to drop it from
-          // the response, never to fail the whole request.
-          console.error('[plans] start_step acknowledgment persistence failed:', { userId, planId, error: (error as Error)?.message });
-          chatMessage = undefined;
-        }
-      }
-
-      res.json(startStepResponseSchema.parse({ ...result, chatMessage }));
+      res.json(startStepResponseSchema.parse(result));
     } catch (error) {
       if (error instanceof StepNotCurrentError) {
         res.status(409).json({ error: 'Step is not this plan\'s current step' });
@@ -976,6 +959,100 @@ export function createPlansRouter({ env, db, agent, model, createDraft, activate
     }
   });
 
+  /**
+   * Perf fix (user-reported, live), split out of `/:planId/steps/:stepId/start`
+   * above: the AC8 chat acknowledgment itself (language detection + one
+   * direct, non-agentic model call + moderation) — the frontend fires this
+   * right after `/start` responds instead of waiting on it, so the status
+   * panel flips to "started" immediately and this message trails in once
+   * it's ready. Fully fail-open, same as before the split (see
+   * `buildStartStepAckMessage`'s own doc comment): any failure here —
+   * including the step no longer existing on this plan — responds `200`
+   * with no `chatMessage` rather than an error, since the step itself
+   * already started successfully via the other route regardless of what
+   * happens here.
+   */
+  router.post('/:planId/steps/:stepId/start-ack', async (req, res) => {
+    const userId = req.session.userId!;
+    const planIdParse = z.uuid().safeParse(req.params.planId);
+    const stepIdParse = z.uuid().safeParse(req.params.stepId);
+    if (!planIdParse.success || !stepIdParse.success) {
+      res.status(400).json({ error: 'Bad request' });
+      return;
+    }
+    const planId = planIdParse.data;
+
+    try {
+      if (!(await isPlanOwnedByUser(db, planId, userId))) {
+        res.status(404).json({ error: 'Plan not found' });
+        return;
+      }
+
+      // The step's own title is re-read here, never taken from the client —
+      // the title flows straight into the model prompt below (`buildStartStep
+      // AckPrompt`), so trusting a client-supplied value would let it inject
+      // arbitrary text into that prompt.
+      const [step] = await db
+        .select({ title: planSteps.title })
+        .from(planSteps)
+        .where(and(eq(planSteps.id, stepIdParse.data), eq(planSteps.planId, planId)))
+        .limit(1);
+      if (!step) {
+        res.json(startStepAckResponseSchema.parse({}));
+        return;
+      }
+
+      // Review fix: the reply language is detected from the *discovery*
+      // thread (same `detectUserReplyLanguage` call this file's own
+      // plan-creation welcome message already uses, Code Map line 221), not
+      // the plan thread itself — a user who hasn't yet typed anything into
+      // this specific plan's chat would otherwise always fall back to 'en'
+      // even though their discovery answers were in German.
+      const threadId = buildPlanThreadId(planId);
+      // Independent of each other — run concurrently rather than one after
+      // another (this is exactly the latency this split exists to cut).
+      const [replyLanguage, recentAckMessages] = await Promise.all([
+        detectUserReplyLanguage(agent, buildDiscoveryThreadId(userId)),
+        // Bug fix (user-reported, live): this thread's own previous start
+        // acknowledgments, quoted back to the model as a no-repeat rule
+        // (`buildStartStepAckMessage`'s own doc comment).
+        getRecentAckTexts(agent, threadId, START_STEP_ACK_HISTORY_LIMIT, STEP_START_ACK_KWARG),
+      ]);
+      let chatMessage = await buildStartStepAckMessage(model, classify, threadId, replyLanguage, step.title, recentAckMessages);
+      if (chatMessage) {
+        try {
+          await agent.updateState(
+            { configurable: { thread_id: threadId } },
+            { messages: [new AIMessage({ id: chatMessage.id, content: chatMessage.content, additional_kwargs: { [STEP_START_ACK_KWARG]: true } })] },
+          );
+        } catch (error) {
+          // Fail open, same as every other branch of this best-effort
+          // extra — the step itself already started successfully via the
+          // other route; never persisting the acknowledgment is reason to
+          // drop it from the response, never to fail the whole request.
+          console.error('[plans] start_step acknowledgment persistence failed:', { userId, planId, error: (error as Error)?.message });
+          chatMessage = undefined;
+        }
+      }
+
+      res.json(startStepAckResponseSchema.parse({ chatMessage }));
+    } catch (error) {
+      // Fail-open: an error here never surfaces as a failure — the step
+      // itself already started, this is a best-effort extra.
+      console.error('[plans] start_step acknowledgment failed:', { userId, planId, error: (error as Error)?.message });
+      res.json(startStepAckResponseSchema.parse({}));
+    }
+  });
+
+  /**
+   * Story 4.6 (perf fix, mirroring `/:planId/steps/:stepId/start`'s own
+   * precedent exactly): used to also run the completion chat
+   * acknowledgment inline (language detection + the direct model call +
+   * moderation), making this one response wait on all of it. The
+   * acknowledgment is now `POST .../complete-ack` below, fired by the
+   * frontend right after this response lands instead of before it — this
+   * route is the DB write alone.
+   */
   router.post('/:planId/steps/:stepId/complete', async (req, res) => {
     const userId = req.session.userId!;
     const planIdParse = z.uuid().safeParse(req.params.planId);
@@ -993,53 +1070,7 @@ export function createPlansRouter({ env, db, agent, model, createDraft, activate
       }
 
       const result = await completeStep(db, planId, stepIdParse.data);
-
-      // Story 4.5 (AC3) + user-requested follow-up: one direct model call
-      // produces a completion message on every successful `complete_step`
-      // — the plan's own distinct "whole plan is done" message on the
-      // final step, or an encouraging per-step one otherwise — fully
-      // fail-open (see `buildPlanCompletionAckMessage`'s/
-      // `buildStepCompletionAckMessage`'s own doc comments), so nothing
-      // here can turn a successful completion into an error response; the
-      // fixed `stepActions.planCompletedHint` the UI already shows
-      // regardless is the fallback.
-      const threadId = buildPlanThreadId(planId);
-      const replyLanguage = await detectUserReplyLanguage(agent, buildDiscoveryThreadId(userId));
-      const ackKwarg = result.planCompleted ? PLAN_COMPLETION_ACK_KWARG : STEP_COMPLETION_ACK_KWARG;
-      let chatMessage: ChatMessage | undefined;
-      if (result.planCompleted) {
-        const recentAckMessages = await getRecentAckTexts(agent, threadId, START_STEP_ACK_HISTORY_LIMIT, STEP_START_ACK_KWARG);
-        chatMessage = await buildPlanCompletionAckMessage(
-          model,
-          classify,
-          threadId,
-          replyLanguage,
-          result.step.title,
-          result.step.stepOrder + 1,
-          recentAckMessages,
-        );
-      } else {
-        // User-requested: "also send an encouraging message when the user
-        // completes a task" — own no-repeat history, distinct from the
-        // start-step ack's, so a completion message never reuses an
-        // earlier completion's opener/wording (same guarantee the start
-        // ack already has).
-        const recentAckMessages = await getRecentAckTexts(agent, threadId, START_STEP_ACK_HISTORY_LIMIT, STEP_COMPLETION_ACK_KWARG);
-        chatMessage = await buildStepCompletionAckMessage(model, classify, threadId, replyLanguage, result.step.title, recentAckMessages);
-      }
-      if (chatMessage) {
-        try {
-          await agent.updateState(
-            { configurable: { thread_id: threadId } },
-            { messages: [new AIMessage({ id: chatMessage.id, content: chatMessage.content, additional_kwargs: { [ackKwarg]: true } })] },
-          );
-        } catch (error) {
-          console.error('[plans] complete_step acknowledgment persistence failed:', { userId, planId, error: (error as Error)?.message });
-          chatMessage = undefined;
-        }
-      }
-
-      res.json(completeStepResponseSchema.parse({ ...result, chatMessage }));
+      res.json(completeStepResponseSchema.parse(result));
     } catch (error) {
       if (error instanceof StepNotCurrentError) {
         res.status(409).json({ error: 'Step is not this plan\'s current step' });
@@ -1051,6 +1082,90 @@ export function createPlansRouter({ env, db, agent, model, createDraft, activate
       }
       console.error('[plans] complete_step failed:', { userId, planId, error: (error as Error)?.message });
       res.status(502).json({ error: 'Step could not be completed' });
+    }
+  });
+
+  /**
+   * Story 4.6, split out of `/:planId/steps/:stepId/complete` above (same
+   * perf fix as `/start-ack`): one direct model call produces a completion
+   * message on every successful `complete_step` — the plan's own distinct
+   * "whole plan is done" message on the final step, or an encouraging
+   * per-step one otherwise, never both (AC: "when the completed step is the
+   * plan's last one, do not add a second message") — fully fail-open (see
+   * `buildPlanCompletionAckMessage`'s/`buildStepCompletionAckMessage`'s own
+   * doc comments), so nothing here can turn a successful completion into an
+   * error response; the fixed `stepActions.planCompletedHint` the UI
+   * already shows regardless is the fallback. `planCompleted` is re-derived
+   * from the plan's own current status here, never taken from the client —
+   * same "never trust client input flowing into the model prompt" posture
+   * as `/start-ack`'s own re-read of the step title.
+   */
+  router.post('/:planId/steps/:stepId/complete-ack', async (req, res) => {
+    const userId = req.session.userId!;
+    const planIdParse = z.uuid().safeParse(req.params.planId);
+    const stepIdParse = z.uuid().safeParse(req.params.stepId);
+    if (!planIdParse.success || !stepIdParse.success) {
+      res.status(400).json({ error: 'Bad request' });
+      return;
+    }
+    const planId = planIdParse.data;
+
+    try {
+      if (!(await isPlanOwnedByUser(db, planId, userId))) {
+        res.status(404).json({ error: 'Plan not found' });
+        return;
+      }
+
+      const [step] = await db
+        .select({ title: planSteps.title, stepOrder: planSteps.stepOrder })
+        .from(planSteps)
+        .where(and(eq(planSteps.id, stepIdParse.data), eq(planSteps.planId, planId)))
+        .limit(1);
+      if (!step) {
+        res.json(completeStepAckResponseSchema.parse({}));
+        return;
+      }
+      const [plan] = await db.select({ status: plans.status }).from(plans).where(eq(plans.id, planId)).limit(1);
+      const planCompleted = plan?.status === 'completed';
+
+      const threadId = buildPlanThreadId(planId);
+      const replyLanguage = await detectUserReplyLanguage(agent, buildDiscoveryThreadId(userId));
+      const ackKwarg = planCompleted ? PLAN_COMPLETION_ACK_KWARG : STEP_COMPLETION_ACK_KWARG;
+      let chatMessage: ChatMessage | undefined;
+      if (planCompleted) {
+        const recentAckMessages = await getRecentAckTexts(agent, threadId, START_STEP_ACK_HISTORY_LIMIT, STEP_START_ACK_KWARG);
+        chatMessage = await buildPlanCompletionAckMessage(model, classify, threadId, replyLanguage, step.title, step.stepOrder + 1, recentAckMessages);
+      } else {
+        // User-requested: "also send an encouraging message when the user
+        // completes a task" — own no-repeat history, distinct from the
+        // start-step ack's, so a completion message never reuses an
+        // earlier completion's opener/wording (same guarantee the start
+        // ack already has).
+        const recentAckMessages = await getRecentAckTexts(agent, threadId, START_STEP_ACK_HISTORY_LIMIT, STEP_COMPLETION_ACK_KWARG);
+        chatMessage = await buildStepCompletionAckMessage(model, classify, threadId, replyLanguage, step.title, recentAckMessages);
+      }
+      if (chatMessage) {
+        try {
+          await agent.updateState(
+            { configurable: { thread_id: threadId } },
+            { messages: [new AIMessage({ id: chatMessage.id, content: chatMessage.content, additional_kwargs: { [ackKwarg]: true } })] },
+          );
+        } catch (error) {
+          // Fail open, same as every other branch of this best-effort
+          // extra — the step itself already completed successfully via the
+          // other route; never persisting the acknowledgment is reason to
+          // drop it from the response, never to fail the whole request.
+          console.error('[plans] complete_step acknowledgment persistence failed:', { userId, planId, error: (error as Error)?.message });
+          chatMessage = undefined;
+        }
+      }
+
+      res.json(completeStepAckResponseSchema.parse({ chatMessage }));
+    } catch (error) {
+      // Fail-open: an error here never surfaces as a failure — the step
+      // itself already completed, this is a best-effort extra.
+      console.error('[plans] complete_step acknowledgment failed:', { userId, planId, error: (error as Error)?.message });
+      res.json(completeStepAckResponseSchema.parse({}));
     }
   });
 
