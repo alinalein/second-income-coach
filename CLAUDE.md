@@ -8,9 +8,12 @@
 - At the end of each story, report: the new tests, the AC or AD each one maps to, and the total run time. Remove any test you cannot map.
 - Per story, at most one test per I/O-matrix row or acceptance criterion, plus one per distinct failure branch in security-relevant code; put variants of the same case into one table-driven test (it.each). If a story would need more than 20 new tests, stop and list them with the reason before writing any.
 
-## Idea generation smoke check
+## Definition of done (every story and every fix)
 
-- Any change that touches `src/tools/llm/generate_ideas.ts`, its prompts or schemas, `src/agent/resilience.ts`, the model/registry config, `shared/schemas/ideas.ts` or `WEB_SEARCH_MODE` handling must run `npm run smoke:ideas` before the report. The report states its result (success, ideas returned, seconds). A red or missing smoke check means the story is not done.
+- Before the report, run the full gate and state each result: `npm run typecheck`, `npm run lint`, the FULL `npm test` (shared, src, web) with `DATABASE_URL=postgres://second_income_coach:second_income_coach@localhost:5432/second_income_coach_b_test` (A has no test DB; never run tests against the main DB), and `npm run smoke:ideas` when the story touches idea generation, plans, check-ins, the agent, the model/registry config, shared schemas or env handling. Per-change affected-test runs while working stay allowed; the full gate runs once at the end.
+- A red or skipped gate item means the story is not done; say so, do not report success.
+- Anything that grows with data (idea titles, history, checkpoints, plans) needs a test with many rows, not only an empty database.
+- One session per working folder at a time. Parallel work goes to another lane. A session never edits files outside its own story, and never reverts or discards another session's uncommitted changes.
 - Do not leave `npm run dev` running in the lane while editing; a watch restart during a live request shows up as a 502.
 
 ## External service configuration
