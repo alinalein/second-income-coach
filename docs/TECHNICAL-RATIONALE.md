@@ -73,7 +73,9 @@ flowchart TD
 
 ## Agent vs. prompt engineering vs. RAG
 
-An agent with tool-calling was chosen over plain prompt engineering because the system needs deterministic state mutation (intake, idea/plan status, step progression, activation) that a prompt alone can't guarantee — those mutations are plain-code tools the agent calls, never free-text the model produces (AD-4). It was chosen over a RAG pipeline because there's no static corpus to retrieve from: idea/plan generation needs live market data, not pre-indexed documents, so the system combines the model's own reasoning with live `web_search` (Tavily) results at generation time, with each sourced rate persisted alongside its citation (AD-6) rather than pulled from a curated knowledge base. No MCP server exists for the actual domain logic (idea matching, plan generation, check-in/accountability, income math) — that stays custom code; `web_search` is the only MCP integration (AD-5).
+- Chosen over plain prompt engineering: the system needs deterministic state mutation (intake, idea/plan status, step progression, activation) that a prompt alone can't guarantee — those mutations are plain-code tools the agent calls, never free-text the model produces (AD-4).
+- Chosen over a RAG pipeline: there's no static corpus to retrieve from — idea/plan generation needs live market data, not pre-indexed documents, so the system combines the model's own reasoning with live `web_search` (Tavily) results at generation time, with each sourced rate persisted alongside its citation (AD-6) rather than pulled from a curated knowledge base.
+- No MCP server exists for the actual domain logic (idea matching, plan generation, check-in/accountability, income math) — that stays custom code; `web_search` is the only MCP integration (AD-5).
 
 ## How idea generation works
 

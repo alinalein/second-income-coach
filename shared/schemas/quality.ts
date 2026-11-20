@@ -53,11 +53,14 @@ export const qualityWeaknessesSchema = z.object({
 export type QualityWeaknesses = z.infer<typeof qualityWeaknessesSchema>;
 
 /** The "Agent vs. prompt engineering vs. RAG" section of
- * `docs/TECHNICAL-RATIONALE.md`, extracted verbatim — the Reflection
+ * `docs/TECHNICAL-RATIONALE.md` — that section is itself a bulleted list
+ * (UX fix, user-requested: "this in bullet points"), parsed into one
+ * string per bullet rather than extracted as one prose blob, so the page
+ * renders a real `<ul>` instead of literal "-" characters. The Reflection
  * section's weaknesses/edge-cases/improvements content is `weaknesses`
  * above, reused rather than duplicated here. */
 export const qualityReflectionSchema = z.object({
-  agentVsPromptEngineeringVsRag: z.string().min(1),
+  agentVsPromptEngineeringVsRag: z.array(z.string().min(1)).min(1),
 });
 
 export type QualityReflection = z.infer<typeof qualityReflectionSchema>;

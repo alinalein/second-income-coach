@@ -57,11 +57,13 @@ export function parseKnownWeaknesses(markdown: string): QualityWeaknesses {
   return { knownWeaknesses, edgeCases, codeImprovements };
 }
 
-/** Extracts a `## <heading>` section's body (up to the next `## ` heading,
- * or end of file) from a markdown document — used to pull the "Agent vs.
- * prompt engineering vs. RAG" section out of `docs/TECHNICAL-RATIONALE.md`
- * verbatim. */
-export function extractMarkdownSection(markdown: string, heading: string): string {
+/** Parses a `## <heading>` section's own `- ` bullet lines (up to the
+ * next `## ` heading, or end of file) into one string per bullet — used
+ * to pull the "Agent vs. prompt engineering vs. RAG" section out of
+ * `docs/TECHNICAL-RATIONALE.md` (itself a bulleted list, UX fix: "this in
+ * bullet points") as structured data, never a hand-typed second copy and
+ * never a single prose blob the page would have to re-split on its own. */
+export function extractMarkdownBulletList(markdown: string, heading: string): string[] {
   const lines = markdown.split('\n');
   const startIndex = lines.findIndex((line) => line.trim() === `## ${heading}`);
   if (startIndex === -1) {
@@ -73,6 +75,7 @@ export function extractMarkdownSection(markdown: string, heading: string): strin
 
   return lines
     .slice(startIndex + 1, endIndex)
-    .join('\n')
-    .trim();
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith('- '))
+    .map((line) => line.slice(2).trim());
 }

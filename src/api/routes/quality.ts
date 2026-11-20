@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Router } from 'express';
 import { decisionsFileSchema, publishedEvalResultsSchema, qualityResponseSchema } from '@app/shared';
-import { extractMarkdownSection, parseKnownWeaknesses } from '../../content/quality-docs.js';
+import { extractMarkdownBulletList, parseKnownWeaknesses } from '../../content/quality-docs.js';
 
 const thisDir = fileURLToPath(new URL('.', import.meta.url));
 
@@ -59,7 +59,7 @@ export function createQualityRouter({
     const decisions = decisionsFileSchema.parse(JSON.parse(fs.readFileSync(decisionsPath, 'utf8')));
     const weaknesses = parseKnownWeaknesses(fs.readFileSync(weaknessesDocPath, 'utf8'));
     const reflection = {
-      agentVsPromptEngineeringVsRag: extractMarkdownSection(
+      agentVsPromptEngineeringVsRag: extractMarkdownBulletList(
         fs.readFileSync(rationaleDocPath, 'utf8'),
         'Agent vs. prompt engineering vs. RAG',
       ),

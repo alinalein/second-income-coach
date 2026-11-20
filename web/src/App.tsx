@@ -553,9 +553,11 @@ export function App() {
               />
             </div>
           ) : route.kind === 'quality' ? (
-            <div className="mx-auto w-full max-w-3xl">
-              <QualityPage onBackToApp={() => navigate({ kind: 'ideas' })} />
-            </div>
+            // UX fix (user-requested): same width as the ideas/bookmarked
+            // grid (`<main>`'s own `max-w-6xl`, no extra wrapper here) —
+            // was narrower (`max-w-3xl`, the intake-form width), which read
+            // as cramped for this page's own tables/cards.
+            <QualityPage />
           ) : route.kind === 'plan' ? (
             <PlanWorkspace
               ideaId={route.ideaId}

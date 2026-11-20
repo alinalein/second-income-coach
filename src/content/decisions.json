@@ -34,23 +34,5 @@
     "title": "Guilt/streak-language guardrail",
     "reason": "A separate, narrower afterModel check (not a Mistral category) catches guilt/streak-shaming language specifically, since general moderation has no matching category for it.",
     "tradeoff": "Regeneration is bounded (max 2 attempts) before falling back to a neutral message, trading a perfect rephrasing for a guaranteed exit."
-  },
-  {
-    "id": "AD-20",
-    "title": "Model registry and personality",
-    "reason": "Three user-selectable chat models, all routed through OpenRouter with one key; personality is a prompt layer only and never weakens the guilt-language check or changes the tool boundary.",
-    "tradeoff": "A missing key or failed call falls back to the default model with a neutral notice rather than a hard error, at the cost of a slightly less transparent failure."
-  },
-  {
-    "id": "AD-24",
-    "title": "i18n via react-i18next",
-    "reason": "Every user-facing string ships through react-i18next from the first story onward, in named-translation-key files per namespace — never hardcoded, never English-only pending a later German pass.",
-    "tradeoff": "This page's report/decision content is the one deliberate exception, stated visibly on the page, since it's generated technical documentation rather than UI chrome."
-  },
-  {
-    "id": "AD-27",
-    "title": "Currency as an explicit user setting",
-    "reason": "Currency (EUR or USD, default EUR) is its own user_settings field, never inferred from UI language; money is stored as integer minor units plus an ISO code, never a float.",
-    "tradeoff": "Conversion uses one configured EUR/USD rate with an as-of date rather than a live FX API call, so every converted amount is labeled an estimate rather than exact."
   }
 ]
