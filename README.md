@@ -172,6 +172,6 @@ A walkthrough of one full user journey, end to end:
 
 ## Open work
 
-Epics 1-6 and Story 7.5 are built. Still open (see [`sprint-status.yaml`](_bmad-output/implementation-artifacts/sprint-status.yaml)):
+All stories are built except one (see [`sprint-status.yaml`](_bmad-output/implementation-artifacts/sprint-status.yaml)):
 
 - **Story 7.3:** deploy to Cloud Run + Neon; the demo runs locally.
