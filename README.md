@@ -170,8 +170,6 @@ A walkthrough of one full user journey, end to end:
 - **Background job and proactive notifications:** missed check-ins are detected when the app is opened (AD-15). A scheduler and a push/email channel are not designed.
 - **Planned for v2: feedback on new idea batches.** Every time a user presses "Generate new ideas" after their first batch (never on the very first generation), a dismissible pop-up asks what we should consider for them this time ("What should we improve or consider in your next ideas?"). It is asked on every new generation, because users notice more things that matter for their plan over time, so the plans keep matching what the user really has in mind. Skipping is always possible and never blocks generation. The answer is moderated, stored as per-user memory (same store as the response feedback of Story 5.3) and folded into the planning and writing prompts of that next batch; it applies once, to that batch. Open point: wording in DE/EN.
 
-## Open work
+## Status
 
-All stories are built except one (see [`sprint-status.yaml`](_bmad-output/implementation-artifacts/sprint-status.yaml)):
-
-- **Story 7.3:** deploy to Cloud Run + Neon; the demo runs locally.
+All planned features are built and tested, and the app runs locally (this is the demo path). The one open item is hosting it online (Cloud Run + Neon, Story 7.3). Known limitations, edge cases and improvement ideas are listed in [`docs/KNOWN-WEAKNESSES.md`](docs/KNOWN-WEAKNESSES.md); story-level status is in [`sprint-status.yaml`](_bmad-output/implementation-artifacts/sprint-status.yaml).
