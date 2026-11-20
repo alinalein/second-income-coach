@@ -29,7 +29,7 @@ import type { CoachAgent } from '../../agent/index.js';
 import { buildPlanThreadId, buildDiscoveryThreadId, buildPlanActivationThreadId } from '../../agent/index.js';
 import { evaluateUserMessage, evaluateAssistantMessage, defaultClassify, type ClassifyText } from '../../agent/moderation.js';
 import { containsGuiltLanguage } from '../../agent/guilt-language.js';
-import { handleCreatePlan, type CreatePlanDeps } from '../../tools/llm/create_plan.js';
+import { handleCreatePlan, toPlanResponse, type CreatePlanDeps } from '../../tools/llm/create_plan.js';
 import { getCurrentStep } from '../../tools/plain/get_current_step.js';
 import { recordCheckIn, getCheckInStatus } from '../../tools/plain/record_check_in.js';
 import { startStep } from '../../tools/plain/start_step.js';
@@ -77,8 +77,6 @@ export interface PlansRouterDeps {
   classify?: ClassifyText;
 }
 
-type PlanRow = typeof plans.$inferSelect;
-
 /**
  * Review fix: two concurrent `POST /select/:ideaId` requests for the same
  * idea with no existing plan can both pass the "no existing plan" check
@@ -112,17 +110,6 @@ export function isUniqueViolationError(error: unknown): boolean {
 async function isPlanOwnedByUser(db: PlansRouterDeps['db'], planId: string, userId: string): Promise<boolean> {
   const [plan] = await db.select({ userId: plans.userId }).from(plans).where(eq(plans.id, planId)).limit(1);
   return plan?.userId === userId;
-}
-
-function toPlanResponse(row: PlanRow): PlanResponse {
-  return planResponseSchema.parse({
-    id: row.id,
-    ideaId: row.ideaId,
-    status: row.status,
-    threadId: row.threadId,
-    createdAt: row.createdAt.toISOString(),
-    updatedAt: row.updatedAt.toISOString(),
-  });
 }
 
 /**
@@ -818,8 +805,7 @@ export function createPlansRouter({ env, db, agent, model, createDraft, activate
     }
 
     try {
-      const [plan] = await db.select({ userId: plans.userId }).from(plans).where(eq(plans.id, planIdParse.data)).limit(1);
-      if (!plan || plan.userId !== userId) {
+      if (!(await isPlanOwnedByUser(db, planIdParse.data, userId))) {
         res.status(404).json({ error: 'Plan not found' });
         return;
       }

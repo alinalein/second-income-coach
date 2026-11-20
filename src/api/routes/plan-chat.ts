@@ -10,6 +10,7 @@ import {
   recordFeedbackRequestSchema,
   resultEventSchema,
   sendMessageRequestSchema,
+  DEFAULT_CURRENCY,
   type ChatMessage,
   type CurrencyCode,
 } from '@app/shared';
@@ -17,10 +18,10 @@ import type { Env } from '../../config/env.js';
 import type { createDb } from '../../db/client.js';
 import type { CoachAgent, TurnUsageWithModel } from '../../agent/index.js';
 import { buildPlanThreadId } from '../../agent/index.js';
-import { classifyAssistantMessageKind } from '../../agent/moderation.js';
 import { MODEL_FAILURE_MESSAGE, MODEL_FAILURE_MESSAGE_DE } from '../../agent/resilience.js';
 import { detectReplyLanguage } from '../../agent/language.js';
 import { createStrictRateLimiter } from '../middleware/rateLimit.js';
+import { toChatMessage } from './chat.js';
 import { plans } from '../../db/schema/index.js';
 import { getUserSettings } from '../../db/settings-repository.js';
 import { computeMessageCost, convertStoredCost, toMessageCostDisplay } from '../../agent/turn-cost.js';
@@ -40,25 +41,6 @@ export interface PlanChatRouterDeps {
 }
 
 type Db = PlanChatRouterDeps['db'];
-
-/** AD-27: the default when a user has no settings row yet. */
-const DEFAULT_CURRENCY: CurrencyCode = 'EUR';
-
-function toChatMessage(message: BaseMessage): ChatMessage | undefined {
-  const type = message._getType();
-  if (type !== 'human' && type !== 'ai') return undefined;
-
-  const content = message.text;
-  if (!content) return undefined;
-
-  return chatMessageSchema.parse({
-    id: message.id ?? randomUUID(),
-    role: type === 'human' ? 'user' : 'assistant',
-    kind: type === 'human' ? 'message' : classifyAssistantMessageKind(content),
-    content,
-    createdAt: new Date().toISOString(),
-  });
-}
 
 /**
  * AC: "an existing plan thread ... a free-form follow-up question ... the

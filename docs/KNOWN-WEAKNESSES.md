@@ -13,6 +13,7 @@ Trimmed to the most significant weaknesses (short "Weakness" headline, max ~8 wo
 | KW-4 | 3 of 32 judge scores errored. | The quality score for those cases is missing, shown as an explicit error row, never a fabricated score. The two judges are occasionally slow, and one model is occasionally too slow for its node timeout. | Re-run the affected cases, or raise the judge timeout / node timeout for quality cases; keep the explicit error-row mechanism. |
 | KW-5 | One judge also scores its own model. | A self-judged score could be biased relative to the other models it also judges. | The report already discloses which judge scored which model (see table below); keep this overlap or swap in a third, non-registry judge if stricter independence is wanted later. |
 | KW-6 | No load testing at demo scale. | Unknown behavior under concurrent real users; cold-start/scale-to-zero behavior is only validated once deployed. | Load-test after Story 7.3 deploy; monitor Cloud Run cold-start latency against Neon's auto-wake in practice. |
+| KW-7 | The model chosen in Settings is saved but not applied. | The coach always answers with the default model (`openai/gpt-6-luna`): the server passes one shared model into every agent, and the model-selection middleware is skipped whenever a model is injected. The Settings choice has no effect on replies yet. | Always register the model-selection middleware in production (inject a factory instead of a fixed model), then add a test that the saved model is the one that answers. |
 
 ## Edge cases and potential problems
 

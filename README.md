@@ -69,7 +69,7 @@ The frontend defaults to light mode; the dark-mode toggle (top-right) persists t
 | CAP-4 | Ongoing check-ins by text or voice (recorded → transcribed → user-confirmed); missed check-ins auto-reshuffle the timeline, no shame |
 | CAP-5 | A live income/opportunity projection that updates with real progress |
 | CAP-6 | Human-confirmed plan activation (HITL) — only one plan active at a time, others pause rather than vanish |
-| CAP-7 | Settings: agent personality, model choice (transparent pricing registry), UI language, currency |
+| CAP-7 | Settings: agent personality, model choice (transparent pricing registry; the choice is saved but not yet applied to the agent in production, see Known weaknesses), UI language, currency |
 | CAP-8 | Token count + estimated cost shown under every response |
 | CAP-9 | Thumbs up/down feedback, never gating the chat |
 | CAP-10 | Bilingual (German/English) chat, matched per message to whatever language the user used |

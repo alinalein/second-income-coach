@@ -113,7 +113,7 @@ try {
   );
   registerWebSearchShutdownHook(closeWebSearchTool);
   // Follow-up fix round 7 (speed, AD-7): built once here and passed into
-  // both agents below (previously each `createCoachAgent` call built its
+  // all agents below (previously each `createCoachAgent` call built its
   // own `createChatModel(env)` internally when no override was given — two
   // separate client instances for the exact same model/env).
   const chatModel = createChatModel(env);

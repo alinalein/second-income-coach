@@ -15,9 +15,8 @@ export function createGeneralRateLimiter(env: Pick<Env, 'RATE_LIMIT_WINDOW_MS' |
 
 /**
  * Stricter-tier factory for the LLM-backed, cost-bearing tools
- * (`generate_ideas` / `create_plan`) introduced in Epic 2/3. No route uses
- * this yet in Story 1.1 — only the mechanism is established here so later
- * stories apply it without inventing a second rate-limit pattern.
+ * (`generate_ideas` / `create_plan`) introduced in Epic 2/3. Default limit
+ * 10 per window; `overrides` lets a route raise it (voice).
  */
 export function createStrictRateLimiter(
   env: Pick<Env, 'RATE_LIMIT_WINDOW_MS'>,

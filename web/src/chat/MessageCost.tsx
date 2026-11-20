@@ -1,10 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { formatMicroMoney, type ChatMessage as ChatMessageType } from '@app/shared';
-
-/** AD-24/AD-27: "locale and currency are independent axes" — same minimal
- * language-to-locale mapping `web/src/features/ideas/IdeasPanel.tsx` already
- * uses (no dedicated UI-language-to-locale layer exists yet, Story 5.4). */
-const LOCALE_BY_LANGUAGE: Record<string, string> = { en: 'en-US', de: 'de-DE' };
+import { LOCALE_BY_LANGUAGE } from '../lib/utils';
 
 /**
  * Story 5.2: the `ChatMessage` footer extension point's cost line (Story

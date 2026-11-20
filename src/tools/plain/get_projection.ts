@@ -2,11 +2,9 @@ import { eq } from 'drizzle-orm';
 import type { Money, RateUnit, WeeklyTimeAvailability, ProjectionData } from '@app/shared';
 import type { createDb } from '../../db/client.js';
 import { plans, planSteps, checkIns, ideas } from '../../db/schema/index.js';
-import { getCurrentStep } from './get_current_step.js';
+import { getCurrentStep, ONE_DAY_MS } from './get_current_step.js';
 
 type Db = ReturnType<typeof createDb>['db'];
-
-const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Same precedent as `IdeasPanel.tsx`'s own `computeMonthlyPotential`: the
@@ -57,7 +55,7 @@ export interface ProjectionInputs {
  *   a fraction of the plan's total steps, scaled against the idea's own
  *   weekly time-availability bucket (reusing `IdeasPanel.tsx`'s own
  *   `WEEKLY_HOURS_CAP`/`WEEKS_PER_MONTH` constants), never a literal input.
- * - "Consistency" reuses `step-state.ts`'s own AD-15 precedent ("one full
+ * - "Consistency" reuses `get_current_step.ts`'s own AD-15 precedent ("one full
  *   day between visits is the expected cadence") as the expected check-in
  *   cadence: check-ins made vs. days elapsed, capped at 1. It floors the
  *   pace multiplier at 0.5 rather than letting a quiet stretch zero the

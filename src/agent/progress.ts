@@ -64,9 +64,7 @@ export function createProgressMiddleware() {
       console.log('[agent] model_call', { elapsedMs: Date.now() - start });
       return result;
     },
-    // Unreachable until a tool exists (no tool is registered in this story —
-    // Boundary: "no new tool in this story"), but wired now per AD-31 so a
-    // later tool-introducing story only adds a registry entry + i18n key.
+    // AD-31: a tool-introducing story only adds a registry entry + i18n key.
     wrapToolCall: async (request: ToolCallRequest, handler: ToolCallHandler) => {
       // `request.tool` is typed `ClientTool | ServerTool | undefined`, and
       // `ServerTool` is a bare `Record<string, unknown>` — `.name` isn't

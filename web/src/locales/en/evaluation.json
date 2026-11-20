@@ -10,7 +10,6 @@
     "accuracyTable": {
       "model": "Model",
       "passed": "Passed",
-      "accuracy": "Accuracy",
       "target": "Meets target"
     },
     "guardrails": {
@@ -35,9 +34,7 @@
       "conclusionErrors": "{{errorCount}} judge call(s) failed and are excluded from that count."
     },
     "mistralFlagRate": {
-      "heading": "Mistral jailbreak flag rate",
-      "flaggedOf": "{{flagged}} of {{total}} flagged",
-      "pending": "Not yet recorded: {{reason}}"
+      "heading": "Mistral jailbreak flag rate"
     },
     "cost": {
       "heading": "Estimated cost",

@@ -9,7 +9,6 @@
   "generatingStatusClassifying": "Deine Antworten werden ausgewertet…",
   "generatingStatus": "Nebeneinkommen-Ideen werden generiert…",
   "generatingHint": "Das kann bis zu einer Minute dauern.",
-  "translating": "Deine Ideen werden übersetzt…",
   "limit": {
     "userLimitReached": "Du hast dein heutiges Limit von {{limit}} Ideengenerierungen erreicht. Es wird morgen um {{resetTime}} Uhr zurückgesetzt.",
     "sharedBudgetExhausted": "Das gemeinsame Such-Budget der App ist für heute aufgebraucht. Neue Ideen sind morgen wieder verfügbar."
@@ -56,11 +55,6 @@
       "DE": "deutsche",
       "AT": "österreichische",
       "US": "US-amerikanische"
-    },
-    "rateUnit": {
-      "hour": "pro Stunde",
-      "project": "pro Projekt",
-      "month": "pro Monat"
     },
     "citedFieldsSummary": "Basierend auf {{count}} deiner Angaben",
     "detailsToggle": "Details",

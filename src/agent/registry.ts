@@ -18,7 +18,7 @@ export type ModelProvider = 'openrouter' | 'mistral';
  * AD-20: "The moderation model (AD-11) and the transcription model (AD-9)
  * are never exposed as user-selectable options, regardless of registry
  * contents." `category` is what `listSelectableModels` filters on — adding a
- * future transcription entry (AD-9's voice pipeline isn't built yet) needs no
+ * further transcription entry needs no
  * change to that filter, only a new entry with `category: 'transcription'`.
  */
 export type ModelCategory = 'chat' | 'moderation' | 'transcription' | 'translation';

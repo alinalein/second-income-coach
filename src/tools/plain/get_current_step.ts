@@ -24,7 +24,7 @@ function toCompletedStepResponse(row: PlanStepRow): CompletedStepResponse {
   return { stepOrder: row.stepOrder, title: row.title, description: row.description };
 }
 
-const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+export const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
  * AD-15: "compares the expected vs. actual last check-in date." `anchor` is

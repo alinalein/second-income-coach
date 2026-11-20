@@ -196,10 +196,12 @@ describe('PlanWorkspace (bug fix, live: completing the final step updates everyt
 
     fireEvent.click(await screen.findByRole('button', { name: 'Mark as done' }));
 
-    expect(await screen.findByText('You finished the whole plan — nice work! 🎉')).toBeInTheDocument();
+    expect(await screen.findByText('You finished the whole plan — nice work! 🎉', undefined, { timeout: 5000 })).toBeInTheDocument();
     expect(await screen.findByText('Result')).toBeInTheDocument();
     await waitFor(() => expect(onPlanLoaded).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'completed' })));
-  });
+    // The ack message arrives through the chat's typing reveal, which is slow
+    // under full-suite load — hence the longer wait above and this budget.
+  }, 15_000);
 });
 
 // Story 4.5 (AC1): the energy pop-up is not shown for a completed plan —

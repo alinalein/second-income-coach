@@ -73,7 +73,7 @@ export async function getIntakeByUserId(db: Db, userId: string): Promise<IntakeR
 }
 
 /**
- * `src/agent/index.ts:62-64`: `buildDiscoveryThreadId(userId) = \`discovery:${userId}\`;`.
+ * `src/agent/index.ts`: `buildDiscoveryThreadId(userId) = \`discovery:${userId}\`;`.
  * Duplicated locally rather than imported (Code Map instruction — this file
  * is a plain tool, not part of the agent module) — derives `userId` by
  * stripping that same prefix back off the thread id `tool()` hands this

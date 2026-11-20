@@ -517,7 +517,7 @@ export function PlanActivationPanel({ planId, ideaTitle, onActivated }: PlanActi
               ) : null}
             </div>
             <DialogFooter>
-              <Button type="button" onClick={saveEdits} disabled={phase === ('busy' as Phase)}>
+              <Button type="button" onClick={saveEdits}>
                 {t('activation.saveChangesButton')}
               </Button>
               <Button type="button" variant="outline" onClick={() => setPhase('reviewing')}>

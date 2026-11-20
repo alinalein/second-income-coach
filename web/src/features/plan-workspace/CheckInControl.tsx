@@ -40,7 +40,7 @@ type Status = 'idle' | 'sending' | 'sent' | 'done' | 'failed';
 
 /**
  * Story 4.1 (CAP-4): the energy/status check-in control — its own component
- * rendered by `StatusPanel`, never editing `PlanWorkspace`'s layout. A quick
+ * rendered by `EnergyCheckInPopup`, never editing `PlanWorkspace`'s layout. A quick
  * tap records the energy level via `POST /api/plans/:planId/check-in`
  * (`record_check_in`, AD-4: a plain deterministic write, never an LLM call).
  */

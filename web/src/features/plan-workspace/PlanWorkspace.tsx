@@ -321,9 +321,9 @@ export function PlanWorkspace({ ideaId, ideaTitle, onPlanLoaded }: PlanWorkspace
   // Story 4.4 (AC, follow-up), item 2: a small shared refresh signal — bumped
   // after Start/Complete (via `StatusPanel`'s `onPlanActivityChanged`) or a
   // check-in answer (via `EnergyCheckInPopup`'s `onCheckInRecorded`), and
-  // consumed by `ProjectionCard`'s own `key` below to force a fresh fetch.
+  // consumed by `ProjectionCard`'s `refreshToken` prop below (background refetch, no remount).
   // No workspace restructuring — one new state value, two existing callback
-  // props, one `key` attribute.
+  // props, one prop.
   const [projectionRefreshKey, setProjectionRefreshKey] = React.useState(0);
   const refreshProjection = React.useCallback(() => setProjectionRefreshKey((key) => key + 1), []);
 
@@ -558,7 +558,7 @@ export function PlanWorkspace({ ideaId, ideaTitle, onPlanLoaded }: PlanWorkspace
               {/* Story 5.2/5.3: `MessageCost` + `MessageFeedback` registered
                * into the footer extension point built in Story 3.1 — alongside
                * each other, no restructuring of `ChatThread`/`ChatMessage`.
-               * Memoized on `plan.id` so each `MessageFeedback` instance keeps
+               * Memoized on `plan` so each `MessageFeedback` instance keeps
                * its own component identity (and its in-session rating state)
                * across unrelated `PlanWorkspace` re-renders. */}
               {/* Story 4.3: `ChatThread`'s render-prop input-extension point,

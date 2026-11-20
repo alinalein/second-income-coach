@@ -171,7 +171,7 @@ export function createApp({
   // Story 4.3 (AD-9/AD-10): the one voice-transcription route, same auth
   // gate as every other route below it — `createVoiceRouter`'s own
   // `express.raw` body parser only runs for this one path, after the
-  // blanket content-length gate above (exempted for `/api/voice/*`) and the
+  // blanket content-length gate above (exempted for `/api/voice/transcribe`) and the
   // global `express.json()` parser above (which no-ops for a non-JSON
   // content type, leaving the body stream for `express.raw` to consume).
   app.use('/api/voice', createVoiceRouter({ env }));

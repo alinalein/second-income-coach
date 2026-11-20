@@ -25,11 +25,6 @@ import { createGenerateIdeasTool } from '../tools/llm/generate_ideas.js';
 import { derivePlanIdFromThreadId, startOfUtcDay } from '../tools/plain/get_current_step.js';
 import { plans, checkIns } from '../db/schema/index.js';
 
-// Story 5.1 moved these to `./personality.js` (now backed by the shared
-// `personalitySchema` enum, AD-16) — re-exported so existing importers of
-// `./index.js` don't need to change their import path.
-export { PERSONALITY_PROMPTS, DEFAULT_PERSONALITY, type Personality };
-
 /**
  * AD-25: "personality × language is handled as one prompt-construction step,
  * not as separate per-language personality definitions". This instruction is
@@ -309,7 +304,8 @@ const CoachAgentState = Annotation.Root({
 export interface CreateCoachAgentDeps {
   env: Pick<Env, 'OPENROUTER_API_KEY' | 'MISTRAL_API_KEY' | 'IDEAS_PER_BATCH' | 'DAILY_SEARCH_BUDGET'>;
   checkpointer: BaseCheckpointSaver;
-  /** Test-only seam: a fake chat model instead of a real `ChatOpenAI`. */
+  /** Pre-built chat model: production passes the one shared instance
+   * (`src/api/index.ts`); tests pass a fake. */
   model?: BaseChatModel;
   /** Test-only seam: a fake moderation classifier instead of a real Mistral call. */
   classify?: ClassifyText;

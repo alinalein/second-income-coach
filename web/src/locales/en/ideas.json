@@ -9,7 +9,6 @@
   "generatingStatusClassifying": "Reviewing your answers…",
   "generatingStatus": "Generating side income ideas…",
   "generatingHint": "This can take up to a minute.",
-  "translating": "Translating your ideas…",
   "limit": {
     "userLimitReached": "You've reached today's limit of {{limit}} idea generations. It resets tomorrow at {{resetTime}}.",
     "sharedBudgetExhausted": "Today's shared search budget of the app is used up. New ideas are available again tomorrow."
@@ -56,11 +55,6 @@
       "DE": "German",
       "AT": "Austrian",
       "US": "US"
-    },
-    "rateUnit": {
-      "hour": "per hour",
-      "project": "per project",
-      "month": "per month"
     },
     "citedFieldsSummary": "Based on {{count}} of your inputs",
     "detailsToggle": "Details",

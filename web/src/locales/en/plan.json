@@ -31,7 +31,6 @@
     "startButton": "Start this step",
     "inProgress": "In progress",
     "completeButton": "Mark as done",
-    "completedHint": "Nicely done — on to the next step.",
     "planCompletedHint": "You've completed your whole plan — well done!",
     "failed": "Something went wrong. Please try again."
   },
@@ -54,7 +53,6 @@
     "hint": "To start working on this plan, you'll need to review and approve it first.",
     "startButton": "Review plan",
     "loading": "Loading your plan for review…",
-    "loadFailed": "Couldn't load the review. Please try again.",
     "reviewTitle": "Review your plan for {{ideaTitle}}",
     "stepLabel": "Step {{index}}",
     "dayLabel": "Day {{day}}",
@@ -72,10 +70,8 @@
     "feedbackRequired": "Please describe what should change.",
     "feedbackStepCountOutOfRange": "Min steps {{min}}, max steps {{max}}.",
     "submitFeedbackButton": "Send feedback & regenerate",
-    "regenerating": "Updating your plan based on your feedback…",
     "saving": "Saving…",
     "activating": "Activating…",
-    "activated": "Your plan is now active!",
     "failed": "Something went wrong. Please try again."
   }
 }

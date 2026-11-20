@@ -4,11 +4,20 @@ import { getIntakeResponseSchema, classifyCitationRegion, type IdeaResponse, typ
 import { prefersReducedMotion } from '../../lib/utils';
 
 /**
- * Story 2.5. Mirrors `IdeasPanel.tsx`'s own (unexported, not reusable here)
- * `Citation` component exactly — a real URL renders as a hostname-only link,
- * anything else as plain truncated text.
+ * Story 2.2 follow-up fix round 3, fix 2a: `baselineRateCitation` is "a
+ * publication/site name or URL" (the tool's own description — not every
+ * citation is guaranteed to parse as one). A real URL renders as a link —
+ * visible text is just its hostname (stripped of a leading `www.`, same
+ * normalization `generate_ideas.ts`'s own `extractCitationDomain` uses),
+ * `href`/`title` carry the full URL, `target="_blank"` +
+ * `rel="noopener noreferrer"` for a safe new-tab open. Non-URL text (a
+ * plain publication name) renders as plain text, not a link. Either way,
+ * `truncate` (Tailwind's `text-overflow: ellipsis` + `overflow: hidden` +
+ * `white-space: nowrap`) guarantees a single line that ends in an ellipsis
+ * rather than an abrupt mid-word cut, and the full text is always in
+ * `title` so hovering still reveals it.
  */
-function EvidenceCitation({ citation }: { citation: string }) {
+export function EvidenceCitation({ citation }: { citation: string }) {
   let url: URL | undefined;
   try {
     url = new URL(citation);

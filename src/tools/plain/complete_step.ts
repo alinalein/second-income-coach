@@ -1,26 +1,12 @@
 import { eq } from 'drizzle-orm';
 import { tool } from 'langchain';
-import { stepActionToolSchema, planStepResponseSchema, type CompleteStepResponse, type PlanStepResponse } from '@app/shared';
+import { stepActionToolSchema, type CompleteStepResponse } from '@app/shared';
 import type { createDb } from '../../db/client.js';
 import { plans, planSteps } from '../../db/schema/index.js';
-import { assertCurrentStep, assertPlanActive } from './step-state.js';
+import { assertCurrentStep, assertPlanActive, toStepResponse } from './step-state.js';
 import { derivePlanIdFromThreadId, type GetCurrentStepRunConfig } from './get_current_step.js';
 
 type Db = ReturnType<typeof createDb>['db'];
-type PlanStepRow = typeof planSteps.$inferSelect;
-
-function toStepResponse(row: PlanStepRow): PlanStepResponse {
-  return planStepResponseSchema.parse({
-    id: row.id,
-    stepOrder: row.stepOrder,
-    title: row.title,
-    description: row.description,
-    dayOffset: row.dayOffset,
-    status: row.status,
-    startedAt: row.startedAt ? row.startedAt.toISOString() : null,
-  });
-}
-
 /**
  * AC (4.1): "`complete_step` fires ... the next step immediately becomes
  * current and the step after it becomes visible (maintaining the

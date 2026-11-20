@@ -28,3 +28,9 @@ export function stripLeadingBulletMarker(text: string): string {
 export function prefersReducedMotion(): boolean {
   return typeof window !== 'undefined' && (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false);
 }
+
+/** AD-24/AD-27: "locale and currency are independent axes" — the active
+ * i18n language ('en'/'de') maps to the locale `Intl.NumberFormat` needs.
+ * No dedicated UI-language-to-locale layer exists yet (Story 5.4), so this
+ * is the minimal mapping. */
+export const LOCALE_BY_LANGUAGE: Record<string, string> = { en: 'en-US', de: 'de-DE' };

@@ -31,7 +31,6 @@
     "startButton": "Diesen Schritt starten",
     "inProgress": "In Bearbeitung",
     "completeButton": "Als erledigt markieren",
-    "completedHint": "Gut gemacht — weiter geht's mit dem nächsten Schritt.",
     "planCompletedHint": "Du hast deinen ganzen Plan abgeschlossen — sehr gut gemacht!",
     "failed": "Etwas ist schiefgelaufen. Bitte versuche es erneut."
   },
@@ -54,7 +53,6 @@
     "hint": "Um mit diesem Plan loszulegen, musst du ihn zuerst prüfen und bestätigen.",
     "startButton": "Plan prüfen",
     "loading": "Dein Plan wird zur Prüfung geladen…",
-    "loadFailed": "Die Prüfung konnte nicht geladen werden. Bitte versuche es erneut.",
     "reviewTitle": "Prüfe deinen Plan für {{ideaTitle}}",
     "stepLabel": "Schritt {{index}}",
     "dayLabel": "Tag {{day}}",
@@ -72,10 +70,8 @@
     "feedbackRequired": "Bitte beschreibe, was sich ändern soll.",
     "feedbackStepCountOutOfRange": "Minimal {{min}} Schritte, maximal {{max}} Schritte.",
     "submitFeedbackButton": "Feedback senden & neu erstellen",
-    "regenerating": "Dein Plan wird basierend auf deinem Feedback aktualisiert…",
     "saving": "Wird gespeichert…",
     "activating": "Wird aktiviert…",
-    "activated": "Dein Plan ist jetzt aktiv!",
     "failed": "Etwas ist schiefgelaufen. Bitte versuche es erneut."
   }
 }

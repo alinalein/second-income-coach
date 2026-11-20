@@ -20,8 +20,9 @@ import {
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '../../components/ui/card';
+import { LOCALE_BY_LANGUAGE } from '../../lib/utils';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from 'shadcn-glass-ui';
-import { IdeaEvidence, foreignSourceRegion, useViewerCountry, hasDemandEvidence, TranslatingBlock } from './IdeaEvidence';
+import { IdeaEvidence, EvidenceCitation, foreignSourceRegion, useViewerCountry, hasDemandEvidence, TranslatingBlock } from './IdeaEvidence';
 
 /**
  * Story 2.2 follow-up fix round 2, fix 2 (amended round 4, fix 4d): "potential
@@ -231,12 +232,6 @@ function IdeasSkeleton({ loadingLabel, decorative = false }: { loadingLabel: str
   );
 }
 
-/** AD-24/AD-27: "locale and currency are independent axes" — the active
- * i18n language ('en'/'de') maps to the locale `Intl.NumberFormat` needs.
- * No dedicated UI-language-to-locale layer exists yet (Story 5.4), so this
- * is the minimal mapping this story needs. */
-const LOCALE_BY_LANGUAGE: Record<string, string> = { en: 'en-US', de: 'de-DE' };
-
 /** Story 2.7: the `translations` cache's own key — one cached translation
  * per idea *and* language, mirroring the server's `idea_translations`
  * table's own `(idea_id, language)` uniqueness. */
@@ -435,49 +430,6 @@ function BaselineRateDisplay({
         </span>
       ) : null}
       {idea.isVendorSource ? <Badge variant="outline">{vendorSourceLabel}</Badge> : null}
-    </span>
-  );
-}
-
-/**
- * Story 2.2 follow-up fix round 3, fix 2a: `baselineRateCitation` is "a
- * publication/site name or URL" (the tool's own description — not every
- * citation is guaranteed to parse as one). A real URL renders as a link —
- * visible text is just its hostname (stripped of a leading `www.`, same
- * normalization `generate_ideas.ts`'s own `extractCitationDomain` uses),
- * `href`/`title` carry the full URL, `target="_blank"` +
- * `rel="noopener noreferrer"` for a safe new-tab open. Non-URL text (a
- * plain publication name) renders as plain text, not a link. Either way,
- * `truncate` (Tailwind's `text-overflow: ellipsis` + `overflow: hidden` +
- * `white-space: nowrap`) guarantees a single line that ends in an ellipsis
- * rather than an abrupt mid-word cut, and the full text is always in
- * `title` so hovering still reveals it.
- */
-function Citation({ citation }: { citation: string }) {
-  let url: URL | undefined;
-  try {
-    url = new URL(citation);
-  } catch {
-    url = undefined;
-  }
-
-  if (url) {
-    return (
-      <a
-        href={citation}
-        target="_blank"
-        rel="noopener noreferrer"
-        title={citation}
-        className="block truncate text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
-      >
-        {url.hostname.replace(/^www\./, '')}
-      </a>
-    );
-  }
-
-  return (
-    <span title={citation} className="block truncate text-xs text-muted-foreground">
-      {citation}
     </span>
   );
 }
@@ -885,12 +837,12 @@ function IdeaCard({
            * line via `IdeaEvidence`) now lives here instead, right next to
            * the citation it actually describes. Review fix: separators are
            * plain ", " text, not a decorative `aria-hidden` dot — a
-           * non-URL citation renders as plain text too (see `Citation`),
+           * non-URL citation renders as plain text too (see `EvidenceCitation`),
            * and a screen reader reading the adjacent spans straight
            * through needs an actual announced boundary, not just a visual
            * one. */}
           <div className="flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
-            <Citation citation={idea.baselineRateCitation} />
+            <EvidenceCitation citation={idea.baselineRateCitation} />
             {baselineRegion ? <span>, {t('card.foreignSourceLabel', { region: t(`card.region.${baselineRegion}`) })}</span> : null}
             {idea.isRateUnverified ? <span>, {t('card.unverifiedLabel')}</span> : null}
           </div>

@@ -20,7 +20,7 @@ import { buildPlanThreadId } from '../../agent/index.js';
 type Db = ReturnType<typeof createDb>['db'];
 type PlanRow = typeof plans.$inferSelect;
 
-function toPlanResponse(row: PlanRow): PlanResponse {
+export function toPlanResponse(row: PlanRow): PlanResponse {
   return planResponseSchema.parse({
     id: row.id,
     ideaId: row.ideaId,

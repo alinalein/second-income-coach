@@ -8,6 +8,7 @@ import {
   recordFeedbackRequestSchema,
   resultEventSchema,
   sendMessageRequestSchema,
+  DEFAULT_CURRENCY,
   type ChatMessage,
   type CurrencyCode,
 } from '@app/shared';
@@ -37,11 +38,7 @@ export interface ChatRouterDeps {
   memoryStore: MemoryPutStore & MemoryDeleteStore;
 }
 
-/** AD-27: the default when a user has no settings row yet — same default
- * `user_settings.currency` itself carries (Story 1.2). */
-const DEFAULT_CURRENCY: CurrencyCode = 'EUR';
-
-function toChatMessage(message: BaseMessage): ChatMessage | undefined {
+export function toChatMessage(message: BaseMessage): ChatMessage | undefined {
   const type = message._getType();
   if (type !== 'human' && type !== 'ai') return undefined;
 
@@ -215,14 +212,14 @@ export function createChatRouter({ env, agent, db, memoryStore }: ChatRouterDeps
       const turnUsage = lastValuesPayload?.turnUsage;
       if (reply && turnUsage?.modelId) {
         try {
-          const settings = await getUserSettings(db, req.session.userId!);
+          const settings = await getUserSettings(db, userId);
           const currency = (settings?.currency as CurrencyCode | undefined) ?? DEFAULT_CURRENCY;
           const cost = computeMessageCost({ inputTokens: turnUsage.inputTokens, outputTokens: turnUsage.outputTokens }, turnUsage.modelId, currency);
 
           await saveMessageCost(db, {
             messageId: reply.id,
             threadId,
-            userId: req.session.userId!,
+            userId,
             modelId: cost.modelId,
             inputTokens: cost.inputTokens,
             outputTokens: cost.outputTokens,

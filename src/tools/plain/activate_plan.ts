@@ -5,18 +5,16 @@ import type { BaseChatModel } from '@langchain/core/language_models/chat_models'
 import {
   activatePlanDecisionSchema,
   planActivationReviewSchema,
-  planResponseSchema,
-  planStepResponseSchema,
   type PlanActivationReview,
   type PlanResponse,
-  type PlanStepResponse,
   type CreatePlanDraft,
 } from '@app/shared';
 import type { createDb } from '../../db/client.js';
 import { plans, planSteps } from '../../db/schema/index.js';
 import { buildPlanActivationThreadId } from '../../agent/index.js';
 import { detectReplyLanguage } from '../../agent/language.js';
-import { handleRegeneratePlanDraft, type CreatePlanDeps } from '../llm/create_plan.js';
+import { handleRegeneratePlanDraft, toPlanResponse, type CreatePlanDeps } from '../llm/create_plan.js';
+import { toStepResponse } from './step-state.js';
 import { applyModelNodeResilience, PLAN_MODEL_NODE_TIMEOUT_MS, PLAN_MODEL_NODE_RETRY_POLICY } from '../../agent/resilience.js';
 
 type Db = ReturnType<typeof createDb>['db'];
@@ -30,29 +28,6 @@ export class PlanNotFoundError extends Error {}
 /** AC: activation only ever applies to a `draft` plan — surfaced as its own
  * error type so the route can map it to a clear 409, not a generic 502. */
 export class PlanNotDraftError extends Error {}
-
-function toPlanResponse(row: PlanRow): PlanResponse {
-  return planResponseSchema.parse({
-    id: row.id,
-    ideaId: row.ideaId,
-    status: row.status,
-    threadId: row.threadId,
-    createdAt: row.createdAt.toISOString(),
-    updatedAt: row.updatedAt.toISOString(),
-  });
-}
-
-function toStepResponse(row: PlanStepRow): PlanStepResponse {
-  return planStepResponseSchema.parse({
-    id: row.id,
-    stepOrder: row.stepOrder,
-    title: row.title,
-    description: row.description,
-    dayOffset: row.dayOffset,
-    status: row.status,
-    startedAt: row.startedAt ? row.startedAt.toISOString() : null,
-  });
-}
 
 function toReview(plan: PlanRow, steps: PlanStepRow[]): PlanActivationReview {
   return planActivationReviewSchema.parse({

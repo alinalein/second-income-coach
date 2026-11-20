@@ -6,7 +6,7 @@ import { createStrictRateLimiter } from '../middleware/rateLimit.js';
 
 /** Code Map: "exports MAX_VOICE_AUDIO_BYTES (10MB)" — both this route's own
  * `express.raw` body parser and `app.ts`'s blanket content-length gate
- * (exempting `/api/voice/*` up to this size instead of `env.BODY_LIMIT`)
+ * (exempting `/api/voice/transcribe` up to this size instead of `env.BODY_LIMIT`)
  * import this one constant. */
 export const MAX_VOICE_AUDIO_BYTES = 10 * 1024 * 1024;
 

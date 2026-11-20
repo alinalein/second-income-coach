@@ -81,7 +81,7 @@ const envSchema = z.object({
   // Story 2.2: how many ideas `generate_ideas` produces per batch. Bounded
   // 1-5 (same bounded-int precedent as RATE_LIMIT_MAX/RATE_LIMIT_WINDOW_MS
   // above) — the UI/evaluation logic only ever expects a batch in this
-  // range. Defaults to 2.
+  // range. Defaults to 3.
   IDEAS_PER_BATCH: z.coerce.number().int().min(1).max(5).default(3),
   // Story 2.11 (AC4): "stub" returns fixed canned results with no network
   // call or credit use — used in dev/test so no test ever spends real

@@ -1,6 +1,19 @@
+import { planStepResponseSchema, type PlanStepResponse } from '@app/shared';
 import type { planSteps } from '../../db/schema/index.js';
 
 type PlanStepRow = typeof planSteps.$inferSelect;
+
+export function toStepResponse(row: PlanStepRow): PlanStepResponse {
+  return planStepResponseSchema.parse({
+    id: row.id,
+    stepOrder: row.stepOrder,
+    title: row.title,
+    description: row.description,
+    dayOffset: row.dayOffset,
+    status: row.status,
+    startedAt: row.startedAt ? row.startedAt.toISOString() : null,
+  });
+}
 
 /** Thrown by `start_step`/`complete_step` when the given `stepId` isn't the
  * plan's own current step (AC/AD-13: "the tool itself rejects the call, not

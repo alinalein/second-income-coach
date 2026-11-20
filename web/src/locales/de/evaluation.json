@@ -10,7 +10,6 @@
     "accuracyTable": {
       "model": "Modell",
       "passed": "Bestanden",
-      "accuracy": "Genauigkeit",
       "target": "Ziel erreicht"
     },
     "guardrails": {
@@ -35,9 +34,7 @@
       "conclusionErrors": "{{errorCount}} Judge-Aufruf(e) sind fehlgeschlagen und nicht in dieser Zahl enthalten."
     },
     "mistralFlagRate": {
-      "heading": "Mistral-Jailbreak-Erkennungsrate",
-      "flaggedOf": "{{flagged}} von {{total}} markiert",
-      "pending": "Noch nicht erfasst: {{reason}}"
+      "heading": "Mistral-Jailbreak-Erkennungsrate"
     },
     "cost": {
       "heading": "Geschätzte Kosten",

@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { convertMoney, formatMoney, projectionResponseSchema, type ProjectionResponse, type PlanStatus } from '@app/shared';
 import { Button } from '../../components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
+import { LOCALE_BY_LANGUAGE } from '../../lib/utils';
 
 export interface ProjectionCardProps {
   planId: string;
@@ -26,10 +27,6 @@ export interface ProjectionCardProps {
  * `AUTO_RETRY_DELAYS_MS` — a transient fetch failure must never be a dead
  * end with no way forward. */
 const AUTO_RETRY_DELAYS_MS = [1_000, 2_000];
-
-/** Same i18n-language -> `Intl.NumberFormat` locale map as `IdeasPanel.tsx`
- * (AD-24: "locale and currency are independent axes"). */
-const LOCALE_BY_LANGUAGE: Record<string, string> = { en: 'en-US', de: 'de-DE' };
 
 function AmountLine({
   data,

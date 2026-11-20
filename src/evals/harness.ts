@@ -95,8 +95,7 @@ export interface EvalAgent {
 /**
  * One callback handler, shared by every case run against this agent, that
  * records the outermost `handleChainStart` run id per `agent.invoke()` call
- * — the same "diagnostic callback handler" precedent as `src/tools/llm/
- * generate_ideas.ts`'s `createTimingCallbackHandler`, not new tracing
+ * — a plain diagnostic callback handler, not new tracing
  * machinery (LangSmith tracing itself is still just the existing
  * `LANGSMITH_*` env vars LangChain's own integration already reads).
  */

@@ -116,9 +116,8 @@ function trimBareListMarker(text: string): string {
 /**
  * Story 3.1: the footer extension point (Code Map: "an ordered list of
  * footer items rendered beneath each agent message"). Empty by default —
- * Story 5.2 (`MessageCost`) and Story 5.3 (`MessageFeedback`) each register
- * their own component here; neither exists yet, so nothing renders by
- * default and every Story 1.3 behavior stays unchanged.
+ * `PlanWorkspace` registers `MessageCost` (Story 5.2) and `MessageFeedback`
+ * (Story 5.3) here.
  */
 export type ChatMessageFooterItem = React.ComponentType<{ message: ChatMessageType }>;
 
@@ -227,9 +226,7 @@ export function ChatMessage({ message, animate = false, footerItems = [] }: Chat
             {isRevealing ? hideIncompleteMarkdownTail(codePoints.slice(0, revealedLength).join('')) : message.content}
           </ReactMarkdown>
         )}
-        {/* Story 3.1 extension point: empty by default (no items registered
-         * yet) — renders nothing until 5.2/5.3 register their own footer
-         * item components. Bug fix: kept mounted but faded/non-interactive
+        {/* Story 3.1 extension point: empty by default. Bug fix: kept mounted but faded/non-interactive
          * until the typing reveal finishes (see `footerVisible` above). */}
         {footerItems.length > 0 ? (
           <div
