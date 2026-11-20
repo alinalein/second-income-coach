@@ -171,11 +171,20 @@ function EvaluationResultsSection({ evals, t }: { evals: EvaluationResponse['eva
         <div className="grid grid-cols-4 gap-4">
           {evals.perModelAccuracy.map((row) => (
             <div key={row.modelId} className="flex flex-col items-center gap-2 rounded-lg border border-border bg-muted/10 p-4 text-center">
+              {/* UI fix (user-reported): the library's own `showGlow` draws
+               * the glow as an SVG <feGaussianBlur> inside a <filter> with
+               * no explicit region (x/y/width/height) set — it defaults to
+               * SVG's -10%/120%-of-bounding-box filter region, which is too
+               * tight for the blur and hard-clips it on all four sides.
+               * Disabled here and replaced with a CSS `drop-shadow`, which
+               * has no such bounding-box clip. */}
               <CircularProgressGlass
                 value={Math.round(row.accuracy * 100)}
                 size="sm"
                 color={row.meetsTarget ? 'emerald' : 'rose'}
                 label={`${Math.round(row.accuracy * 100)}%`}
+                showGlow={false}
+                className={row.meetsTarget ? 'drop-shadow-[0_0_6px_rgba(16,185,129,0.55)]' : 'drop-shadow-[0_0_6px_rgba(244,63,94,0.55)]'}
               />
               <span className="max-w-full truncate font-mono text-xs text-muted-foreground" title={row.modelId}>
                 {row.modelId}
