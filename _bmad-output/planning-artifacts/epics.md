@@ -47,7 +47,7 @@ FR15: The agent understands and replies in German or English, matching whichever
 
 FR16: User can set a currency (EUR or USD, default EUR) in Settings, covering both the token/cost display (FR12) and income projections/idea budgets (FR2/FR9). Changing it re-renders every displayed amount in the newly chosen currency; converted amounts are always labeled as estimates.
 
-FR17: A signed-in-only "Quality & Decisions" page (`/quality`, decided 2026-11-19: no public exception to AD-28) presents the latest evaluation results, a summary of key architecture decisions (reason + trade-off), and a reflection (known problems, improvement suggestions, when to use prompt engineering vs. RAG vs. agents) - every fact generated from an existing source, never hand-copied. UI chrome is localized; report/decision content stays English, stated on the page. Contains no user data, secrets, or private LangSmith trace links.
+FR17: A signed-in-only "Evaluation & Decisions" page (`/evaluation`, decided 2026-11-19: no public exception to AD-28) presents the latest evaluation results, a summary of key architecture decisions (reason + trade-off), and a reflection (known problems, improvement suggestions, when to use prompt engineering vs. RAG vs. agents) - every fact generated from an existing source, never hand-copied. UI chrome is localized; report/decision content stays English, stated on the page. Contains no user data, secrets, or private LangSmith trace links.
 
 FR18: While an agent turn is in progress, the user sees a short, localized, friendly status label reflecting the agent's real current step (e.g. "Thinking…", "Searching the web…", "Coming up with ideas…") - sourced from the actual step/tool being executed via a fixed step-to-label mapping, never from the model's own generated text and never exposing an internal tool or function name. The final answer is revealed only after it passes output moderation (and, where applicable, the guilt-language check), via a client-side typing effect over the already-safe text.
 
@@ -169,8 +169,8 @@ A grader/collaborator/future-you can see objective proof the agent's tool-callin
 **Covers:** NFR7, NFR9.
 
 ### Epic 7: Documentation & Deployment Handoff
-A new reader (grader, collaborator, or future-you) can understand why this was built, run it from a README alone, see it deployed beyond the local demo, and - without signing in - browse a live "Quality & Decisions" page showing evaluation results, key decisions, and reflection. The README itself isn't written from scratch here - it was started as a skeleton in Epic 1 and extended by every epic along the way, including Epics 5 and 6; this epic finalizes it (adds example use cases and the technical-decision rationale) and handles deployment. Placed last since it depends on every other epic's output to document and ship.
-**Covers:** the Documentation additional requirement (README, example use cases, technical rationale), the deployment additional requirement (Cloud Run + Neon, secrets via Secret Manager), and FR17 (the signed-in Quality & Decisions page).
+A new reader (grader, collaborator, or future-you) can understand why this was built, run it from a README alone, see it deployed beyond the local demo, and - without signing in - browse a live "Evaluation & Decisions" page showing evaluation results, key decisions, and reflection. The README itself isn't written from scratch here - it was started as a skeleton in Epic 1 and extended by every epic along the way, including Epics 5 and 6; this epic finalizes it (adds example use cases and the technical-decision rationale) and handles deployment. Placed last since it depends on every other epic's output to document and ship.
+**Covers:** the Documentation additional requirement (README, example use cases, technical rationale), the deployment additional requirement (Cloud Run + Neon, secrets via Secret Manager), and FR17 (the signed-in Evaluation & Decisions page).
 
 ### FR Coverage Map
 
@@ -190,7 +190,7 @@ FR13: Epic 5 - response feedback (rating + comment)
 FR14: Epic 5 (Story 5.4) - UI language switch (DE/EN), persisted, defaults to English
 FR15: Epic 1 (Story 1.4, i18n foundation) + Epic 4 (voice, Story 4.3 amendment) - agent replies in whichever language the user writes/speaks in
 FR16: Epic 5 (Story 5.5) - currency switch (EUR/USD), persisted, defaults to EUR; Stories 2.2/4.4/5.2 amended to be currency-aware; the `user_settings` table (currency, personality, model, ui_language) is created in Story 1.2 so none of them has a forward dependency on Epic 5; the shared money helper is created in Story 2.2
-FR17: Epic 7 (Story 7.5) - signed-in Quality & Decisions page, depends on Story 6.3's eval report (Epic 6) and Stories 7.2/7.4's rationale/weaknesses content (Epic 7) - placed last so it has no forward dependencies
+FR17: Epic 7 (Story 7.5) - signed-in Evaluation & Decisions page, depends on Story 6.3's eval report (Epic 6) and Stories 7.2/7.4's rationale/weaknesses content (Epic 7) - placed last so it has no forward dependencies
 FR18: Epic 1 (Story 1.5) - real-step progress display (SSE transport, AD-31), i18n-backed friendly labels, reveal gated behind output moderation/guilt-language check; each later tool-introducing story (2.2, 3.1, 4.1, etc.) adds that tool's own label key, same pattern as the env-variable rule
 FR19: Epic 1 (Story 1.5) - Markdown rendering in the shared `ChatMessage` component, no raw HTML (AD-30 amended, AD-32)
 NFR1-3, NFR5: Epic 4 - non-punitive design, voice-first-class, no audio retention, verifiable tone
@@ -1504,7 +1504,7 @@ So that I don't have to re-run anything myself to see the evidence.
 
 **Given** the same report run
 **When** the script completes
-**Then** it also emits a machine-readable JSON summary with the same facts (per-model accuracy, safety pass/fail, run date, judge models, run cost, limitations) - this is the source the Quality & Decisions page (Story 7.5) reads, so that page's content is generated, not hand-copied
+**Then** it also emits a machine-readable JSON summary with the same facts (per-model accuracy, safety pass/fail, run date, judge models, run cost, limitations) - this is the source the Evaluation & Decisions page (Story 7.5) reads, so that page's content is generated, not hand-copied
 
 ## Epic 7: Documentation & Deployment Handoff
 
@@ -1628,7 +1628,7 @@ So that I can assess the work fairly without having to hunt through the codebase
 **When** written
 **Then** both are captured as structured data (not only prose in the README) - a later story may reuse this same content rather than a separately hand-written copy
 
-### Story 7.5: Quality & Decisions Page
+### Story 7.5: Evaluation & Decisions Page
 
 As a grader/collaborator/future-you,
 I want a page, reachable from the app when signed in, showing evaluation results, key decisions, and an honest reflection,
@@ -1638,11 +1638,15 @@ So that I can see this evidence directly, generated from what already exists, wi
 
 **Given** the page
 **When** accessed
-**Then** `/quality` and its data endpoint require a signed-in session like every other route (AD-28, no exception); a signed-out visitor is sent to sign-in and sees no eval data
+**Then** `/evaluation` and its data endpoint require a signed-in session like every other route (AD-28, no exception); a signed-out visitor is sent to sign-in and sees no eval data
 
 **Given** a signed-in user
 **When** the sidebar footer renders
-**Then** a "Quality" entry with icon sits directly above "Settings" and opens `/quality`; the page has a "Back to app" link; there is no link on the sign-in screen
+**Then** an "Evaluation" entry with icon sits directly above "Settings" and opens `/evaluation`; the page has a "Back to app" link; there is no link on the sign-in screen
+
+**Given** the evaluation run
+**When** `npm run eval` and `npm run eval:report` complete
+**Then** per-model latency (median and max, measured by the same run: the start-step coach message and per-case duration) is part of the same published results file the page reads, shown as a Latency table; no separate latency file or step; missing data shows "not measured"
 
 **Given** the Evaluation Results section
 **When** rendered
