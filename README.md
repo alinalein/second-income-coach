@@ -52,7 +52,8 @@ Other commands:
 | `npm test` | Vitest for every workspace |
 | `npm run db:up` / `npm run db:down` | Start/stop the local Postgres container |
 | `npm run eval` | Full eval suite on demand (real model + judge calls over OpenRouter, never part of `npm test`); needs `OPENROUTER_API_KEY` in `.env` |
-| `npm run eval:report` | Builds the quality report from the last `npm run eval` results (run `eval` first); also refreshes `src/evals/published/eval-results.json` (committed — Story 7.5 reads it) when the run was complete, never from a partial/`-t` run |
+| `npm run eval:report` | Builds the evaluation report from the last `npm run eval` results (run `eval` first); also refreshes `src/evals/published/eval-results.json` (committed — the Evaluation page reads it) when the run was complete, never from a partial/`-t` run |
+| `npm run eval:latency` | Measures only the start-step reply latency per model (about 20 short real calls, a few cents) and merges it into `src/evals/published/eval-results.json` |
 | `npm run smoke:ideas` | Regression smoke test: runs the real `generate_ideas` pipeline once against the test DB with a seeded, heavy idea-history fixture user, prints per-stage timings, exits 1 on too few ideas or a budget overrun; needs `OPENROUTER_API_KEY`/`MISTRAL_API_KEY` in `.env` |
 | `npm run check` | `typecheck` + `lint` + `npm test` (against the test DB) + `smoke:ideas`, in order — the one command to run before committing |
 
@@ -124,7 +125,9 @@ src/
   db/              # Postgres access via Drizzle ORM (schema, migrations)
   config/          # env.ts - startup validation of every env var
   api/             # Express app and routes consumed by the frontend
-  evals/           # agentevals + Vitest trajectory/quality suites, report generation
+  evals/           # agentevals + Vitest trajectory/quality suites, report generation, latency measurement
+  content/         # data behind the Evaluation page (key decisions, docs parsing)
+  scripts/         # smoke-ideas: live check of idea generation
 web/
   src/
     features/      # sidebar, ideas, intake, plan workspace, settings, ...
